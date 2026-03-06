@@ -23,6 +23,10 @@ MANIFEST
 
 # Virtual Environment
 .env
+.env.local
+.env.*.local
+gateway/.env
+frontend/.env.local
 .venv
 env/
 venv/

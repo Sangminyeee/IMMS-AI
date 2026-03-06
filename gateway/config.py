@@ -4,6 +4,7 @@ Gateway Configuration
 """
 from pydantic_settings import BaseSettings
 from pathlib import Path
+from supabase import create_client, Client
 
 
 class Settings(BaseSettings):
@@ -33,3 +34,16 @@ class Settings(BaseSettings):
         extra = "ignore"  # ignore unrelated vars from root .env
 
 settings = Settings()
+
+# Supabase 클라이언트 (싱글톤)
+_supabase_client: Client = None
+
+def get_supabase() -> Client:
+    """Supabase 클라이언트 반환 (싱글톤 패턴)"""
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key
+        )
+    return _supabase_client
