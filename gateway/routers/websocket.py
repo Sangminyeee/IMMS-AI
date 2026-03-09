@@ -42,7 +42,7 @@ async def broadcast_to_meeting(meeting_id: str, message: dict, exclude_user: str
 
 
 async def save_transcript(meeting_id: str, user_id: str, speaker: str, text: str):
-    """전사 결과를 Supabase에 저장 (중요 발화만)"""
+    """전사 결과를 Supabase에 저장 (중요 발화만, 중복 방지)"""
     # 중요 키워드 필터링
     important_keywords = ['결정', '안건', '액션', '과제', '완료', '시작', '종료', '승인', '반대', '동의']
     
@@ -59,6 +59,23 @@ async def save_transcript(meeting_id: str, user_id: str, speaker: str, text: str
     
     try:
         supabase = get_supabase()
+        
+        # 중복 체크: 최근 30초 이내에 동일한 텍스트가 있는지 확인
+        from datetime import datetime, timedelta
+        thirty_seconds_ago = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
+        
+        existing = supabase.table('transcripts')\
+            .select('id')\
+            .eq('meeting_id', meeting_id)\
+            .eq('text', text)\
+            .gte('timestamp', thirty_seconds_ago)\
+            .execute()
+        
+        if existing.data and len(existing.data) > 0:
+            print(f"⚠️ Duplicate transcript detected, skipping save: {text[:50]}...")
+            return
+        
+        # 중복이 아니면 저장
         supabase.table('transcripts').insert({
             'meeting_id': meeting_id,
             'user_id': user_id,
