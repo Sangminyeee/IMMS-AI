@@ -12,6 +12,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { name: '대시보드', path: '/dashboard', icon: '📊' },
+  { name: '회의', path: '/meetings', icon: '💬' },
   { name: '리포트', path: '/reports', icon: '📄' },
   { name: '설정', path: '/settings', icon: '⚙️' },
   { name: '프로필', path: '/profile', icon: '👤' },
