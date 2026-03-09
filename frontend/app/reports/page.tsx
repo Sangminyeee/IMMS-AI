@@ -109,10 +109,10 @@ export default function ReportsPage() {
   if (authLoading) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">로딩 중...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teams-blue mx-auto"></div>
+            <p className="mt-4 text-text-secondary">로딩 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -123,9 +123,9 @@ export default function ReportsPage() {
   if (!user) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <p className="text-gray-600">로그인이 필요합니다. 리다이렉트 중...</p>
+            <p className="text-text-secondary">로그인이 필요합니다. 리다이렉트 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -134,14 +134,14 @@ export default function ReportsPage() {
 
   return (
     <MainLayout>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-gray">
         {/* Header */}
-        <header className="bg-white border-b border-gray-200 shadow-sm">
+        <header className="bg-surface border-b border-border shadow-teams-sm">
           <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">회의 리포트</h1>
-                <p className="text-sm text-gray-600 mt-1">종료된 회의의 리포트를 생성하고 내보낼 수 있습니다.</p>
+                <h1 className="text-2xl font-bold text-text-primary">회의 리포트</h1>
+                <p className="text-sm text-text-secondary mt-1">종료된 회의의 리포트를 생성하고 내보낼 수 있습니다.</p>
               </div>
             </div>
           </div>
@@ -151,18 +151,18 @@ export default function ReportsPage() {
         <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
           
           {/* Completed Meetings List */}
-          <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">종료된 회의 목록</h2>
+          <div className="bg-surface rounded-teams-md shadow-teams-md border border-border overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <h2 className="text-lg font-semibold text-text-primary">종료된 회의 목록</h2>
             </div>
 
             {loading ? (
               <div className="p-8 text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                <p className="mt-4 text-gray-600">회의 목록을 불러오는 중...</p>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teams-blue mx-auto"></div>
+                <p className="mt-4 text-text-secondary">회의 목록을 불러오는 중...</p>
               </div>
             ) : meetings.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
+              <div className="p-8 text-center text-text-tertiary">
                 <p>아직 종료된 회의가 없습니다.</p>
                 <p className="text-sm mt-2">회의를 종료하면 여기에 표시됩니다.</p>
               </div>
@@ -171,20 +171,20 @@ export default function ReportsPage() {
                 {meetings.map((meeting) => (
                   <div
                     key={meeting.id}
-                    className="px-6 py-4 hover:bg-gray-50 transition"
+                    className="px-6 py-4 hover:bg-surface-gray transition"
                   >
                     <div className="flex justify-between items-center">
                       <div className="flex-1">
-                        <h3 className="text-lg font-medium text-gray-900">{meeting.title}</h3>
+                        <h3 className="text-lg font-medium text-text-primary">{meeting.title}</h3>
                         <div className="flex items-center gap-3 mt-1">
-                          <span className="inline-block px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600">
+                          <span className="inline-block px-2 py-1 text-xs rounded-full bg-gray-100 text-text-secondary">
                             종료됨
                           </span>
-                          <span className="text-sm text-gray-500">
+                          <span className="text-sm text-text-tertiary">
                             생성: {new Date(meeting.created_at).toLocaleDateString('ko-KR')}
                           </span>
                           {meeting.ended_at && (
-                            <span className="text-sm text-gray-500">
+                            <span className="text-sm text-text-tertiary">
                               종료: {new Date(meeting.ended_at).toLocaleDateString('ko-KR')}
                             </span>
                           )}
@@ -194,13 +194,13 @@ export default function ReportsPage() {
                         <button
                           onClick={() => handleGenerateReport(meeting.id, meeting.title)}
                           disabled={generatingReport === meeting.id}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-4 py-2 bg-teams-blue hover:bg-teams-purple-dark text-white rounded-teams transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {generatingReport === meeting.id ? '생성 중...' : '리포트 생성'}
                         </button>
                         <button
                           onClick={() => handleExportPDF(meeting.id, meeting.title)}
-                          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition font-medium"
+                          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-teams transition font-medium"
                         >
                           PDF 내보내기
                         </button>
@@ -213,7 +213,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Info Card */}
-          <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="mt-6 bg-blue-50 border border-blue-200 rounded-teams p-4">
             <h3 className="text-sm font-semibold text-blue-900 mb-2">💡 리포트 기능 안내</h3>
             <ul className="text-sm text-blue-800 space-y-1">
               <li>• <strong>리포트 생성</strong>: AI가 회의 내용을 분석하여 요약, 안건, 의사결정, 액션 아이템을 정리합니다.</li>

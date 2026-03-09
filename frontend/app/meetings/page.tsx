@@ -155,10 +155,10 @@ export default function MeetingsPage() {
   if (authLoading) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">로딩 중...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teams-blue mx-auto"></div>
+            <p className="mt-4 text-text-secondary">로딩 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -169,9 +169,9 @@ export default function MeetingsPage() {
   if (!user) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <p className="text-gray-600">로그인이 필요합니다. 리다이렉트 중...</p>
+            <p className="text-text-secondary">로그인이 필요합니다. 리다이렉트 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -180,78 +180,83 @@ export default function MeetingsPage() {
 
   return (
     <MainLayout>
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <header className="bg-white border-b border-gray-200 shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen bg-surface-gray">
+        {/* Header - Microsoft Teams Style */}
+        <header className="bg-surface border-b border-border shadow-teams-sm">
+          <div className="max-w-7xl mx-auto px-6 py-5">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">회의 워크스페이스</h1>
-                <p className="text-sm text-gray-600 mt-1">회의를 생성하고 관리합니다.</p>
+                <h1 className="text-2xl font-semibold text-text-primary">회의 워크스페이스</h1>
+                <p className="text-sm text-text-secondary mt-0.5">회의를 생성하고 관리합니다.</p>
               </div>
             </div>
           </div>
         </header>
 
         {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <main className="max-w-7xl mx-auto px-6 py-8">
           
-          {/* Create Meeting Button */}
+          {/* Create Meeting Button - Teams Style */}
           <div className="mb-6">
             <button
               onClick={() => setShowCreateModal(true)}
-              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition shadow-md"
+              className="px-6 py-2.5 bg-teams-purple hover:bg-teams-purple-dark text-white rounded-teams font-semibold transition-colors shadow-teams-md text-sm flex items-center gap-2"
             >
-              + 새 회의 만들기
+              <span className="text-lg">+</span>
+              새 회의 만들기
             </button>
           </div>
 
-          {/* Meetings List */}
-          <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">내 회의 목록</h2>
+          {/* Meetings List - Teams Style */}
+          <div className="bg-surface rounded-teams-md shadow-teams-md border border-border overflow-hidden">
+            <div className="px-6 py-4 border-b border-border bg-surface-gray-light">
+              <h2 className="text-base font-semibold text-text-primary">내 회의 목록</h2>
             </div>
 
             {loading ? (
-              <div className="p-8 text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                <p className="mt-4 text-gray-600">회의 목록을 불러오는 중...</p>
+              <div className="p-12 text-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-teams-blue mx-auto"></div>
+                <p className="mt-4 text-text-secondary text-sm">회의 목록을 불러오는 중...</p>
               </div>
             ) : meetings.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
-                <p>아직 생성된 회의가 없습니다.</p>
-                <p className="text-sm mt-2">위의 "새 회의 만들기" 버튼을 눌러 회의를 시작하세요.</p>
+              <div className="p-12 text-center text-text-tertiary">
+                <p className="text-sm">아직 생성된 회의가 없습니다.</p>
+                <p className="text-xs mt-2">위의 "새 회의 만들기" 버튼을 눌러 회의를 시작하세요.</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-200">
+              <div className="divide-y divide-border-light">
                 {meetings.map((meeting) => (
                   <div
                     key={meeting.id}
-                    className="px-6 py-4 hover:bg-gray-50 transition"
+                    className="px-6 py-4 hover:bg-surface-gray-light transition-colors"
                   >
-                    <div className="flex justify-between items-center">
+                    <div className="flex justify-between items-center gap-4">
                       <div 
                         className="flex-1 cursor-pointer"
                         onClick={() => handleJoinMeeting(meeting.id)}
                       >
-                        <h3 className="text-lg font-medium text-gray-900">{meeting.title}</h3>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+                        <h3 className="text-base font-medium text-text-primary">{meeting.title}</h3>
+                        <div className="flex items-center gap-3 mt-1.5">
+                          <span className={`inline-block px-2.5 py-0.5 text-xs font-medium rounded-full ${
                             meeting.status === 'active' || meeting.status === 'in_progress'
-                              ? 'bg-green-100 text-green-800'
+                              ? 'bg-status-success-bg text-status-success'
                               : meeting.status === 'scheduled' || meeting.status === 'waiting'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-gray-100 text-gray-600'
+                              ? 'bg-status-info-bg text-status-info'
+                              : 'bg-surface-gray text-text-secondary'
                           }`}>
                             {meeting.status === 'active' || meeting.status === 'in_progress' ? '진행 중' :
                              meeting.status === 'scheduled' || meeting.status === 'waiting' ? '예정됨' :
                              meeting.status === 'completed' ? '종료됨' : meeting.status}
                           </span>
-                          <span className="text-sm text-gray-500">
-                            {new Date(meeting.created_at).toLocaleDateString('ko-KR')}
+                          <span className="text-xs text-text-tertiary">
+                            {new Date(meeting.created_at).toLocaleDateString('ko-KR', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric'
+                            })}
                           </span>
                           {meeting.host_id === user.id && (
-                            <span className="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-800">
+                            <span className="inline-block px-2.5 py-0.5 text-xs font-medium rounded-full bg-teams-purple-light text-teams-purple">
                               호스트
                             </span>
                           )}
@@ -263,7 +268,7 @@ export default function MeetingsPage() {
                             e.stopPropagation();
                             handleJoinMeeting(meeting.id);
                           }}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium"
+                          className="px-4 py-2 bg-teams-blue hover:bg-teams-purple text-white rounded-teams transition-colors font-medium text-sm shadow-teams-sm"
                         >
                           {meeting.status === 'completed' ? '열기' : '참여하기'}
                         </button>
@@ -273,7 +278,7 @@ export default function MeetingsPage() {
                               e.stopPropagation();
                               handleDeleteMeeting(meeting.id, meeting.host_id);
                             }}
-                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition font-medium"
+                            className="px-4 py-2 bg-status-error hover:bg-red-600 text-white rounded-teams transition-colors font-medium text-sm shadow-teams-sm"
                             title="회의 삭제 (호스트만 가능)"
                           >
                             삭제
@@ -282,23 +287,23 @@ export default function MeetingsPage() {
                       </div>
                     </div>
                   </div>
-                ))}
+                ))}}
               </div>
             )}
           </div>
         </main>
 
-        {/* Create Meeting Modal */}
+        {/* Create Meeting Modal - Teams Style */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">새 회의 만들기</h2>
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 backdrop-blur-sm">
+            <div className="bg-surface rounded-teams-md shadow-teams-xl p-6 max-w-md w-full mx-4 border border-border">
+              <h2 className="text-lg font-semibold text-text-primary mb-4">새 회의 만들기</h2>
               <input
                 type="text"
                 value={newMeetingTitle}
                 onChange={(e) => setNewMeetingTitle(e.target.value)}
                 placeholder="회의 제목을 입력하세요"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2.5 border border-border rounded-teams focus:outline-none focus:ring-2 focus:ring-teams-blue focus:border-transparent text-sm"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleCreateMeeting();
                 }}
@@ -309,14 +314,14 @@ export default function MeetingsPage() {
                     setShowCreateModal(false);
                     setNewMeetingTitle('');
                   }}
-                  className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg transition font-medium"
+                  className="flex-1 px-4 py-2 bg-surface-gray hover:bg-border text-text-primary rounded-teams transition-colors font-medium text-sm"
                 >
                   취소
                 </button>
                 <button
                   onClick={handleCreateMeeting}
                   disabled={!newMeetingTitle.trim()}
-                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 px-4 py-2 bg-teams-purple hover:bg-teams-purple-dark text-white rounded-teams transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed shadow-teams-sm"
                 >
                   생성
                 </button>

@@ -89,10 +89,10 @@ export default function ProfilePage() {
   if (authLoading) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">로딩 중...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teams-blue mx-auto"></div>
+            <p className="mt-4 text-text-secondary">로딩 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -103,9 +103,9 @@ export default function ProfilePage() {
   if (!user) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <p className="text-gray-600">로그인이 필요합니다. 리다이렉트 중...</p>
+            <p className="text-text-secondary">로그인이 필요합니다. 리다이렉트 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -114,19 +114,19 @@ export default function ProfilePage() {
 
   return (
     <MainLayout>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-gray">
         {/* Header */}
-        <header className="bg-white border-b border-gray-200 shadow-sm">
+        <header className="bg-surface border-b border-border shadow-teams-sm">
           <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">내 프로필</h1>
-                <p className="text-sm text-gray-600 mt-1">개인 정보를 관리합니다.</p>
+                <h1 className="text-2xl font-bold text-text-primary">내 프로필</h1>
+                <p className="text-sm text-text-secondary mt-1">개인 정보를 관리합니다.</p>
               </div>
               {!editing && (
                 <button
                   onClick={() => setEditing(true)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium"
+                  className="px-4 py-2 bg-teams-blue hover:bg-teams-purple-dark text-white rounded-teams transition font-medium"
                 >
                   수정
                 </button>
@@ -139,16 +139,16 @@ export default function ProfilePage() {
         <main className="max-w-4xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
           
           {/* Profile Picture */}
-          <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
+          <div className="bg-surface rounded-teams-md shadow-teams-md border border-border p-6 mb-6">
             <div className="flex items-center gap-6">
               <div className="w-24 h-24 bg-blue-500 rounded-full flex items-center justify-center text-3xl font-bold text-white">
                 {user?.email?.[0]?.toUpperCase() || '?'}
               </div>
               <div>
-                <h2 className="text-xl font-semibold text-gray-900">{name || '이름 없음'}</h2>
-                <p className="text-gray-600">{user.email}</p>
+                <h2 className="text-xl font-semibold text-text-primary">{name || '이름 없음'}</h2>
+                <p className="text-text-secondary">{user.email}</p>
                 {editing && (
-                  <button className="mt-2 text-sm text-blue-600 hover:text-blue-700">
+                  <button className="mt-2 text-sm text-teams-blue hover:text-blue-700">
                     프로필 사진 변경 (추후 구현 예정)
                   </button>
                 )}
@@ -157,8 +157,8 @@ export default function ProfilePage() {
           </div>
 
           {/* Profile Information */}
-          <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">개인 정보</h2>
+          <div className="bg-surface rounded-teams-md shadow-teams-md border border-border p-6 mb-6">
+            <h2 className="text-lg font-semibold text-text-primary mb-4">개인 정보</h2>
             
             <div className="space-y-4">
               {/* Name */}
@@ -171,7 +171,7 @@ export default function ProfilePage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   disabled={!editing}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -184,7 +184,7 @@ export default function ProfilePage() {
                   type="email"
                   value={user.email || ''}
                   disabled
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-teams bg-gray-100 cursor-not-allowed"
                 />
               </div>
 
@@ -199,7 +199,7 @@ export default function ProfilePage() {
                   onChange={(e) => setRank(e.target.value)}
                   disabled={!editing}
                   placeholder="예: 과장, 차장, 부장"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -214,7 +214,7 @@ export default function ProfilePage() {
                   onChange={(e) => setDepartment(e.target.value)}
                   disabled={!editing}
                   placeholder="예: 개발팀, 기획팀"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -229,7 +229,7 @@ export default function ProfilePage() {
                   onChange={(e) => setOccupation(e.target.value)}
                   disabled={!editing}
                   placeholder="예: 백엔드 개발자, PM"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
               </div>
             </div>
@@ -237,8 +237,8 @@ export default function ProfilePage() {
 
           {/* Change Password (Only when editing) */}
           {editing && (
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">비밀번호 변경</h2>
+            <div className="bg-surface rounded-teams-md shadow-teams-md border border-border p-6 mb-6">
+              <h2 className="text-lg font-semibold text-text-primary mb-4">비밀번호 변경</h2>
               
               <div className="space-y-4">
                 {/* New Password */}
@@ -251,7 +251,7 @@ export default function ProfilePage() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="변경하지 않으려면 비워두세요"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
 
@@ -265,7 +265,7 @@ export default function ProfilePage() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="새 비밀번호를 다시 입력하세요"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-teams focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
@@ -288,14 +288,14 @@ export default function ProfilePage() {
                   setNewPassword('');
                   setConfirmPassword('');
                 }}
-                className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-semibold transition"
+                className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-teams font-semibold transition"
               >
                 취소
               </button>
               <button
                 onClick={handleSaveProfile}
                 disabled={saving}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-3 bg-teams-blue hover:bg-teams-purple-dark text-white rounded-teams font-semibold transition shadow-teams-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? '저장 중...' : '저장'}
               </button>

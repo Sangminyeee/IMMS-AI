@@ -104,10 +104,10 @@ export default function DashboardPage() {
   if (authLoading) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">로딩 중...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teams-blue mx-auto"></div>
+            <p className="mt-4 text-text-secondary">로딩 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -118,9 +118,9 @@ export default function DashboardPage() {
   if (!user) {
     return (
       <MainLayout>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-gray">
           <div className="text-center">
-            <p className="text-gray-600">로그인이 필요합니다. 리다이렉트 중...</p>
+            <p className="text-text-secondary">로그인이 필요합니다. 리다이렉트 중...</p>
           </div>
         </div>
       </MainLayout>
@@ -129,20 +129,20 @@ export default function DashboardPage() {
 
   return (
     <MainLayout>
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <header className="bg-white border-b border-gray-200 shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen bg-surface-gray">
+        {/* Header - Microsoft Teams Style */}
+        <header className="bg-surface border-b border-border shadow-teams-sm">
+          <div className="max-w-7xl mx-auto px-6 py-5">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">대시보드</h1>
-                <p className="text-sm text-gray-600 mt-1">
+                <h1 className="text-2xl font-semibold text-text-primary">대시보드</h1>
+                <p className="text-sm text-text-secondary mt-0.5">
                   환영합니다, {profile?.name || user.email}님
                 </p>
               </div>
               <button
                 onClick={handleLogout}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition font-medium"
+                className="px-4 py-2 bg-status-error hover:bg-red-600 text-white rounded-teams transition-colors font-medium text-sm shadow-teams-sm"
               >
                 로그아웃
               </button>
@@ -151,105 +151,110 @@ export default function DashboardPage() {
         </header>
 
         {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <main className="max-w-7xl mx-auto px-6 py-8">
           
-          {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {/* Stats Cards - Microsoft Teams Style */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             {/* Total Meetings */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+            <div className="bg-surface rounded-teams-md shadow-teams-sm border border-border p-5 hover:shadow-teams-md transition-shadow">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600 mb-1">전체 회의</p>
-                  <p className="text-3xl font-bold text-gray-900">{stats.totalMeetings}</p>
+                  <p className="text-xs text-text-tertiary mb-2 font-medium uppercase tracking-wide">전체 회의</p>
+                  <p className="text-3xl font-semibold text-text-primary">{stats.totalMeetings}</p>
                 </div>
-                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-teams-purple-light rounded-teams flex items-center justify-center">
                   <span className="text-2xl">💬</span>
                 </div>
               </div>
             </div>
 
             {/* Active Meetings */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+            <div className="bg-surface rounded-teams-md shadow-teams-sm border border-border p-5 hover:shadow-teams-md transition-shadow">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600 mb-1">진행 중</p>
-                  <p className="text-3xl font-bold text-green-600">{stats.activeMeetings}</p>
+                  <p className="text-xs text-text-tertiary mb-2 font-medium uppercase tracking-wide">진행 중</p>
+                  <p className="text-3xl font-semibold text-status-success">{stats.activeMeetings}</p>
                 </div>
-                <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-status-success-bg rounded-teams flex items-center justify-center">
                   <span className="text-2xl">🟢</span>
                 </div>
               </div>
             </div>
 
             {/* Completed Meetings */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+            <div className="bg-surface rounded-teams-md shadow-teams-sm border border-border p-5 hover:shadow-teams-md transition-shadow">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600 mb-1">완료됨</p>
-                  <p className="text-3xl font-bold text-gray-600">{stats.completedMeetings}</p>
+                  <p className="text-xs text-text-tertiary mb-2 font-medium uppercase tracking-wide">완료됨</p>
+                  <p className="text-3xl font-semibold text-text-secondary">{stats.completedMeetings}</p>
                 </div>
-                <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-surface-gray rounded-teams flex items-center justify-center">
                   <span className="text-2xl">✅</span>
                 </div>
               </div>
             </div>
 
             {/* Total Transcripts */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+            <div className="bg-surface rounded-teams-md shadow-teams-sm border border-border p-5 hover:shadow-teams-md transition-shadow">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600 mb-1">전사 건수</p>
-                  <p className="text-3xl font-bold text-purple-600">{stats.totalTranscripts}</p>
+                  <p className="text-xs text-text-tertiary mb-2 font-medium uppercase tracking-wide">전사 건수</p>
+                  <p className="text-3xl font-semibold text-teams-purple">{stats.totalTranscripts}</p>
                 </div>
-                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                <div className="w-12 h-12 bg-teams-purple-light rounded-teams flex items-center justify-center">
                   <span className="text-2xl">📝</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* Content Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* Recent Meetings */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">최근 회의</h2>
+            <div className="bg-surface rounded-teams-md shadow-teams-md border border-border p-6">
+              <div className="flex justify-between items-center mb-5">
+                <h2 className="text-lg font-semibold text-text-primary">최근 회의</h2>
                 <Link 
                   href="/meetings"
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                  className="text-sm text-teams-blue hover:text-teams-purple transition-colors font-medium flex items-center gap-1"
                 >
-                  전체 보기 →
+                  전체 보기
+                  <span className="text-xs">→</span>
                 </Link>
               </div>
 
               {loading ? (
-                <div className="text-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                <div className="text-center py-12">
+                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-teams-blue mx-auto"></div>
                 </div>
               ) : recentMeetings.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>아직 생성된 회의가 없습니다.</p>
+                <div className="text-center py-12 text-text-tertiary bg-surface-gray rounded-teams">
+                  <p className="text-sm">아직 생성된 회의가 없습니다.</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {recentMeetings.map((meeting) => (
                     <div 
                       key={meeting.id}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+                      className="flex items-center justify-between p-4 bg-surface-gray-light rounded-teams hover:bg-surface-gray transition-colors cursor-pointer border border-transparent hover:border-border-light"
                       onClick={() => router.push(`/?meeting_id=${meeting.id}`)}
                     >
                       <div className="flex-1">
-                        <p className="font-medium text-gray-900">{meeting.title}</p>
-                        <p className="text-xs text-gray-500">
-                          {new Date(meeting.created_at).toLocaleDateString('ko-KR')}
+                        <p className="font-medium text-text-primary text-sm">{meeting.title}</p>
+                        <p className="text-xs text-text-tertiary mt-0.5">
+                          {new Date(meeting.created_at).toLocaleDateString('ko-KR', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric'
+                          })}
                         </p>
                       </div>
-                      <span className={`px-2 py-1 text-xs rounded-full ${
+                      <span className={`px-3 py-1 text-xs font-medium rounded-full ${
                         meeting.status === 'active' || meeting.status === 'in_progress'
-                          ? 'bg-green-100 text-green-800'
+                          ? 'bg-status-success-bg text-status-success'
                           : meeting.status === 'scheduled'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-gray-100 text-gray-600'
+                          ? 'bg-status-info-bg text-status-info'
+                          : 'bg-surface-gray text-text-secondary'
                       }`}>
                         {meeting.status === 'active' || meeting.status === 'in_progress' ? '진행 중' :
                          meeting.status === 'scheduled' ? '예정됨' : '종료됨'}
@@ -261,73 +266,76 @@ export default function DashboardPage() {
             </div>
 
             {/* Quick Actions Panel */}
-            <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">빠른 작업</h2>
+            <div className="bg-surface rounded-teams-md shadow-teams-md border border-border p-6">
+              <h2 className="text-lg font-semibold text-text-primary mb-5">빠른 작업</h2>
               
               <div className="space-y-3">
                 <Link
                   href="/meetings"
-                  className="flex items-center justify-between p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition group"
+                  className="flex items-center justify-between p-4 bg-status-info-bg rounded-teams hover:shadow-teams-sm transition-all group border border-transparent hover:border-status-info"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 bg-status-info rounded-teams flex items-center justify-center shadow-teams-sm">
                       <span className="text-xl">➕</span>
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">새 회의 만들기</p>
-                      <p className="text-sm text-gray-600">실시간 회의를 시작합니다</p>
+                      <p className="font-medium text-text-primary text-sm">새 회의 만들기</p>
+                      <p className="text-xs text-text-tertiary">실시간 회의를 시작합니다</p>
                     </div>
                   </div>
-                  <span className="text-blue-600 group-hover:translate-x-1 transition">→</span>
+                  <span className="text-status-info group-hover:translate-x-1 transition-transform text-sm">→</span>
                 </Link>
 
                 <Link
                   href="/reports"
-                  className="flex items-center justify-between p-4 bg-green-50 rounded-lg hover:bg-green-100 transition group"
+                  className="flex items-center justify-between p-4 bg-status-success-bg rounded-teams hover:shadow-teams-sm transition-all group border border-transparent hover:border-status-success"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-green-500 rounded-lg flex items-center justify-center">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 bg-status-success rounded-teams flex items-center justify-center shadow-teams-sm">
                       <span className="text-xl">📄</span>
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">리포트 보기</p>
-                      <p className="text-sm text-gray-600">회의 리포트를 확인합니다</p>
+                      <p className="font-medium text-text-primary text-sm">리포트 보기</p>
+                      <p className="text-xs text-text-tertiary">회의 리포트를 확인합니다</p>
                     </div>
                   </div>
-                  <span className="text-green-600 group-hover:translate-x-1 transition">→</span>
+                  <span className="text-status-success group-hover:translate-x-1 transition-transform text-sm">→</span>
                 </Link>
 
                 <Link
                   href="/profile"
-                  className="flex items-center justify-between p-4 bg-purple-50 rounded-lg hover:bg-purple-100 transition group"
+                  className="flex items-center justify-between p-4 bg-teams-purple-light rounded-teams hover:shadow-teams-sm transition-all group border border-transparent hover:border-teams-purple"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 bg-teams-purple rounded-teams flex items-center justify-center shadow-teams-sm">
                       <span className="text-xl">👤</span>
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">프로필 설정</p>
-                      <p className="text-sm text-gray-600">개인 정보를 관리합니다</p>
+                      <p className="font-medium text-text-primary text-sm">프로필 설정</p>
+                      <p className="text-xs text-text-tertiary">개인 정보를 관리합니다</p>
                     </div>
                   </div>
-                  <span className="text-purple-600 group-hover:translate-x-1 transition">→</span>
+                  <span className="text-teams-purple group-hover:translate-x-1 transition-transform text-sm">→</span>
                 </Link>
               </div>
             </div>
           </div>
 
-          {/* Info Banner */}
-          <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-xl font-bold mb-2">🎉 IMMS 실시간 회의 시스템</h3>
-                <p className="text-blue-100">
+          {/* Info Banner - Microsoft Teams Style */}
+          <div className="bg-gradient-to-r from-teams-purple to-teams-blue rounded-teams-md shadow-teams-lg p-6 text-white">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex-1">
+                <h3 className="text-xl font-semibold mb-1.5 flex items-center gap-2">
+                  <span>🎉</span>
+                  IMMS 실시간 회의 시스템
+                </h3>
+                <p className="text-white/90 text-sm">
                   AI 기반 실시간 전사 및 분석으로 더 효율적인 회의를 경험하세요.
                 </p>
               </div>
               <Link
                 href="/meetings"
-                className="px-6 py-3 bg-white text-blue-600 rounded-lg font-semibold hover:bg-blue-50 transition"
+                className="px-6 py-2.5 bg-white text-teams-purple rounded-teams font-semibold hover:bg-white/95 transition-colors text-sm shadow-teams-md"
               >
                 시작하기
               </Link>
