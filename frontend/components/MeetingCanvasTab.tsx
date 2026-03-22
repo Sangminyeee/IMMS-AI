@@ -20,7 +20,6 @@ import {
 } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  confirmCanvasPlacement,
   exportAgendaMarkdown,
   exportAgendaSnapshot,
   generateCanvasProblemDefinition,
@@ -52,14 +51,12 @@ export type MeetingAgenda = {
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ComposerTool = "note" | "comment" | "topic";
 
-type CanvasIdea = {
+type PersonalNote = {
   id: string;
   agendaId: string;
   kind: ComposerTool;
   title: string;
   body: string;
-  x: number;
-  y: number;
 };
 
 type AgendaViewModel = {
@@ -209,7 +206,7 @@ export default function MeetingCanvasTab({
   const [selectedAgendaId, setSelectedAgendaId] = useState("");
   const [activityMessage, setActivityMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [ideas, setIdeas] = useState<CanvasIdea[]>([]);
+  const [personalNotes, setPersonalNotes] = useState<PersonalNote[]>([]);
   const [problemGroups, setProblemGroups] = useState<CanvasProblemDefinitionGroup[]>([]);
   const [solutionTopics, setSolutionTopics] = useState<CanvasSolutionTopicResponse[]>([]);
   const [importedState, setImportedState] = useState<MeetingState | null>(null);
@@ -328,35 +325,8 @@ export default function MeetingCanvasTab({
       });
     });
 
-    ideas.forEach((idea, index) => {
-      nextNodes.push({
-        id: idea.id,
-        position: { x: idea.x, y: idea.y },
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
-        className: "rounded-3xl border border-amber-200 bg-amber-50 shadow-sm",
-        style: { width: 240, borderRadius: 20, padding: 0 },
-        data: {
-          label: makeNodeLabel(
-            toolLabel(idea.kind).toUpperCase(),
-            idea.title,
-            idea.body,
-            [agendaModels.find((agenda) => agenda.id === idea.agendaId)?.title || "미지정 안건", `#${index + 1}`],
-            "bg-amber-100 text-amber-700",
-          ),
-        },
-      });
-      nextEdges.push({
-        id: `edge-idea-${idea.id}`,
-        source: `agenda-${idea.agendaId}`,
-        target: idea.id,
-        type: "smoothstep",
-        style: { stroke: "#cbd5e1", strokeWidth: 1.25, strokeDasharray: "6 4" },
-      });
-    });
-
     return { nodes: nextNodes, edges: nextEdges };
-  }, [stage, agendaModels, ideas, problemGroups, solutionTopics]);
+  }, [stage, agendaModels, problemGroups, solutionTopics]);
 
   useEffect(() => {
     setNodes(graph.nodes);
@@ -386,12 +356,12 @@ export default function MeetingCanvasTab({
           keywords: agenda.keywords,
           summary_bullets: agenda.summaryBullets,
         })),
-        ideas: ideas.map((idea) => ({
-          id: idea.id,
-          agenda_id: idea.agendaId,
-          kind: idea.kind,
-          title: idea.title,
-          body: idea.body,
+        ideas: personalNotes.map((note) => ({
+          id: note.id,
+          agenda_id: note.agendaId,
+          kind: note.kind,
+          title: note.title,
+          body: note.body,
         })),
       });
       setProblemGroups(result.groups);
@@ -428,40 +398,25 @@ export default function MeetingCanvasTab({
     }
   };
 
-  const handleCanvasClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (stage !== "ideation" || !flowRef.current) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest(".react-flow__node, .react-flow__controls, .react-flow__minimap, button, input, textarea, label")) {
+  const handleAddPersonalNote = () => {
+    const agendaId = selectedAgendaId || agendaModels[0]?.id;
+    if (!agendaId) {
+      setActivityMessage("먼저 연결할 안건을 선택해 주세요.");
       return;
     }
-    const agendaId = selectedAgendaId || agendaModels[0]?.id;
-    if (!agendaId) return;
 
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const position = flowRef.current.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const nextIdea: CanvasIdea = {
-      id: `idea-${Date.now()}`,
+    const nextNote: PersonalNote = {
+      id: `note-${Date.now()}`,
       agendaId,
       kind: composerTool,
-      title: composerTitle.trim() || `${toolLabel(composerTool)} ${ideas.length + 1}`,
-      body: composerBody.trim() || "이 메모는 문제 정의/해결책 단계 생성에 반영됩니다.",
-      x: position.x,
-      y: position.y,
+      title: composerTitle.trim() || `${toolLabel(composerTool)} ${personalNotes.length + 1}`,
+      body: composerBody.trim() || "개인 메모를 입력해 두면 나중에 그룹 보드로 이동시킬 수 있습니다.",
     };
-    setIdeas((prev) => [...prev, nextIdea]);
-    setSelectedNodeId(nextIdea.id);
+
+    setPersonalNotes((prev) => [nextNote, ...prev]);
     setComposerTitle("");
     setComposerBody("");
-    void confirmCanvasPlacement({
-      tool: composerTool,
-      ui_x: event.clientX - bounds.left,
-      ui_y: event.clientY - bounds.top,
-      flow_x: position.x,
-      flow_y: position.y,
-      agenda_id: agendaId,
-      title: nextIdea.title,
-      body: nextIdea.body,
-    }).catch(() => undefined);
+    setActivityMessage("개인 메모에 저장했습니다. 이후 그룹 보드로 드래그해 편입할 수 있게 확장할 예정입니다.");
   };
 
   const onNodesChange = (changes: NodeChange[]) => {
@@ -486,9 +441,8 @@ export default function MeetingCanvasTab({
     );
   };
 
-  const handleNodeDragStop = (_event: React.MouseEvent, node: Node) => {
-    if (!node.id.startsWith("idea-")) return;
-    setIdeas((prev) => prev.map((item) => (item.id === node.id ? { ...item, x: node.position.x, y: node.position.y } : item)));
+  const handleDeletePersonalNote = (noteId: string) => {
+    setPersonalNotes((prev) => prev.filter((item) => item.id !== noteId));
   };
 
   return (
@@ -536,7 +490,7 @@ export default function MeetingCanvasTab({
           </div>
         </div>
 
-        <div className="h-[820px] w-full xl:h-full" onClick={handleCanvasClick}>
+        <div className="h-[820px] w-full xl:h-full">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -547,7 +501,6 @@ export default function MeetingCanvasTab({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onNodeDragStop={handleNodeDragStop}
             fitView
             fitViewOptions={{ padding: 0.16, duration: 300 }}
             minZoom={0.45}
@@ -594,7 +547,7 @@ export default function MeetingCanvasTab({
           </section>
 
           <section className="pointer-events-auto rounded-[24px] border border-slate-200/80 bg-white/92 p-5 shadow-lg shadow-slate-200/60 backdrop-blur-md">
-            <h3 className="text-sm font-semibold text-slate-900">캔버스 작성</h3>
+            <h3 className="text-sm font-semibold text-slate-900">그룹 보드 규칙</h3>
             <div className="mt-4 grid grid-cols-3 gap-2">
               {(["note", "comment", "topic"] as ComposerTool[]).map((item) => (
                 <button key={item} type="button" onClick={() => setComposerTool(item)} className={`rounded-xl px-3 py-2 text-xs font-semibold ${composerTool === item ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
@@ -603,15 +556,7 @@ export default function MeetingCanvasTab({
               ))}
             </div>
             <div className="mt-4 space-y-3">
-              <select value={selectedAgendaId} onChange={(event) => setSelectedAgendaId(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
-                {agendaModels.map((agenda) => (
-                  <option key={agenda.id} value={agenda.id}>
-                    {agenda.title}
-                  </option>
-                ))}
-              </select>
-              <input value={composerTitle} onChange={(event) => setComposerTitle(event.target.value)} placeholder="카드 제목" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
-              <textarea value={composerBody} onChange={(event) => setComposerBody(event.target.value)} placeholder="보드를 클릭하면 이 메모가 그 위치에 배치됩니다." className="min-h-[96px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
+              <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">그룹 보드는 전사와 요약으로 구성된 공용 영역입니다. 개인 메모는 오른쪽 패널에서 작성한 뒤 나중에 그룹으로 편입합니다.</p>
             </div>
           </section>
 
@@ -636,6 +581,59 @@ export default function MeetingCanvasTab({
             ) : (
               <div className="mt-4 text-sm text-slate-600">{selectedNode.data.label as React.ReactNode}</div>
             )}
+          </section>
+
+          <section className="pointer-events-auto rounded-[24px] border border-slate-200/80 bg-white/92 p-5 shadow-lg shadow-slate-200/60 backdrop-blur-md">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-slate-900">개인 메모</h3>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">{personalNotes.length}개</span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              {(["note", "comment", "topic"] as ComposerTool[]).map((item) => (
+                <button key={item} type="button" onClick={() => setComposerTool(item)} className={`rounded-xl px-3 py-2 text-xs font-semibold ${composerTool === item ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                  {toolLabel(item)}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 space-y-3">
+              <select value={selectedAgendaId} onChange={(event) => setSelectedAgendaId(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                {agendaModels.map((agenda) => (
+                  <option key={agenda.id} value={agenda.id}>
+                    {agenda.title}
+                  </option>
+                ))}
+              </select>
+              <input value={composerTitle} onChange={(event) => setComposerTitle(event.target.value)} placeholder="메모 제목" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
+              <textarea value={composerBody} onChange={(event) => setComposerBody(event.target.value)} placeholder="개인 메모 내용을 입력하세요. 이 메모는 나중에 그룹 보드로 이동시킬 수 있습니다." className="min-h-[96px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
+              <button type="button" onClick={handleAddPersonalNote} className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                개인 메모 저장
+              </button>
+            </div>
+          </section>
+
+          <section className="pointer-events-auto max-h-[260px] overflow-y-auto rounded-[24px] border border-slate-200/80 bg-white/92 p-5 shadow-lg shadow-slate-200/60 backdrop-blur-md">
+            <h3 className="text-sm font-semibold text-slate-900">내 메모 목록</h3>
+            <div className="mt-4 space-y-3">
+              {personalNotes.length === 0 ? (
+                <p className="text-sm leading-6 text-slate-500">아직 저장한 개인 메모가 없습니다.</p>
+              ) : (
+                personalNotes.map((note) => (
+                  <article key={note.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-600">{toolLabel(note.kind)}</p>
+                        <h4 className="mt-1 text-sm font-semibold text-slate-900">{note.title}</h4>
+                      </div>
+                      <button type="button" onClick={() => handleDeletePersonalNote(note.id)} className="text-xs font-medium text-slate-400 hover:text-slate-600">
+                        삭제
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{note.body}</p>
+                    <p className="mt-3 text-xs text-slate-400">연결 안건: {agendaModels.find((agenda) => agenda.id === note.agendaId)?.title || "미지정"}</p>
+                  </article>
+                ))
+              )}
+            </div>
           </section>
 
           <section className="pointer-events-auto max-h-[280px] overflow-y-auto rounded-[24px] border border-slate-200/80 bg-white/92 p-5 shadow-lg shadow-slate-200/60 backdrop-blur-md">
@@ -709,25 +707,8 @@ export default function MeetingCanvasTab({
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-900">캔버스 작성</h3>
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            {(["note", "comment", "topic"] as ComposerTool[]).map((item) => (
-              <button key={item} type="button" onClick={() => setComposerTool(item)} className={`rounded-xl px-3 py-2 text-xs font-semibold ${composerTool === item ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                {toolLabel(item)}
-              </button>
-            ))}
-          </div>
-          <div className="mt-4 space-y-3">
-            <select value={selectedAgendaId} onChange={(event) => setSelectedAgendaId(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
-              {agendaModels.map((agenda) => (
-                <option key={agenda.id} value={agenda.id}>
-                  {agenda.title}
-                </option>
-              ))}
-            </select>
-            <input value={composerTitle} onChange={(event) => setComposerTitle(event.target.value)} placeholder="카드 제목" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
-            <textarea value={composerBody} onChange={(event) => setComposerBody(event.target.value)} placeholder="보드를 클릭하면 이 메모가 그 위치에 배치됩니다." className="min-h-[96px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
-          </div>
+          <h3 className="text-sm font-semibold text-slate-900">그룹 보드 안내</h3>
+          <p className="mt-4 rounded-xl bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-600">캔버스 보드는 그룹 전용입니다. 개인 메모는 아래에서 작성하고, 이후 드래그로 그룹에 편입하는 흐름으로 확장할 예정입니다.</p>
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -749,6 +730,59 @@ export default function MeetingCanvasTab({
           ) : (
             <div className="mt-4 text-sm text-slate-600">{selectedNode.data.label as React.ReactNode}</div>
           )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-900">개인 메모</h3>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">{personalNotes.length}개</span>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {(["note", "comment", "topic"] as ComposerTool[]).map((item) => (
+              <button key={item} type="button" onClick={() => setComposerTool(item)} className={`rounded-xl px-3 py-2 text-xs font-semibold ${composerTool === item ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                {toolLabel(item)}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 space-y-3">
+            <select value={selectedAgendaId} onChange={(event) => setSelectedAgendaId(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
+              {agendaModels.map((agenda) => (
+                <option key={agenda.id} value={agenda.id}>
+                  {agenda.title}
+                </option>
+              ))}
+            </select>
+            <input value={composerTitle} onChange={(event) => setComposerTitle(event.target.value)} placeholder="메모 제목" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
+            <textarea value={composerBody} onChange={(event) => setComposerBody(event.target.value)} placeholder="개인 메모 내용을 입력하세요." className="min-h-[96px] w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700" />
+            <button type="button" onClick={handleAddPersonalNote} className="w-full rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+              개인 메모 저장
+            </button>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-sm font-semibold text-slate-900">내 메모 목록</h3>
+          <div className="mt-4 space-y-3">
+            {personalNotes.length === 0 ? (
+              <p className="text-sm leading-6 text-slate-500">아직 저장한 개인 메모가 없습니다.</p>
+            ) : (
+              personalNotes.map((note) => (
+                <article key={note.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-600">{toolLabel(note.kind)}</p>
+                      <h4 className="mt-1 text-sm font-semibold text-slate-900">{note.title}</h4>
+                    </div>
+                    <button type="button" onClick={() => handleDeletePersonalNote(note.id)} className="text-xs font-medium text-slate-400 hover:text-slate-600">
+                      삭제
+                    </button>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{note.body}</p>
+                  <p className="mt-3 text-xs text-slate-400">연결 안건: {agendaModels.find((agenda) => agenda.id === note.agendaId)?.title || "미지정"}</p>
+                </article>
+              ))
+            )}
+          </div>
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
