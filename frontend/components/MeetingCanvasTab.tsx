@@ -194,7 +194,7 @@ function buildAgendaModels(
   ];
 }
 
-function makeNodeLabel(badge: string, title: string, body: string, meta: string[], accent: string) {
+function makeNodeLabel(badge: string, title: string, body: string | string[], meta: string[], accent: string) {
   return (
     <div className="min-w-0">
       <div className="flex items-center justify-between gap-2">
@@ -202,7 +202,17 @@ function makeNodeLabel(badge: string, title: string, body: string, meta: string[
         {meta[0] ? <span className="text-xs text-slate-400">{meta[0]}</span> : null}
       </div>
       <strong className="mt-3 block text-base text-slate-900">{title}</strong>
-      {body ? <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p> : null}
+      {Array.isArray(body) ? (
+        <div className="mt-3 space-y-2">
+          {body.filter(Boolean).slice(0, 3).map((line, index) => (
+            <div key={`${title}-line-${index}`} className="rounded-xl bg-white/75 px-3 py-2 text-sm leading-6 text-slate-600">
+              {line}
+            </div>
+          ))}
+        </div>
+      ) : body ? (
+        <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p>
+      ) : null}
       {meta.length > 1 ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {meta.slice(1, 4).map((item) => (
@@ -214,6 +224,90 @@ function makeNodeLabel(badge: string, title: string, body: string, meta: string[
       ) : null}
     </div>
   );
+}
+
+function makeAgendaNodeLabel(title: string, summary: string, status: string, keywords: string[]) {
+  return (
+    <div className="min-w-0 p-1">
+      <div className="rounded-[24px] bg-gradient-to-br from-amber-50 via-white to-white p-4">
+        <div className="flex items-start justify-between gap-3">
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">
+            Group
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-500">
+            {status}
+          </span>
+        </div>
+        <strong className="mt-4 block text-[17px] leading-7 text-slate-900">
+          {title}
+        </strong>
+        <div className="mt-4 rounded-[18px] border border-amber-100 bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Summary</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {summary}
+          </p>
+        </div>
+        {keywords.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {keywords.slice(0, 3).map((item) => (
+              <span key={`${title}-${item}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                #{item}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function estimateWrappedLines(text: string, charsPerLine: number) {
+  const normalized = stripLeadingTimestamp(text).replace(/\s+/g, " ").trim();
+  if (!normalized) return 1;
+  return normalized
+    .split("\n")
+    .reduce((count, line) => count + Math.max(1, Math.ceil(line.trim().length / charsPerLine)), 0);
+}
+
+function estimateAgendaNodeHeight(title: string, summary: string, keywordCount: number) {
+  const titleLines = estimateWrappedLines(title, 14);
+  const summaryLines = estimateWrappedLines(summary, 24);
+  const keywordRows = keywordCount > 0 ? Math.ceil(Math.min(keywordCount, 3) / 2) : 0;
+  return 122 + titleLines * 28 + summaryLines * 24 + keywordRows * 30;
+}
+
+function estimateStandardNodeHeight(title: string, body: string, metaCount: number, bodyCharsPerLine: number) {
+  const titleLines = estimateWrappedLines(title, 18);
+  const bodyLines = estimateWrappedLines(body, bodyCharsPerLine);
+  const metaRows = metaCount > 1 ? Math.ceil(Math.min(metaCount - 1, 3) / 2) : 0;
+  return 118 + titleLines * 24 + bodyLines * 22 + metaRows * 28;
+}
+
+function buildGridPositions(heights: number[], gapX: number, gapY: number, baseX: number, baseY: number) {
+  const total = heights.length;
+  const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(total, 1))));
+  const rowHeights: number[] = [];
+
+  heights.forEach((height, index) => {
+    const row = Math.floor(index / columns);
+    rowHeights[row] = Math.max(rowHeights[row] || 0, height);
+  });
+
+  const rowOffsets: number[] = [];
+  let currentY = baseY;
+  rowHeights.forEach((height, rowIndex) => {
+    rowOffsets[rowIndex] = currentY;
+    currentY += height + gapY;
+  });
+
+  return heights.map((_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    return {
+      x: baseX + column * gapX,
+      y: rowOffsets[row] ?? baseY,
+    };
+  });
 }
 
 export default function MeetingCanvasTab({
@@ -309,14 +403,23 @@ export default function MeetingCanvasTab({
 
   const graph = useMemo(() => {
     if (stage === "problem-definition") {
+      const heights = problemGroups.map((group) =>
+        estimateStandardNodeHeight(
+          group.topic,
+          group.conclusion,
+          1 + Math.min((group.keywords || []).slice(0, 2).length + 1, 3),
+          25,
+        ),
+      );
+      const positions = buildGridPositions(heights, 390, 48, 120, 140);
       return {
         nodes: problemGroups.map((group, index) => ({
           id: `problem-${group.group_id}`,
-          position: { x: 120 + index * 360, y: 140 },
+          position: positions[index],
           sourcePosition: Position.Bottom,
           targetPosition: Position.Top,
           className: "rounded-3xl border border-violet-200 bg-violet-50 shadow-sm",
-          style: { width: 320, borderRadius: 20, padding: 0 },
+          style: { width: 320, minHeight: heights[index], borderRadius: 20, padding: 0 },
           data: {
             label: makeNodeLabel(
               `TOPIC ${index + 1}`,
@@ -332,14 +435,23 @@ export default function MeetingCanvasTab({
     }
 
     if (stage === "solution") {
+      const heights = solutionTopics.map((topic) =>
+        estimateStandardNodeHeight(
+          topic.topic,
+          topic.ideas.join(" / "),
+          2,
+          26,
+        ),
+      );
+      const positions = buildGridPositions(heights, 410, 52, 120, 140);
       return {
         nodes: solutionTopics.map((topic, index) => ({
           id: `solution-${topic.group_id}`,
-          position: { x: 120 + index * 360, y: 140 },
+          position: positions[index],
           sourcePosition: Position.Bottom,
           targetPosition: Position.Top,
           className: "rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm",
-          style: { width: 340, borderRadius: 20, padding: 0 },
+          style: { width: 340, minHeight: heights[index], borderRadius: 20, padding: 0 },
           data: {
             label: makeNodeLabel(
               `SOLUTION ${topic.topic_no || index + 1}`,
@@ -356,54 +468,31 @@ export default function MeetingCanvasTab({
 
     const nextNodes: Node[] = [];
     const nextEdges: Edge[] = [];
-    const laneWidth = 320;
+    const agendaHeights = agendaModels.map((agenda) =>
+      estimateAgendaNodeHeight(
+        agenda.title,
+        stripLeadingTimestamp(agenda.summaryBullets[0] || "요약이 아직 없습니다."),
+        agenda.keywords.length,
+      ),
+    );
+    const positions = buildGridPositions(agendaHeights, 370, 56, 120, 80);
 
     agendaModels.forEach((agenda, agendaIndex) => {
-      const laneX = 120 + agendaIndex * laneWidth;
       nextNodes.push({
         id: `agenda-${agenda.id}`,
-        position: { x: laneX, y: 80 },
+        position: positions[agendaIndex],
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
-        className: "rounded-3xl border border-amber-200 bg-amber-100 shadow-sm",
-        style: { width: 240, borderRadius: 16, padding: 0 },
+        className: "rounded-[28px] border border-amber-200 bg-white shadow-[0_18px_40px_rgba(148,163,184,0.16)]",
+        style: { width: 300, minHeight: agendaHeights[agendaIndex], borderRadius: 28, padding: 0 },
         data: {
-          label: makeNodeLabel(
-            "GROUP",
+          label: makeAgendaNodeLabel(
             agenda.title,
-            agenda.summaryBullets[0] || "요약이 아직 없습니다.",
-            [agenda.status, ...(agenda.keywords || []).slice(0, 3).map((item) => `#${item}`)],
-            "bg-amber-200 text-amber-800",
+            stripLeadingTimestamp(agenda.summaryBullets[0] || "요약이 아직 없습니다."),
+            agenda.status,
+            agenda.keywords || [],
           ),
         },
-      });
-
-      agenda.summaryBullets.slice(0, 3).forEach((summary, summaryIndex) => {
-        const summaryId = `summary-${agenda.id}-${summaryIndex}`;
-        nextNodes.push({
-          id: summaryId,
-          position: { x: laneX, y: 250 + summaryIndex * 136 },
-          sourcePosition: Position.Bottom,
-          targetPosition: Position.Top,
-          className: "rounded-3xl border border-amber-100 bg-amber-50 shadow-sm",
-          style: { width: 240, borderRadius: 16, padding: 0 },
-          data: {
-            label: makeNodeLabel(
-              `POINT ${summaryIndex + 1}`,
-              `핵심 포인트 ${summaryIndex + 1}`,
-              summary,
-              [`${agenda.utterances.length}개 발화`, ...(agenda.keywords || []).slice(0, 2).map((item) => `#${item}`)],
-              "bg-amber-100 text-amber-700",
-            ),
-          },
-        });
-        nextEdges.push({
-          id: `edge-agenda-${agenda.id}-${summaryIndex}`,
-          source: `agenda-${agenda.id}`,
-          target: summaryId,
-          type: "smoothstep",
-          style: { stroke: "#c7d2fe", strokeWidth: 1.4 },
-        });
       });
     });
 
@@ -484,6 +573,7 @@ export default function MeetingCanvasTab({
             value: `${selectedGroup.ideas.length}개`,
           },
         ],
+        organizeTitle: "안건 정리",
       };
     }
 
@@ -513,6 +603,7 @@ export default function MeetingCanvasTab({
             value: `${selectedTopic.topic_no}`,
           },
         ],
+        organizeTitle: "안건 정리",
       };
     }
 
@@ -533,45 +624,30 @@ export default function MeetingCanvasTab({
         `${resolvedAgenda.decisions.length}개 결정`,
       ].filter(Boolean),
       keywords: (resolvedAgenda.keywords || []).slice(0, 3),
-      summaryItems:
-        summaryIndex >= 0
-          ? [
-              {
-                label: `요약 ${summaryIndex + 1}`,
-                value: stripLeadingTimestamp(summaryLine || "요약이 아직 없습니다."),
-              },
-            ]
-          : (resolvedAgenda.summaryBullets.length > 0
-              ? resolvedAgenda.summaryBullets.slice(0, 3)
-              : ["요약이 아직 없습니다."]
-            ).map((value, index) => ({
-              label: `요약 ${index + 1}`,
-              value: stripLeadingTimestamp(value),
-            })),
-      organizeItems: [
+      summaryItems: [
         {
-          label: "안건",
-          value: resolvedAgenda.title,
-        },
-        {
-          label: "상태",
-          value: resolvedAgenda.status,
-        },
-        {
-          label: "결정",
-          value:
-            resolvedAgenda.decisions.length > 0
-              ? summarizeDecision(resolvedAgenda.decisions[0])
-              : "아직 정리된 결정이 없습니다.",
-        },
-        {
-          label: "액션",
-          value:
-            resolvedAgenda.actionItems.length > 0
-              ? summarizeActionItem(resolvedAgenda.actionItems[0])
-              : "아직 정리된 액션이 없습니다.",
+          label: "요약",
+          value: stripLeadingTimestamp(
+            summaryIndex >= 0
+              ? summaryLine || "요약이 아직 없습니다."
+              : resolvedAgenda.summaryBullets[0] || "요약이 아직 없습니다.",
+          ),
         },
       ],
+      organizeItems: [
+        ...(resolvedAgenda.summaryBullets.length > 0
+          ? resolvedAgenda.summaryBullets.slice(0, 3).map((value, index) => ({
+              label: `포인트 ${index + 1}`,
+              value: stripLeadingTimestamp(value),
+            }))
+          : [
+              {
+                label: "포인트 1",
+                value: "핵심 포인트가 아직 없습니다.",
+              },
+            ]),
+      ],
+      organizeTitle: "핵심 포인트",
     };
   }, [agendaModels, problemGroups, selectedAgenda, selectedNodeId, solutionTopics, stage]);
 
@@ -829,7 +905,7 @@ export default function MeetingCanvasTab({
                     </section>
 
                     <section className="pt-6">
-                      <h4 className="text-lg font-semibold text-slate-900">안건 정리</h4>
+                      <h4 className="text-lg font-semibold text-slate-900">{leftPanelDetail.organizeTitle || "안건 정리"}</h4>
                       <div className="mt-4 space-y-3">
                         {leftPanelDetail.organizeItems.map((item, index) => (
                           <div key={`${leftPanelDetail.title}-organize-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
