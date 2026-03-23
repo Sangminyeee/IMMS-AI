@@ -3,8 +3,11 @@ import type {
   AgendaSnapshotExportResponse,
   AgendaSnapshotImportResponse,
   CanvasPlacementConfirmResponse,
+  CanvasProblemConclusionResponse,
   CanvasProblemDefinitionResponse,
   CanvasSolutionStageResponse,
+  CanvasWorkspaceProblemGroup,
+  CanvasWorkspaceStateResponse,
   LastLlmJsonResponse,
   LlmStatus,
   MeetingState,
@@ -141,6 +144,29 @@ export async function generateCanvasProblemDefinition(payload: {
   });
 }
 
+export async function generateProblemGroupConclusion(payload: {
+  meeting_topic: string;
+  group: {
+    group_id: string;
+    topic: string;
+    insight_lens?: string;
+    agenda_titles: string[];
+    source_summary_items: string[];
+    ideas: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      body: string;
+    }>;
+  };
+}): Promise<CanvasProblemConclusionResponse> {
+  return requestJson<CanvasProblemConclusionResponse>("/api/canvas/problem-conclusion", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function generateMeetingGoal(payload: {
   topic: string;
 }): Promise<MeetingGoalSuggestionResponse> {
@@ -161,6 +187,26 @@ export async function generateCanvasSolutionStage(payload: {
   }>;
 }): Promise<CanvasSolutionStageResponse> {
   return requestJson<CanvasSolutionStageResponse>("/api/canvas/solution-stage", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getCanvasWorkspaceState(meetingId: string): Promise<CanvasWorkspaceStateResponse> {
+  const params = new URLSearchParams({ meeting_id: meetingId });
+  return requestJson<CanvasWorkspaceStateResponse>(`/api/canvas/workspace-state?${params.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+export async function saveCanvasWorkspaceState(payload: {
+  meeting_id: string;
+  stage: "ideation" | "problem-definition" | "solution";
+  problem_groups: CanvasWorkspaceProblemGroup[];
+  solution_topics: CanvasSolutionStageResponse["topics"];
+}): Promise<CanvasWorkspaceStateResponse> {
+  return requestJson<CanvasWorkspaceStateResponse>("/api/canvas/workspace-state", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),

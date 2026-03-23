@@ -173,6 +173,7 @@ export interface AgendaSnapshotImportResponse {
 export interface CanvasProblemDefinitionGroup {
   group_id: string;
   topic: string;
+  insight_lens?: string;
   keywords: string[];
   agenda_ids: string[];
   agenda_titles: string[];
@@ -192,6 +193,43 @@ export interface CanvasProblemDefinitionResponse {
   warning?: string;
   generated_at: string;
   groups: CanvasProblemDefinitionGroup[];
+}
+
+export interface CanvasProblemConclusionResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  group_id: string;
+  insight_lens?: string;
+  conclusion: string;
+}
+
+export interface CanvasWorkspaceProblemGroup {
+  group_id: string;
+  topic: string;
+  insight_lens?: string;
+  keywords: string[];
+  agenda_ids: string[];
+  agenda_titles: string[];
+  ideas: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    body: string;
+  }>;
+  source_summary_items: string[];
+  conclusion: string;
+  status?: "draft" | "review" | "final" | string;
+}
+
+export interface CanvasWorkspaceStateResponse {
+  ok: boolean;
+  meeting_id: string;
+  stage: "ideation" | "problem-definition" | "solution";
+  problem_groups: CanvasWorkspaceProblemGroup[];
+  solution_topics: CanvasSolutionTopicResponse[];
+  saved_at?: string;
 }
 
 export interface MeetingGoalSuggestionResponse {

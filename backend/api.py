@@ -260,6 +260,13 @@ def _normalize_flow_type(raw: Any) -> str:
     return "discussion"
 
 
+def _normalize_canvas_stage(raw: Any) -> str:
+    s = _safe_text(raw, "ideation").lower()
+    if s in {"ideation", "problem-definition", "solution"}:
+        return s
+    return "ideation"
+
+
 def _doc_freq(rows: list[dict[str, Any]]) -> Counter[str]:
     cnt: Counter[str] = Counter()
     for row in rows:
@@ -707,6 +714,27 @@ class ProblemDefinitionGenerateInput(BaseModel):
     ideas: list[ProblemDefinitionIdeaInput] = Field(default_factory=list)
 
 
+class ProblemConclusionIdeaInput(BaseModel):
+    id: str = ""
+    kind: str = "note"
+    title: str = ""
+    body: str = ""
+
+
+class ProblemConclusionGroupInput(BaseModel):
+    group_id: str = ""
+    topic: str = ""
+    insight_lens: str = ""
+    agenda_titles: list[str] = Field(default_factory=list)
+    source_summary_items: list[str] = Field(default_factory=list)
+    ideas: list[ProblemConclusionIdeaInput] = Field(default_factory=list)
+
+
+class ProblemConclusionGenerateInput(BaseModel):
+    meeting_topic: str = ""
+    group: ProblemConclusionGroupInput
+
+
 class MeetingGoalGenerateInput(BaseModel):
     topic: str = ""
 
@@ -721,6 +749,41 @@ class SolutionStageTopicInput(BaseModel):
 class SolutionStageGenerateInput(BaseModel):
     meeting_topic: str = ""
     topics: list[SolutionStageTopicInput] = Field(default_factory=list)
+
+
+class CanvasWorkspaceIdeaInput(BaseModel):
+    id: str = ""
+    kind: str = "note"
+    title: str = ""
+    body: str = ""
+
+
+class CanvasWorkspaceProblemGroupInput(BaseModel):
+    group_id: str = ""
+    topic: str = ""
+    insight_lens: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    agenda_ids: list[str] = Field(default_factory=list)
+    agenda_titles: list[str] = Field(default_factory=list)
+    ideas: list[CanvasWorkspaceIdeaInput] = Field(default_factory=list)
+    source_summary_items: list[str] = Field(default_factory=list)
+    conclusion: str = ""
+    status: str = "draft"
+
+
+class CanvasWorkspaceSolutionTopicInput(BaseModel):
+    group_id: str = ""
+    topic_no: int = 0
+    topic: str = ""
+    conclusion: str = ""
+    ideas: list[str] = Field(default_factory=list)
+
+
+class CanvasWorkspaceStateInput(BaseModel):
+    meeting_id: str = ""
+    stage: str = "ideation"
+    problem_groups: list[CanvasWorkspaceProblemGroupInput] = Field(default_factory=list)
+    solution_topics: list[CanvasWorkspaceSolutionTopicInput] = Field(default_factory=list)
 
 
 @dataclass
@@ -761,6 +824,7 @@ class RuntimeStore:
     llm_io_seq: int = 0
     llm_io_logs: list[dict[str, Any]] = field(default_factory=list)
     canvas_last_placement: dict[str, Any] = field(default_factory=dict)
+    canvas_workspace_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def reset(self) -> None:
         self.meeting_goal = ""
@@ -797,6 +861,7 @@ class RuntimeStore:
         self.llm_io_seq = 0
         self.llm_io_logs = []
         self.canvas_last_placement = {}
+        self.canvas_workspace_by_meeting = {}
 
 
 RT = RuntimeStore()
@@ -953,12 +1018,13 @@ def _build_problem_definition_groups_local(payload: ProblemDefinitionGenerateInp
             {
                 "group_id": _safe_text(group.get("group_id"), f"problem-group-{idx}"),
                 "topic": _normalize_problem_topic_label(topic, f"주제 {idx}"),
+                "insight_lens": "공통 행동과 니즈를 묶어 해석",
                 "keywords": [_safe_text(x) for x in (group.get("keywords") or []) if _safe_text(x)][:6],
                 "agenda_ids": [_safe_text(x) for x in (group.get("agenda_ids") or []) if _safe_text(x)],
                 "agenda_titles": [_safe_text(x) for x in (group.get("agenda_titles") or []) if _safe_text(x)],
                 "ideas": linked_ideas[:24],
                 "source_summary_items": summaries[:8],
-                "conclusion": f"{topic} 관점에서 연결된 안건과 아이디어를 바탕으로 핵심 인사이트를 정리할 필요가 있습니다.",
+                "conclusion": _to_summary_point(summaries[0], max_len=None) if summaries else f"{_safe_text(topic)} 방향 구체화",
             }
         )
     return out
@@ -1021,6 +1087,7 @@ def _build_problem_definition_prompt(topic: str, groups: list[dict[str, Any]]) -
             {
                 "group_id": _safe_text(group.get("group_id")),
                 "draft_topic": _safe_text(group.get("topic")),
+                "draft_insight_lens": _safe_text(group.get("insight_lens"), "공통 행동과 니즈를 묶어 해석"),
                 "keywords": [_safe_text(x) for x in (group.get("keywords") or []) if _safe_text(x)],
                 "agenda_titles": [_safe_text(x) for x in (group.get("agenda_titles") or []) if _safe_text(x)],
                 "ideas": group.get("ideas") or [],
@@ -1046,6 +1113,7 @@ def _build_problem_definition_prompt(topic: str, groups: list[dict[str, Any]]) -
         "    {\n"
         '      "group_id": "problem-group-1",\n'
         '      "topic": "트렌드",\n'
+        '      "insight_lens": "사용자의 행동에서 드러난 숨은 니즈를 정리",\n'
         '      "conclusion": "키링을 통해 자신을 표현하려는 수요가 강하게 드러난다."\n'
         "    }\n"
         "  ]\n"
@@ -1053,11 +1121,101 @@ def _build_problem_definition_prompt(topic: str, groups: list[dict[str, Any]]) -
         "[규칙]\n"
         "- group_id는 입력값을 그대로 유지한다.\n"
         "- topic은 draft_topic 재사용이 아니라, 묶음의 안건/아이디어/요약을 보고 다시 정제한 최종 주제명이어야 한다.\n"
+        "- insight_lens는 이 묶음의 인사이트를 어떤 관점으로 정리했는지 설명하는 짧은 문구다.\n"
+        "- insight_lens는 예를 들면 '행동에서 드러난 니즈', '의사결정 기준의 충돌', '실행 제약과 우선순위' 같은 식으로 쓴다.\n"
+        "- insight_lens는 반드시 8~20자 이내의 짧은 한국어 구로 쓴다.\n"
         "- topic은 반드시 1~2단어만 사용한다.\n"
         "- topic은 가급적 10자 이내의 짧은 명사구로 쓴다.\n"
         "- topic은 너무 일반적인 표현(예: 기타, 논의, 안건, 주제)으로 쓰지 않는다.\n"
         "- conclusion은 각 주제당 정확히 1문장.\n"
+        "- conclusion은 반드시 insight_lens의 관점으로 해석한 결과여야 한다.\n"
+        "- conclusion은 '이 그룹에서는', '~에서는', '~정리된다', '~필요가 있다' 같은 서술 틀로 시작하거나 끝내지 않는다.\n"
+        "- conclusion은 바로 핵심 결과 문장만 쓴다.\n"
         "- conclusion은 요약문 재인용이 아니라 새로 쓴 문장.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _build_problem_group_conclusion_local(payload: ProblemConclusionGenerateInput) -> str:
+    summary_items = [_safe_text(item) for item in (payload.group.source_summary_items or []) if _safe_text(item)]
+    idea_bodies = [
+        _safe_text(item.body) or _safe_text(item.title)
+        for item in (payload.group.ideas or [])
+        if _safe_text(item.body) or _safe_text(item.title)
+    ]
+    evidence = summary_items + idea_bodies
+    if evidence:
+        anchor = _to_summary_point(evidence[0], max_len=None)
+        if anchor:
+            return anchor
+    agenda_titles = [_safe_text(item) for item in (payload.group.agenda_titles or []) if _safe_text(item)]
+    if agenda_titles:
+        return f"{agenda_titles[0]} 방향 구체화"
+    return f"{_safe_text(payload.group.topic, '주제')} 방향 구체화"
+
+
+def _build_problem_group_insight_lens_local(payload: ProblemConclusionGenerateInput) -> str:
+    existing = _safe_text(payload.group.insight_lens)
+    if existing:
+        return existing
+    if payload.group.ideas:
+        return "개인 메모와 요약을 함께 해석"
+    if payload.group.source_summary_items:
+        return "요약 흐름에서 공통 인사이트 도출"
+    if payload.group.agenda_titles:
+        return "안건 흐름에서 공통 방향 정리"
+    return "핵심 방향을 묶어 해석"
+
+
+def _build_problem_group_conclusion_prompt(payload: ProblemConclusionGenerateInput) -> str:
+    serialized = {
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "group": {
+            "group_id": _safe_text(payload.group.group_id),
+            "topic": _safe_text(payload.group.topic),
+            "draft_insight_lens": _safe_text(payload.group.insight_lens),
+            "agenda_titles": [_safe_text(item) for item in (payload.group.agenda_titles or []) if _safe_text(item)],
+            "source_summary_items": [
+                _safe_text(item) for item in (payload.group.source_summary_items or []) if _safe_text(item)
+            ],
+            "ideas": [
+                {
+                    "id": _safe_text(item.id),
+                    "kind": _safe_text(item.kind, "note"),
+                    "title": _safe_text(item.title),
+                    "body": _safe_text(item.body),
+                }
+                for item in (payload.group.ideas or [])
+                if _safe_text(item.id) or _safe_text(item.title) or _safe_text(item.body)
+            ],
+        },
+    }
+    return (
+        "너는 문제정의 그룹의 현재 메모와 요약을 보고 결론 한 문장을 작성하는 분석기다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- 먼저 이 그룹의 인사이트를 어떤 관점으로 정리할지 insight_lens를 정한다.\n"
+        "- group.topic, source_summary_items, ideas를 종합해 이 그룹의 결론을 한 문장으로 쓴다.\n"
+        "- 회의에서 드러난 핵심 인사이트나 방향이 드러나야 한다.\n"
+        "- 입력 문장을 그대로 복붙하지 말고 새로운 한국어 문장으로 정리한다.\n"
+        "- 너무 추상적이지 않게, 실제 논의된 흐름이 느껴지게 쓴다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(serialized, ensure_ascii=False, indent=2)}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "group_id": "problem-group-1",\n'
+        '  "insight_lens": "행동에서 드러난 숨은 니즈",\n'
+        '  "conclusion": "사용자의 표현 욕구를 반영한 방향으로 아이디어를 정리해야 한다."\n'
+        "}\n\n"
+        "[규칙]\n"
+        "- group_id는 입력값을 그대로 유지한다.\n"
+        "- insight_lens는 인사이트를 어떤 각도로 정리했는지 드러내는 8~20자 이내의 짧은 한국어 구다.\n"
+        "- insight_lens는 예를 들면 '행동에서 드러난 니즈', '의사결정 기준의 충돌', '실행 제약과 우선순위'처럼 쓴다.\n"
+        "- conclusion은 한국어 1문장.\n"
+        "- conclusion은 18~45자 정도의 짧고 분명한 문장.\n"
+        "- conclusion은 반드시 insight_lens 관점으로 해석한 결과여야 한다.\n"
+        "- conclusion은 '이 그룹에서는', '~에서는', '~정리된다', '~필요가 있다' 같은 틀을 쓰지 않는다.\n"
+        "- conclusion은 바로 핵심 결과 문장만 쓴다.\n"
+        "- topic을 반복만 하지 말고, 근거를 종합한 결과를 써야 한다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
@@ -3493,6 +3651,26 @@ def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
             pass
 
 
+def _ensure_llm_ready(rt: RuntimeStore) -> tuple[Any, bool, str]:
+    client = get_client()
+    if bool(rt.llm_enabled) and bool(client.connected):
+        return client, True, ""
+
+    if not _safe_text(getattr(client, "api_key", "")):
+        rt.llm_enabled = False
+        return client, False, "LLM API 키가 없어 로컬 결과를 사용했습니다."
+
+    try:
+        result = client.connect()
+        rt.llm_enabled = bool(result.get("ok"))
+        if rt.llm_enabled and client.connected:
+            return client, True, ""
+        return client, False, _safe_text(result.get("message"), "LLM 연결 실패로 로컬 결과를 사용했습니다.")
+    except Exception as exc:
+        rt.llm_enabled = False
+        return client, False, f"LLM 자동 연결 실패: {exc}"
+
+
 app = FastAPI(title="Meeting STT + Agenda MVP")
 app.add_middleware(
     CORSMiddleware,
@@ -3922,8 +4100,8 @@ def post_canvas_problem_definition(payload: ProblemDefinitionGenerateInput):
         warning = ""
 
         if groups:
-            client = get_client()
-            if bool(RT.llm_enabled) and bool(client.connected):
+            client, llm_ready, llm_note = _ensure_llm_ready(RT)
+            if llm_ready:
                 try:
                     prompt = _build_problem_definition_prompt(payload.topic, groups)
                     parsed = _call_llm_json(
@@ -3946,9 +4124,12 @@ def post_canvas_problem_definition(payload: ProblemDefinitionGenerateInput):
                             if not llm_item:
                                 continue
                             llm_topic = _normalize_problem_topic_label(llm_item.get("topic"), _safe_text(group.get("topic"), "주제"))
+                            llm_insight_lens = _safe_text(llm_item.get("insight_lens"))
                             llm_conclusion = _safe_text(llm_item.get("conclusion"))
                             if llm_topic:
                                 group["topic"] = llm_topic
+                            if llm_insight_lens:
+                                group["insight_lens"] = llm_insight_lens
                             if llm_conclusion:
                                 group["conclusion"] = llm_conclusion
                         used_llm = True
@@ -3962,7 +4143,7 @@ def post_canvas_problem_definition(payload: ProblemDefinitionGenerateInput):
                 except Exception as exc:
                     warning = f"문제 정의 LLM 생성 실패: {exc}"
             else:
-                warning = "LLM 미연결 상태로 로컬 문제 정의 묶음을 사용했습니다."
+                warning = llm_note or "LLM 미연결 상태로 로컬 문제 정의 묶음을 사용했습니다."
 
         return {
             "ok": True,
@@ -3970,6 +4151,58 @@ def post_canvas_problem_definition(payload: ProblemDefinitionGenerateInput):
             "warning": warning,
             "generated_at": _now_ts(),
             "groups": groups,
+        }
+
+
+@app.post("/api/canvas/problem-conclusion")
+def post_canvas_problem_conclusion(payload: ProblemConclusionGenerateInput):
+    with RT.lock:
+        group_id = _safe_text(payload.group.group_id)
+        conclusion = _build_problem_group_conclusion_local(payload)
+        insight_lens = _build_problem_group_insight_lens_local(payload)
+        used_llm = False
+        warning = ""
+
+        client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        if llm_ready:
+            try:
+                parsed = _call_llm_json(
+                    RT,
+                    client,
+                    prompt=_build_problem_group_conclusion_prompt(payload),
+                    stage="canvas_problem_conclusion",
+                    temperature=0.2,
+                    max_tokens=260,
+                )
+                candidate = _safe_text(parsed.get("conclusion")) if isinstance(parsed, dict) else ""
+                candidate_lens = _safe_text(parsed.get("insight_lens")) if isinstance(parsed, dict) else ""
+                if candidate:
+                    conclusion = candidate
+                    if candidate_lens:
+                        insight_lens = candidate_lens
+                    used_llm = True
+                    RT.last_llm_parsed_json = {
+                        "stage": "canvas_problem_conclusion",
+                        "group_id": group_id,
+                        "insight_lens": insight_lens,
+                        "conclusion": conclusion,
+                    }
+                    RT.last_llm_parsed_at = _now_ts()
+                else:
+                    warning = "LLM JSON 형식이 예상과 달라 로컬 결론을 사용했습니다."
+            except Exception as exc:
+                warning = f"결론 LLM 생성 실패: {exc}"
+        else:
+            warning = llm_note or "LLM 미연결 상태로 로컬 결론을 사용했습니다."
+
+        return {
+            "ok": True,
+            "used_llm": used_llm,
+            "warning": warning,
+            "generated_at": _now_ts(),
+            "group_id": group_id,
+            "insight_lens": insight_lens,
+            "conclusion": conclusion,
         }
 
 
@@ -3981,8 +4214,8 @@ def post_canvas_meeting_goal(payload: MeetingGoalGenerateInput):
         used_llm = False
         warning = ""
 
-        client = get_client()
-        if topic and bool(RT.llm_enabled) and bool(client.connected):
+        client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        if topic and llm_ready:
             try:
                 parsed = _call_llm_json(
                     RT,
@@ -4007,7 +4240,7 @@ def post_canvas_meeting_goal(payload: MeetingGoalGenerateInput):
             except Exception as exc:
                 warning = f"회의 목표 LLM 생성 실패: {exc}"
         elif topic:
-            warning = "LLM 미연결 상태로 로컬 회의 목표를 사용했습니다."
+            warning = llm_note or "LLM 미연결 상태로 로컬 회의 목표를 사용했습니다."
         else:
             warning = "회의 제목이 없어 기본 회의 목표를 사용했습니다."
 
@@ -4042,8 +4275,8 @@ def post_canvas_solution_stage(payload: SolutionStageGenerateInput):
         warning = ""
 
         if topics:
-            client = get_client()
-            if bool(RT.llm_enabled) and bool(client.connected):
+            client, llm_ready, llm_note = _ensure_llm_ready(RT)
+            if llm_ready:
                 try:
                     prompt = _build_solution_stage_prompt(payload.meeting_topic, topics)
                     parsed = _call_llm_json(
@@ -4079,7 +4312,7 @@ def post_canvas_solution_stage(payload: SolutionStageGenerateInput):
                 except Exception as exc:
                     warning = f"해결책 단계 LLM 생성 실패: {exc}"
             else:
-                warning = "LLM 미연결 상태로 로컬 해결책 아이디어를 사용했습니다."
+                warning = llm_note or "LLM 미연결 상태로 로컬 해결책 아이디어를 사용했습니다."
 
         return {
             "ok": True,
@@ -4087,6 +4320,87 @@ def post_canvas_solution_stage(payload: SolutionStageGenerateInput):
             "warning": warning,
             "generated_at": _now_ts(),
             "topics": topics,
+        }
+
+
+@app.get("/api/canvas/workspace-state")
+def get_canvas_workspace_state(meeting_id: str):
+    normalized_meeting_id = _safe_text(meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    with RT.lock:
+        saved = copy.deepcopy(RT.canvas_workspace_by_meeting.get(normalized_meeting_id) or {})
+        return {
+            "ok": True,
+            "meeting_id": normalized_meeting_id,
+            "stage": _normalize_canvas_stage(saved.get("stage")),
+            "problem_groups": saved.get("problem_groups") or [],
+            "solution_topics": saved.get("solution_topics") or [],
+            "saved_at": _safe_text(saved.get("saved_at")),
+        }
+
+
+@app.post("/api/canvas/workspace-state")
+def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    with RT.lock:
+        saved_at = _now_ts()
+        workspace = {
+            "meeting_id": normalized_meeting_id,
+            "stage": _normalize_canvas_stage(payload.stage),
+            "problem_groups": [
+                {
+                    "group_id": _safe_text(group.group_id),
+                    "topic": _safe_text(group.topic),
+                    "insight_lens": _safe_text(group.insight_lens),
+                    "keywords": [_safe_text(item) for item in (group.keywords or []) if _safe_text(item)],
+                    "agenda_ids": [_safe_text(item) for item in (group.agenda_ids or []) if _safe_text(item)],
+                    "agenda_titles": [_safe_text(item) for item in (group.agenda_titles or []) if _safe_text(item)],
+                    "ideas": [
+                        {
+                            "id": _safe_text(idea.id),
+                            "kind": _safe_text(idea.kind, "note"),
+                            "title": _safe_text(idea.title),
+                            "body": _safe_text(idea.body),
+                        }
+                        for idea in (group.ideas or [])
+                        if _safe_text(idea.id) or _safe_text(idea.title) or _safe_text(idea.body)
+                    ],
+                    "source_summary_items": [
+                        _safe_text(item) for item in (group.source_summary_items or []) if _safe_text(item)
+                    ],
+                    "conclusion": _safe_text(group.conclusion),
+                    "status": _safe_text(group.status, "draft"),
+                }
+                for group in (payload.problem_groups or [])
+                if _safe_text(group.group_id) and _safe_text(group.topic)
+            ],
+            "solution_topics": [
+                {
+                    "group_id": _safe_text(topic.group_id),
+                    "topic_no": int(topic.topic_no or 0),
+                    "topic": _safe_text(topic.topic),
+                    "conclusion": _safe_text(topic.conclusion),
+                    "ideas": [_safe_text(item) for item in (topic.ideas or []) if _safe_text(item)],
+                }
+                for topic in (payload.solution_topics or [])
+                if _safe_text(topic.group_id) and _safe_text(topic.topic)
+            ],
+            "saved_at": saved_at,
+        }
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+        return {
+            "ok": True,
+            "meeting_id": normalized_meeting_id,
+            "stage": workspace["stage"],
+            "problem_groups": workspace["problem_groups"],
+            "solution_topics": workspace["solution_topics"],
+            "saved_at": saved_at,
         }
 
 
