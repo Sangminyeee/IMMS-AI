@@ -683,6 +683,8 @@ export default function MeetingCanvasTab({
   const [meetingGoalBusy, setMeetingGoalBusy] = useState(false);
   const [conclusionRefreshingGroupId, setConclusionRefreshingGroupId] = useState("");
   const [conclusionBatchBusy, setConclusionBatchBusy] = useState(false);
+  const [problemDefinitionStagePending, setProblemDefinitionStagePending] = useState(false);
+  const [solutionStagePending, setSolutionStagePending] = useState(false);
   const [loadingProblemGroupIds, setLoadingProblemGroupIds] = useState<string[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -735,6 +737,8 @@ export default function MeetingCanvasTab({
     setProblemGroups([]);
     setSolutionTopics([]);
     setStage("ideation");
+    setProblemDefinitionStagePending(false);
+    setSolutionStagePending(false);
     setSelectedProblemGroupId("");
     setSelectedNodeId("");
     setEditingProblemGroupId("");
@@ -1441,6 +1445,7 @@ export default function MeetingCanvasTab({
   }, [agendaModels, problemGroups, selectedAgenda, selectedNodeId, selectedProblemGroup, solutionTopics, stage]);
 
   const handleGenerateProblemDefinition = async () => {
+    setProblemDefinitionStagePending(true);
     setBusy(true);
     try {
       const result = await generateCanvasProblemDefinition({
@@ -1471,6 +1476,7 @@ export default function MeetingCanvasTab({
       const message = error instanceof Error ? error.message : String(error);
       setActivityMessage(`문제 정의 생성 실패: ${message}`);
     } finally {
+      setProblemDefinitionStagePending(false);
       setBusy(false);
     }
   };
@@ -1482,6 +1488,7 @@ export default function MeetingCanvasTab({
       return;
     }
 
+    setSolutionStagePending(true);
     setBusy(true);
     try {
       const result = await generateCanvasSolutionStage({
@@ -1500,6 +1507,7 @@ export default function MeetingCanvasTab({
       const message = error instanceof Error ? error.message : String(error);
       setActivityMessage(`해결책 생성 실패: ${message}`);
     } finally {
+      setSolutionStagePending(false);
       setBusy(false);
     }
   };
@@ -2081,6 +2089,59 @@ export default function MeetingCanvasTab({
                   <p className="text-sm font-semibold uppercase tracking-[0.16em] text-violet-600">Problem Definition</p>
                   <p className="mt-2 text-base text-slate-700">
                     {busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {problemDefinitionStagePending ? (
+              <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
+                <div className="w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]">
+                  <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-violet-100 text-4xl">
+                    ⏳
+                  </div>
+                  <p className="mt-5 text-sm font-semibold uppercase tracking-[0.18em] text-violet-700">
+                    Problem Definition
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold text-slate-900">
+                    문제정의 단계를 준비하고 있습니다
+                  </h3>
+                  <p className="mt-3 text-base leading-7 text-slate-500">
+                    안건과 메모를 묶어서 문제정의 그룹을 만드는 중입니다.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {solutionStagePending ? (
+              <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
+                <div className="w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]">
+                  <div className="mx-auto flex w-full max-w-[320px] items-center justify-center gap-5">
+                    <div className="grid grid-cols-2 gap-3">
+                      {[0, 1, 2, 3].map((item) => (
+                        <div
+                          key={`loading-problem-${item}`}
+                          className="h-16 w-16 animate-pulse rounded-2xl bg-violet-100 shadow-sm"
+                        />
+                      ))}
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-slate-400">
+                      <span className="h-10 w-10 animate-spin rounded-full border-[3px] border-slate-200 border-t-slate-700" />
+                      <span className="text-xs font-semibold uppercase tracking-[0.18em]">AI</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="h-8 w-28 animate-pulse rounded-2xl bg-emerald-100" />
+                      <div className="h-16 w-28 animate-pulse rounded-2xl bg-emerald-50" />
+                    </div>
+                  </div>
+                  <p className="mt-6 text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                    Solution Stage
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold text-slate-900">
+                    해결책 단계를 준비하고 있습니다
+                  </h3>
+                  <p className="mt-3 text-base leading-7 text-slate-500">
+                    확정된 문제 정의 그룹을 바탕으로 해결 방향과 실행 아이디어를 정리하는 중입니다.
                   </p>
                 </div>
               </div>
