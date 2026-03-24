@@ -990,6 +990,14 @@ class CanvasWorkspaceSolutionTopicInput(BaseModel):
     topic: str = ""
     conclusion: str = ""
     ideas: list[str] = Field(default_factory=list)
+    status: str = "draft"
+    problem_topic: str = ""
+    problem_insight: str = ""
+    problem_conclusion: str = ""
+    problem_keywords: list[str] = Field(default_factory=list)
+    agenda_titles: list[str] = Field(default_factory=list)
+    ai_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CanvasWorkspaceStateInput(BaseModel):
@@ -4687,6 +4695,37 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
                     "topic": _safe_text(topic.topic),
                     "conclusion": _safe_text(topic.conclusion),
                     "ideas": [_safe_text(item) for item in (topic.ideas or []) if _safe_text(item)],
+                    "status": _safe_text(topic.status, "draft"),
+                    "problem_topic": _safe_text(topic.problem_topic),
+                    "problem_insight": _safe_text(topic.problem_insight),
+                    "problem_conclusion": _safe_text(topic.problem_conclusion),
+                    "problem_keywords": [
+                        _safe_text(item) for item in (topic.problem_keywords or []) if _safe_text(item)
+                    ],
+                    "agenda_titles": [
+                        _safe_text(item) for item in (topic.agenda_titles or []) if _safe_text(item)
+                    ],
+                    "ai_suggestions": [
+                        {
+                            "id": _safe_text(item.get("id")),
+                            "text": _safe_text(item.get("text")),
+                            "status": _safe_text(item.get("status"), "draft"),
+                        }
+                        for item in (topic.ai_suggestions or [])
+                        if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
+                    ],
+                    "notes": [
+                        {
+                            "id": _safe_text(item.get("id")),
+                            "text": _safe_text(item.get("text")),
+                            "source": _safe_text(item.get("source"), "user"),
+                            "source_ai_id": _safe_text(item.get("source_ai_id")),
+                            "is_final_candidate": bool(item.get("is_final_candidate")),
+                            "final_comment": _safe_text(item.get("final_comment")),
+                        }
+                        for item in (topic.notes or [])
+                        if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
+                    ],
                 }
                 for topic in (payload.solution_topics or [])
                 if _safe_text(topic.group_id) and _safe_text(topic.topic)

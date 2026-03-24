@@ -294,6 +294,25 @@ export interface CanvasSolutionTopicResponse {
   topic: string;
   conclusion: string;
   ideas: string[];
+  status?: "draft" | "review" | "final" | string;
+  problem_topic?: string;
+  problem_insight?: string;
+  problem_conclusion?: string;
+  problem_keywords?: string[];
+  agenda_titles?: string[];
+  ai_suggestions?: Array<{
+    id: string;
+    text: string;
+    status?: "draft" | "selected" | "dismissed" | string;
+  }>;
+  notes?: Array<{
+    id: string;
+    text: string;
+    source?: "ai" | "user" | string;
+    source_ai_id?: string;
+    is_final_candidate?: boolean;
+    final_comment?: string;
+  }>;
 }
 
 export interface CanvasSolutionStageResponse {

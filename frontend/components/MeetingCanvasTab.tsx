@@ -56,6 +56,8 @@ type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ComposerTool = "note" | "comment" | "topic";
 type LeftPanelTab = "detail" | "agenda-list";
 type ProblemGroupStatus = "draft" | "review" | "final";
+type SolutionAiSuggestionStatus = "draft" | "selected" | "dismissed";
+type SolutionNoteSource = "ai" | "user";
 const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 
 type PersonalNote = {
@@ -69,6 +71,31 @@ type PersonalNote = {
 type ProblemGroupViewModel = CanvasProblemDefinitionGroup & {
   status: ProblemGroupStatus;
 };
+
+type SolutionTopicViewModel = CanvasSolutionTopicResponse & {
+  status: ProblemGroupStatus;
+  problem_topic: string;
+  problem_insight: string;
+  problem_conclusion: string;
+  problem_keywords: string[];
+  agenda_titles: string[];
+  ai_suggestions: Array<{
+    id: string;
+    text: string;
+    status: SolutionAiSuggestionStatus;
+  }>;
+  notes: Array<{
+    id: string;
+    text: string;
+    source: SolutionNoteSource;
+    source_ai_id?: string;
+    is_final_candidate: boolean;
+    final_comment: string;
+  }>;
+};
+
+type SolutionAiSuggestionViewModel = SolutionTopicViewModel["ai_suggestions"][number];
+type SolutionNoteViewModel = SolutionTopicViewModel["notes"][number];
 
 type AgendaViewModel = {
   id: string;
@@ -155,6 +182,52 @@ function problemGroupStatusTone(status: ProblemGroupStatus) {
   if (status === "review") return "bg-blue-100 text-blue-700";
   if (status === "final") return "bg-emerald-100 text-emerald-700";
   return "bg-slate-100 text-slate-600";
+}
+
+function normalizeSolutionAiSuggestionStatus(raw: string | undefined): SolutionAiSuggestionStatus {
+  if (raw === "selected" || raw === "dismissed") return raw;
+  return "draft";
+}
+
+function normalizeSolutionNoteSource(raw: string | undefined): SolutionNoteSource {
+  if (raw === "ai") return "ai";
+  return "user";
+}
+
+function makeSolutionAiSuggestion(
+  value: {
+    id?: string;
+    text?: string;
+    status?: string;
+  },
+  fallbackId: string,
+): SolutionAiSuggestionViewModel {
+  return {
+    id: value.id || fallbackId,
+    text: value.text || "",
+    status: normalizeSolutionAiSuggestionStatus(value.status),
+  };
+}
+
+function makeSolutionNote(
+  value: {
+    id?: string;
+    text?: string;
+    source?: string;
+    source_ai_id?: string;
+    is_final_candidate?: boolean;
+    final_comment?: string;
+  },
+  fallbackId: string,
+): SolutionNoteViewModel {
+  return {
+    id: value.id || fallbackId,
+    text: value.text || "",
+    source: normalizeSolutionNoteSource(value.source),
+    source_ai_id: value.source_ai_id || "",
+    is_final_candidate: Boolean(value.is_final_candidate),
+    final_comment: value.final_comment || "",
+  };
 }
 
 function problemGroupPalette(index: number) {
@@ -385,6 +458,75 @@ function makeAgendaNodeLabel(title: string, summary: string, status: string, key
   );
 }
 
+function solutionTopicSelectedSuggestions(topic: SolutionTopicViewModel) {
+  return (topic.ai_suggestions || []).filter((item) => item.status === "selected");
+}
+
+function solutionTopicFinalNotes(topic: SolutionTopicViewModel) {
+  return (topic.notes || []).filter((note) => note.is_final_candidate);
+}
+
+function makeSolutionNodeLabel(topic: SolutionTopicViewModel, selected: boolean) {
+  const selectedAiCount = solutionTopicSelectedSuggestions(topic).length;
+  const finalCount = solutionTopicFinalNotes(topic).length;
+  return (
+    <div className={`min-w-0 rounded-[22px] bg-gradient-to-br from-emerald-50 via-white to-white p-5 transition ${selected ? "ring-2 ring-emerald-300" : ""}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+            Solution {topic.topic_no || 0}
+          </p>
+          <strong className="mt-2 block text-[17px] leading-7 text-slate-900">{topic.topic}</strong>
+        </div>
+        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] ${problemGroupStatusTone(topic.status)}`}>
+          {problemGroupStatusLabel(topic.status)}
+        </span>
+      </div>
+      {topic.problem_topic ? (
+        <div className="mt-4 rounded-2xl border border-emerald-100 bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Sub Conclusion</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {topic.problem_insight || topic.problem_topic}
+          </p>
+        </div>
+      ) : null}
+      <div className="mt-4 rounded-2xl border border-emerald-100 bg-white px-4 py-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Conclusion</p>
+        <p className="mt-1 text-sm leading-6 text-slate-600">{topic.conclusion || "해결 방향이 아직 없습니다."}</p>
+      </div>
+      <div className="mt-4">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">AI Draft</p>
+        <div className="mt-2 space-y-1.5">
+          {(topic.ai_suggestions || []).slice(0, 4).map((idea) => (
+            <p
+              key={idea.id}
+              className={`text-sm leading-6 ${
+                idea.status === "selected" ? "text-blue-600" : "text-slate-500"
+              }`}
+            >
+              • {idea.text}
+            </p>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        {(topic.notes || []).slice(0, 2).map((note) => (
+          <div key={note.id} className="min-h-[120px] rounded-[14px] border border-amber-100 bg-amber-100/80 p-4 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-700">
+              {note.source === "ai" ? "채택 메모" : "사용자 메모"}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-700">{note.text}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex gap-2 text-[11px] text-slate-500">
+        <span>{selectedAiCount}개 채택</span>
+        <span>{finalCount}개 최종 결론</span>
+      </div>
+    </div>
+  );
+}
+
 function makeProblemGroupNodeLabel(
   group: ProblemGroupViewModel,
   index: number,
@@ -551,6 +693,37 @@ function estimateProblemGroupNodeHeight(group: ProblemGroupViewModel) {
   return headerHeight + notesHeight + insightHeight + conclusionHeight + dropZoneHeight + 72;
 }
 
+function estimateSolutionNodeHeight(topic: SolutionTopicViewModel) {
+  const topicLines = estimateWrappedLines(topic.topic, 18);
+  const subConclusionLines = topic.problem_insight
+    ? Math.min(3, estimateWrappedLines(topic.problem_insight, 28))
+    : 0;
+  const conclusionLines = Math.min(4, estimateWrappedLines(topic.conclusion || "해결 방향이 아직 없습니다.", 28));
+  const aiLines = Math.max(
+    1,
+    (topic.ai_suggestions || []).slice(0, 4).reduce((sum, item) => sum + Math.min(2, estimateWrappedLines(item.text, 30)), 0),
+  );
+  const noteCards = (topic.notes || []).slice(0, 2);
+  const noteHeight =
+    noteCards.length > 0
+      ? Math.max(
+          ...noteCards.map((note) => 92 + Math.min(4, estimateWrappedLines(note.text || "메모 없음", 16)) * 16),
+        )
+      : 0;
+
+  return (
+    108 +
+    Math.max(0, topicLines - 1) * 22 +
+    (subConclusionLines > 0 ? 52 + Math.max(0, subConclusionLines - 1) * 18 : 0) +
+    70 +
+    Math.max(0, conclusionLines - 1) * 18 +
+    34 +
+    aiLines * 18 +
+    (noteHeight > 0 ? 36 + noteHeight : 0) +
+    38
+  );
+}
+
 function buildGridPositions(heights: number[], gapX: number, gapY: number, baseX: number, baseY: number) {
   const total = heights.length;
   const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(total, 1))));
@@ -595,13 +768,81 @@ function serializeSharedProblemGroups(groups: ProblemGroupViewModel[]) {
   }));
 }
 
-function serializeSharedSolutionTopics(topics: CanvasSolutionTopicResponse[]) {
+function hydrateSolutionTopics(
+  topics: CanvasSolutionTopicResponse[],
+  problemGroups: ProblemGroupViewModel[],
+  previousTopics: SolutionTopicViewModel[] = [],
+): SolutionTopicViewModel[] {
+  const previousById = new Map(previousTopics.map((topic) => [topic.group_id, topic]));
+  const problemById = new Map(problemGroups.map((group) => [group.group_id, group]));
+
+  return topics.map((topic) => {
+    const previous = previousById.get(topic.group_id);
+    const problemGroup = problemById.get(topic.group_id);
+    const ideaTexts = (topic.ideas || []).filter(Boolean);
+    const aiSuggestions: SolutionAiSuggestionViewModel[] =
+      (topic.ai_suggestions || []).length > 0
+        ? (topic.ai_suggestions || [])
+            .filter((item) => item?.id || item?.text)
+            .map((item, index) =>
+              makeSolutionAiSuggestion(item, `${topic.group_id}-ai-${index + 1}`),
+            )
+        : ideaTexts.map((text, index) =>
+            makeSolutionAiSuggestion(
+              {
+                text,
+                status: previous?.ai_suggestions?.find((item) => item.text === text)?.status,
+              },
+              `${topic.group_id}-ai-${index + 1}`,
+            ),
+          );
+    const notes: SolutionNoteViewModel[] =
+      (topic.notes || []).length > 0
+        ? (topic.notes || [])
+            .filter((item) => item?.id || item?.text)
+            .map((item, index) => makeSolutionNote(item, `${topic.group_id}-note-${index + 1}`))
+        : previous?.notes || [];
+
+    return {
+      ...topic,
+      ideas: ideaTexts,
+      status:
+        topic.status === "review" || topic.status === "final" || topic.status === "draft"
+          ? topic.status
+          : previous?.status || "draft",
+      problem_topic: topic.problem_topic || problemGroup?.topic || previous?.problem_topic || "",
+      problem_insight: topic.problem_insight || problemGroup?.insight_lens || previous?.problem_insight || "",
+      problem_conclusion:
+        topic.problem_conclusion || problemGroup?.conclusion || previous?.problem_conclusion || "",
+      problem_keywords:
+        (topic.problem_keywords || []).filter(Boolean).length > 0
+          ? (topic.problem_keywords || []).filter(Boolean)
+          : problemGroup?.keywords || previous?.problem_keywords || [],
+      agenda_titles:
+        (topic.agenda_titles || []).filter(Boolean).length > 0
+          ? (topic.agenda_titles || []).filter(Boolean)
+          : problemGroup?.agenda_titles || previous?.agenda_titles || [],
+      ai_suggestions: aiSuggestions,
+      notes,
+    };
+  });
+}
+
+function serializeSharedSolutionTopics(topics: SolutionTopicViewModel[]) {
   return topics.map((topic) => ({
     group_id: topic.group_id,
     topic_no: topic.topic_no,
     topic: topic.topic,
     conclusion: topic.conclusion,
     ideas: topic.ideas,
+    status: topic.status,
+    problem_topic: topic.problem_topic,
+    problem_insight: topic.problem_insight,
+    problem_conclusion: topic.problem_conclusion,
+    problem_keywords: topic.problem_keywords,
+    agenda_titles: topic.agenda_titles,
+    ai_suggestions: topic.ai_suggestions,
+    notes: topic.notes,
   }));
 }
 
@@ -749,7 +990,13 @@ export default function MeetingCanvasTab({
   const [busy, setBusy] = useState(false);
   const [personalNotes, setPersonalNotes] = useState<PersonalNote[]>([]);
   const [problemGroups, setProblemGroups] = useState<ProblemGroupViewModel[]>([]);
-  const [solutionTopics, setSolutionTopics] = useState<CanvasSolutionTopicResponse[]>([]);
+  const [solutionTopics, setSolutionTopics] = useState<SolutionTopicViewModel[]>([]);
+  const [selectedSolutionTopicId, setSelectedSolutionTopicId] = useState("");
+  const [editingSolutionTopicId, setEditingSolutionTopicId] = useState("");
+  const [solutionTopicDraftTitle, setSolutionTopicDraftTitle] = useState("");
+  const [solutionTopicDraftConclusion, setSolutionTopicDraftConclusion] = useState("");
+  const [solutionTopicDraftIdeas, setSolutionTopicDraftIdeas] = useState("");
+  const [solutionNoteDraft, setSolutionNoteDraft] = useState("");
   const [importedState, setImportedState] = useState<MeetingState | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedProblemGroupId, setSelectedProblemGroupId] = useState("");
@@ -836,8 +1083,10 @@ export default function MeetingCanvasTab({
     setProblemDefinitionStagePending(false);
     setSolutionStagePending(false);
     setSelectedProblemGroupId("");
+    setSelectedSolutionTopicId("");
     setSelectedNodeId("");
     setEditingProblemGroupId("");
+    setEditingSolutionTopicId("");
     setLoadingProblemGroupIds([]);
 
     if (!meetingId) {
@@ -857,24 +1106,31 @@ export default function MeetingCanvasTab({
           saved.stage === "problem-definition" || saved.stage === "solution" || saved.stage === "ideation"
             ? saved.stage
             : "ideation";
+        const nextSolutionTopics = hydrateSolutionTopics(saved.solution_topics || [], nextGroups);
 
         setProblemGroups(nextGroups);
-        setSolutionTopics(saved.solution_topics || []);
+        setSolutionTopics(nextSolutionTopics);
         setNodePositions(saved.node_positions || {});
         setImportedState(saved.imported_state || null);
         setStage(nextStage);
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           stage: nextStage,
           problem_groups: nextGroups,
-          solution_topics: saved.solution_topics || [],
+          solution_topics: serializeSharedSolutionTopics(nextSolutionTopics),
           node_positions: saved.node_positions || {},
           imported_state: saved.imported_state || null,
         });
         setSelectedProblemGroupId(nextGroups[0]?.group_id || "");
+        setSelectedSolutionTopicId(nextSolutionTopics[0]?.group_id || "");
         setSelectedNodeId(
-          nextStage === "problem-definition" && nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "",
+          nextStage === "problem-definition"
+            ? (nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "")
+            : nextStage === "solution"
+              ? (nextSolutionTopics[0] ? `solution-${nextSolutionTopics[0].group_id}` : "")
+              : "",
         );
         setEditingProblemGroupId("");
+        setEditingSolutionTopicId("");
       })
       .catch(() => {
         if (cancelled) return;
@@ -891,8 +1147,10 @@ export default function MeetingCanvasTab({
           imported_state: null,
         });
         setSelectedProblemGroupId("");
+        setSelectedSolutionTopicId("");
         setSelectedNodeId("");
         setEditingProblemGroupId("");
+        setEditingSolutionTopicId("");
       })
       .finally(() => {
         if (cancelled) return;
@@ -918,6 +1176,21 @@ export default function MeetingCanvasTab({
   }, [problemGroups, selectedProblemGroupId]);
 
   useEffect(() => {
+    if (solutionTopics.length === 0) {
+      setSelectedSolutionTopicId("");
+      setEditingSolutionTopicId("");
+      return;
+    }
+
+    if (
+      !selectedSolutionTopicId ||
+      !solutionTopics.some((topic) => topic.group_id === selectedSolutionTopicId)
+    ) {
+      setSelectedSolutionTopicId(solutionTopics[0].group_id);
+    }
+  }, [selectedSolutionTopicId, solutionTopics]);
+
+  useEffect(() => {
     if (!selectedNodeId) return;
     if (!nodes.some((node) => node.id === selectedNodeId)) {
       setSelectedNodeId("");
@@ -927,6 +1200,12 @@ export default function MeetingCanvasTab({
   useEffect(() => {
     if (stage !== "problem-definition") {
       setEditingProblemGroupId("");
+    }
+  }, [stage]);
+
+  useEffect(() => {
+    if (stage !== "solution") {
+      setEditingSolutionTopicId("");
     }
   }, [stage]);
 
@@ -1004,7 +1283,7 @@ export default function MeetingCanvasTab({
     (overrides?: {
       stage?: CanvasStage;
       problemGroups?: ProblemGroupViewModel[];
-      solutionTopics?: CanvasSolutionTopicResponse[];
+      solutionTopics?: SolutionTopicViewModel[];
       nodePositions?: CanvasNodePositionsByStage;
       importedState?: MeetingState | null;
     }) => {
@@ -1321,16 +1600,26 @@ export default function MeetingCanvasTab({
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
       stage: incomingStage,
       problem_groups: incomingSharedCanvasSync.problem_groups || [],
-      solution_topics: incomingSharedCanvasSync.solution_topics || [],
+      solution_topics: serializeSharedSolutionTopics(
+        hydrateSolutionTopics(
+          incomingSharedCanvasSync.solution_topics || [],
+          hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || []),
+        ),
+      ),
       node_positions: incomingSharedCanvasSync.node_positions || {},
       imported_state: incomingSharedCanvasSync.imported_state || null,
     });
     applyingRemoteSharedSyncRef.current = true;
 
-    setProblemGroups((prev) =>
-      hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], prev),
+    const nextProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], problemGroups);
+    const nextSolutionTopics = hydrateSolutionTopics(
+      incomingSharedCanvasSync.solution_topics || [],
+      nextProblemGroups,
+      solutionTopics,
     );
-    setSolutionTopics(incomingSharedCanvasSync.solution_topics || []);
+
+    setProblemGroups(nextProblemGroups);
+    setSolutionTopics(nextSolutionTopics);
     setNodePositions((prev) =>
       sharedSyncEnabled
         ? incomingSharedCanvasSync.node_positions || {}
@@ -1344,15 +1633,18 @@ export default function MeetingCanvasTab({
     setStage(incomingStage);
     setLeftPanelTab("detail");
     if (incomingStage === "problem-definition") {
-      const nextGroupId = incomingSharedCanvasSync.problem_groups?.[0]?.group_id || "";
+      const nextGroupId = nextProblemGroups[0]?.group_id || "";
       setSelectedProblemGroupId(nextGroupId);
+      setSelectedSolutionTopicId("");
       setSelectedNodeId(nextGroupId ? `problem-${nextGroupId}` : "");
     } else if (incomingStage === "solution") {
-      const nextTopicId = incomingSharedCanvasSync.solution_topics?.[0]?.group_id || "";
+      const nextTopicId = nextSolutionTopics[0]?.group_id || "";
       setSelectedProblemGroupId("");
+      setSelectedSolutionTopicId(nextTopicId);
       setSelectedNodeId(nextTopicId ? `solution-${nextTopicId}` : "");
     } else {
       setSelectedProblemGroupId("");
+      setSelectedSolutionTopicId("");
       setSelectedNodeId("");
     }
     setActivityMessage("다른 참가자의 canvas 변경사항이 반영되었습니다.");
@@ -1360,7 +1652,7 @@ export default function MeetingCanvasTab({
     window.setTimeout(() => {
       applyingRemoteSharedSyncRef.current = false;
     }, 0);
-  }, [incomingSharedCanvasSync, meetingId, sharedSyncEnabled, userId]);
+  }, [incomingSharedCanvasSync, meetingId, problemGroups, sharedSyncEnabled, solutionTopics, userId]);
 
   useEffect(() => {
     if (
@@ -1488,14 +1780,7 @@ export default function MeetingCanvasTab({
     }
 
     if (stage === "solution") {
-      const heights = solutionTopics.map((topic) =>
-        estimateStandardNodeHeight(
-          topic.topic,
-          topic.ideas.join(" / "),
-          2,
-          26,
-        ),
-      );
+      const heights = solutionTopics.map((topic) => estimateSolutionNodeHeight(topic));
       const positions = buildGridPositions(heights, 410, 52, 120, 140);
 
       return {
@@ -1506,6 +1791,7 @@ export default function MeetingCanvasTab({
         nodeDescriptors: solutionTopics.map((topic, index) => {
           const nodeId = `solution-${topic.group_id}`;
           const savedPosition = nodePositions.solution?.[nodeId];
+          const selected = selectedSolutionTopicId === topic.group_id;
 
           return {
             id: nodeId,
@@ -1513,22 +1799,30 @@ export default function MeetingCanvasTab({
             sourcePosition: Position.Bottom,
             targetPosition: Position.Top,
             className: "rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm",
-            style: { width: 340, minHeight: heights[index], borderRadius: 20, padding: 0 },
+            style: { width: 360, minHeight: heights[index], borderRadius: 22, padding: 0 },
             data: {
               contentSignature: buildNodeContentSignature([
                 topic.group_id,
                 topic.topic_no,
                 topic.topic,
                 topic.conclusion,
-                ...topic.ideas,
+                topic.status,
+                topic.problem_topic,
+                topic.problem_insight,
+                topic.problem_conclusion,
+                ...(topic.problem_keywords || []),
+                ...(topic.agenda_titles || []),
+                ...(topic.ai_suggestions || []).flatMap((item) => [item.id, item.text, item.status]),
+                ...(topic.notes || []).flatMap((note) => [
+                  note.id,
+                  note.text,
+                  note.source,
+                  note.source_ai_id,
+                  note.is_final_candidate,
+                  note.final_comment,
+                ]),
               ]),
-              label: makeNodeLabel(
-                `SOLUTION ${topic.topic_no || index + 1}`,
-                topic.topic,
-                topic.ideas.join(" / "),
-                [`아이디어 ${topic.ideas.length}개`, topic.conclusion || "결론 없음"],
-                "bg-emerald-100 text-emerald-700",
-              ),
+              label: makeSolutionNodeLabel(topic, selected),
             },
           };
         }),
@@ -1578,7 +1872,7 @@ export default function MeetingCanvasTab({
         };
       }),
     };
-  }, [stage, agendaModels, dropProblemGroupId, loadingProblemGroupIds, nodePositions, problemGroups, selectedProblemGroupId, solutionTopics, handleAttachPersonalNoteToProblemGroup]);
+  }, [stage, agendaModels, dropProblemGroupId, loadingProblemGroupIds, nodePositions, problemGroups, selectedProblemGroupId, selectedSolutionTopicId, solutionTopics, handleAttachPersonalNoteToProblemGroup]);
 
   useEffect(() => {
     const stageKey = stage;
@@ -1672,10 +1966,31 @@ export default function MeetingCanvasTab({
     () => problemGroups.find((group) => group.group_id === selectedProblemGroupId) || problemGroups[0] || null,
     [problemGroups, selectedProblemGroupId],
   );
+  const selectedSolutionTopic = useMemo(
+    () => solutionTopics.find((topic) => topic.group_id === selectedSolutionTopicId) || solutionTopics[0] || null,
+    [selectedSolutionTopicId, solutionTopics],
+  );
+  const allSolutionFinalNotes = useMemo(
+    () =>
+      solutionTopics.flatMap((topic) =>
+        topic.notes
+          .filter((note) => note.is_final_candidate)
+          .map((note) => ({
+            ...note,
+            topicId: topic.group_id,
+            topicTitle: topic.topic,
+          })),
+      ),
+    [solutionTopics],
+  );
   const isEditingSelectedProblemGroup =
     stage === "problem-definition" &&
     Boolean(selectedProblemGroup) &&
     editingProblemGroupId === selectedProblemGroup?.group_id;
+  const isEditingSelectedSolutionTopic =
+    stage === "solution" &&
+    Boolean(selectedSolutionTopic) &&
+    editingSolutionTopicId === selectedSolutionTopic?.group_id;
 
   const leftPanelDetail = useMemo(() => {
     if (stage === "problem-definition") {
@@ -1726,17 +2041,21 @@ export default function MeetingCanvasTab({
     }
 
     if (stage === "solution") {
-      const selectedTopic = solutionTopics.find((topic) => `solution-${topic.group_id}` === selectedNodeId) || solutionTopics[0] || null;
+      const selectedTopic = selectedSolutionTopic;
       if (!selectedTopic) return null;
-      const linkedGroup = problemGroups.find((group) => group.group_id === selectedTopic.group_id);
 
       return {
         title: selectedTopic.topic,
         subtitle: "해결책 그룹",
-        badges: [`주제 ${selectedTopic.topic_no}`, `${selectedTopic.ideas.length}개 아이디어`],
+        badges: [
+          problemGroupStatusLabel(selectedTopic.status),
+          `주제 ${selectedTopic.topic_no}`,
+          `AI 초안 ${selectedTopic.ai_suggestions.length}개`,
+          `메모 ${selectedTopic.notes.length}개`,
+        ],
         insightLens: "",
-        keywords: (linkedGroup?.keywords || []).slice(0, 3),
-        summaryItems: [selectedTopic.conclusion, ...selectedTopic.ideas.slice(0, 2)]
+        keywords: (selectedTopic.problem_keywords || []).slice(0, 3),
+        summaryItems: [selectedTopic.conclusion]
           .filter(Boolean)
           .map((value, index) => ({
             label: index === 0 ? "해결 방향" : `아이디어 ${index}`,
@@ -1744,15 +2063,19 @@ export default function MeetingCanvasTab({
           })),
         organizeItems: [
           {
-            label: "연결 안건",
-            value: linkedGroup?.agenda_titles?.length ? linkedGroup.agenda_titles.join(", ") : "연결된 안건이 아직 없습니다.",
+            label: "연결 문제정의",
+            value: selectedTopic.problem_topic || "연결된 문제정의가 아직 없습니다.",
           },
           {
-            label: "주제 번호",
-            value: `${selectedTopic.topic_no}`,
+            label: "소결론",
+            value: selectedTopic.problem_insight || "연결된 소결론이 아직 없습니다.",
+          },
+          {
+            label: "문제정의 결론",
+            value: selectedTopic.problem_conclusion || "연결된 결론이 아직 없습니다.",
           },
         ],
-        organizeTitle: "안건 정리",
+        organizeTitle: "해결책 정리",
       };
     }
 
@@ -1799,7 +2122,7 @@ export default function MeetingCanvasTab({
       ],
       organizeTitle: "핵심 포인트",
     };
-  }, [agendaModels, problemGroups, selectedAgenda, selectedNodeId, selectedProblemGroup, solutionTopics, stage]);
+  }, [agendaModels, problemGroups, selectedAgenda, selectedNodeId, selectedProblemGroup, selectedSolutionTopic, stage]);
 
   const handleGenerateProblemDefinition = async () => {
     setProblemDefinitionStagePending(true);
@@ -1826,8 +2149,10 @@ export default function MeetingCanvasTab({
       problemConclusionEntryHandledRef.current = false;
       setProblemGroups(nextGroups);
       setSelectedProblemGroupId(nextGroups[0]?.group_id || "");
+      setSelectedSolutionTopicId("");
       setSelectedNodeId(nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "");
       setEditingProblemGroupId("");
+      setEditingSolutionTopicId("");
       setStage("problem-definition");
       if (!sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
@@ -1847,6 +2172,13 @@ export default function MeetingCanvasTab({
 
   const handleGenerateSolutionStage = async () => {
     const finalizedGroups = problemGroups.filter((group) => group.status === "final");
+    setStage("solution");
+    setLeftPanelTab("detail");
+    setSelectedProblemGroupId("");
+    setSelectedSolutionTopicId("");
+    setSelectedNodeId("");
+    setEditingSolutionTopicId("");
+
     if (finalizedGroups.length === 0) {
       setActivityMessage("확정된 문제 정의 그룹이 없습니다. 먼저 그룹을 확정해 주세요.");
       return;
@@ -1865,12 +2197,14 @@ export default function MeetingCanvasTab({
           conclusion: group.conclusion,
         })),
       });
-      setSolutionTopics(result.topics);
-      setStage("solution");
+      const nextSolutionTopics = hydrateSolutionTopics(result.topics, problemGroups, solutionTopics);
+      setSolutionTopics(nextSolutionTopics);
+      setSelectedSolutionTopicId(nextSolutionTopics[0]?.group_id || "");
+      setSelectedNodeId(nextSolutionTopics[0] ? `solution-${nextSolutionTopics[0].group_id}` : "");
       if (!sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
           stage: "solution",
-          solutionTopics: result.topics,
+          solutionTopics: nextSolutionTopics,
         });
       }
       setActivityMessage(result.warning || `확정된 문제 정의 ${finalizedGroups.length}개 기준으로 해결책을 생성했습니다.`);
@@ -1885,12 +2219,40 @@ export default function MeetingCanvasTab({
 
   const handleStageSelect = useCallback(
     async (nextStage: CanvasStage) => {
+      if (nextStage === "solution") {
+        if (busy || solutionStagePending) {
+          setActivityMessage(
+            solutionStagePending
+              ? "해결책 단계를 준비하는 중이라 잠시 후 다시 시도해 주세요."
+              : "다른 작업이 진행 중이라 아직 해결책 단계로 전환할 수 없습니다.",
+          );
+          return;
+        }
+
+        if (solutionTopics.length === 0) {
+          await handleGenerateSolutionStage();
+          return;
+        }
+
+        setStage("solution");
+        setSelectedProblemGroupId("");
+        setSelectedSolutionTopicId(solutionTopics[0]?.group_id || "");
+        setSelectedNodeId(solutionTopics[0] ? `solution-${solutionTopics[0].group_id}` : "");
+        setLeftPanelTab("detail");
+        return;
+      }
+
       if (nextStage !== "problem-definition") {
         setStage(nextStage);
         return;
       }
 
       if (busy || conclusionBatchBusy) {
+        setActivityMessage(
+          conclusionBatchBusy
+            ? "문제정의 결론을 생성 중이라 잠시 후 다시 시도해 주세요."
+            : "다른 작업이 진행 중이라 아직 문제정의 단계로 전환할 수 없습니다.",
+        );
         return;
       }
 
@@ -1906,7 +2268,15 @@ export default function MeetingCanvasTab({
       problemConclusionEntryHandledRef.current = true;
       await handleGenerateAllProblemGroupConclusions(problemGroups);
     },
-    [busy, conclusionBatchBusy, handleGenerateAllProblemGroupConclusions, problemGroups],
+    [
+      busy,
+      conclusionBatchBusy,
+      handleGenerateAllProblemGroupConclusions,
+      handleGenerateSolutionStage,
+      problemGroups,
+      solutionStagePending,
+      solutionTopics,
+    ],
   );
 
   const handleAddPersonalNote = () => {
@@ -2053,6 +2423,202 @@ export default function MeetingCanvasTab({
     setActivityMessage(`문제 정의 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
   };
 
+  const handleStartSolutionTopicEdit = () => {
+    if (!selectedSolutionTopic) return;
+    setEditingSolutionTopicId(selectedSolutionTopic.group_id);
+    setSolutionTopicDraftTitle(selectedSolutionTopic.topic);
+    setSolutionTopicDraftConclusion(selectedSolutionTopic.conclusion);
+    setSolutionTopicDraftIdeas((selectedSolutionTopic.ai_suggestions || []).map((item) => item.text).join("\n"));
+  };
+
+  const handleCancelSolutionTopicEdit = () => {
+    setEditingSolutionTopicId("");
+    setSolutionTopicDraftTitle("");
+    setSolutionTopicDraftConclusion("");
+    setSolutionTopicDraftIdeas("");
+  };
+
+  const handleSaveSolutionTopicEdit = () => {
+    if (!selectedSolutionTopic) return;
+
+    const nextTitle = solutionTopicDraftTitle.trim() || selectedSolutionTopic.topic;
+    const nextConclusion = solutionTopicDraftConclusion.trim() || selectedSolutionTopic.conclusion;
+    const nextIdeas = solutionTopicDraftIdeas
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    setSolutionTopics((prev) =>
+      prev.map((topic) =>
+        topic.group_id === selectedSolutionTopic.group_id
+          ? {
+              ...topic,
+              topic: nextTitle,
+              conclusion: nextConclusion,
+              ideas: nextIdeas.length > 0 ? nextIdeas : topic.ideas,
+              ai_suggestions:
+                nextIdeas.length > 0
+                  ? nextIdeas.map((text, index) => {
+                      const existing = topic.ai_suggestions[index];
+                      return makeSolutionAiSuggestion(
+                        {
+                          id: existing?.id,
+                          text,
+                          status: existing?.status,
+                        },
+                        `${topic.group_id}-ai-${index + 1}`,
+                      );
+                    })
+                  : topic.ai_suggestions,
+            }
+          : topic,
+      ),
+    );
+    setEditingSolutionTopicId("");
+    setSolutionTopicDraftTitle("");
+    setSolutionTopicDraftConclusion("");
+    setSolutionTopicDraftIdeas("");
+    setActivityMessage("해결책 그룹 내용을 수정했습니다.");
+  };
+
+  const handleSetSolutionTopicStatus = (status: ProblemGroupStatus) => {
+    if (!selectedSolutionTopic) return;
+
+    setSolutionTopics((prev) =>
+      prev.map((topic) =>
+        topic.group_id === selectedSolutionTopic.group_id
+          ? {
+              ...topic,
+              status,
+            }
+          : topic,
+      ),
+    );
+    setActivityMessage(`해결책 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
+  };
+
+  const handleAdoptAiSuggestion = (topicId: string, suggestionId: string) => {
+    setSolutionTopics((prev) =>
+      prev.map((topic) => {
+        if (topic.group_id !== topicId) {
+          return topic;
+        }
+
+        const suggestion = topic.ai_suggestions.find((item) => item.id === suggestionId);
+        if (!suggestion) return topic;
+
+        const nextSuggestions: SolutionAiSuggestionViewModel[] = topic.ai_suggestions.map((item) =>
+          item.id === suggestionId
+            ? makeSolutionAiSuggestion({ ...item, status: "selected" }, item.id)
+            : makeSolutionAiSuggestion(item, item.id),
+        );
+        const hasExistingNote = topic.notes.some((note) => note.source_ai_id === suggestionId);
+        const nextNotes: SolutionNoteViewModel[] = hasExistingNote
+          ? topic.notes
+          : [
+              ...topic.notes,
+              makeSolutionNote(
+                {
+                  text: suggestion.text,
+                  source: "ai",
+                  source_ai_id: suggestionId,
+                  is_final_candidate: false,
+                  final_comment: "",
+                },
+                `solution-note-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+              ),
+            ];
+
+        return {
+          ...topic,
+          ai_suggestions: nextSuggestions,
+          notes: nextNotes,
+        };
+      }),
+    );
+    setActivityMessage("AI 제안 아이디어를 메모로 채택했습니다.");
+  };
+
+  const handleAddSolutionUserNote = () => {
+    if (!selectedSolutionTopic) return;
+    const nextText = solutionNoteDraft.trim();
+    if (!nextText) {
+      setActivityMessage("먼저 추가할 메모 내용을 입력해 주세요.");
+      return;
+    }
+
+    setSolutionTopics((prev) =>
+      prev.map((topic) =>
+        topic.group_id === selectedSolutionTopic.group_id
+          ? {
+              ...topic,
+              notes: [
+                ...topic.notes,
+                makeSolutionNote(
+                  {
+                    text: nextText,
+                    source: "user",
+                    source_ai_id: "",
+                    is_final_candidate: false,
+                    final_comment: "",
+                  },
+                  `solution-user-note-${Date.now()}`,
+                ),
+              ],
+            }
+          : topic,
+      ),
+    );
+    setSolutionNoteDraft("");
+    setActivityMessage("사용자 메모를 해결책 카드에 추가했습니다.");
+  };
+
+  const handleToggleFinalSolutionNote = (topicId: string, noteId: string) => {
+    setSolutionTopics((prev) =>
+      prev.map((topic) =>
+        topic.group_id === topicId
+          ? {
+              ...topic,
+              notes: topic.notes.map((note) =>
+                note.id === noteId
+                  ? makeSolutionNote(
+                      {
+                        ...note,
+                        is_final_candidate: !note.is_final_candidate,
+                      },
+                      note.id,
+                    )
+                  : makeSolutionNote(note, note.id),
+              ),
+            }
+          : topic,
+      ),
+    );
+  };
+
+  const handleUpdateFinalSolutionComment = (topicId: string, noteId: string, value: string) => {
+    setSolutionTopics((prev) =>
+      prev.map((topic) =>
+        topic.group_id === topicId
+          ? {
+              ...topic,
+              notes: topic.notes.map((note) =>
+                note.id === noteId
+                  ? makeSolutionNote(
+                      {
+                        ...note,
+                        final_comment: value,
+                      },
+                      note.id,
+                    )
+                  : makeSolutionNote(note, note.id),
+              ),
+            }
+          : topic,
+      ),
+    );
+  };
+
   const startPanelResize = (side: "left" | "right") => (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!isDesktopLayout) return;
     resizeStateRef.current = {
@@ -2128,8 +2694,10 @@ export default function MeetingCanvasTab({
                       setNodePositions({});
                       setStage("ideation");
                       setSelectedProblemGroupId("");
+                      setSelectedSolutionTopicId("");
                       setSelectedNodeId("");
                       setEditingProblemGroupId("");
+                      setEditingSolutionTopicId("");
                       setActivityMessage(`스냅샷을 불러왔습니다: ${result.import_debug.filename}`);
                     });
                   }
@@ -2208,10 +2776,20 @@ export default function MeetingCanvasTab({
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Detail</p>
-                          {isEditingSelectedProblemGroup ? (
+                          {isEditingSelectedProblemGroup || isEditingSelectedSolutionTopic ? (
                             <input
-                              value={problemGroupDraftTopic}
-                              onChange={(event) => setProblemGroupDraftTopic(event.target.value)}
+                              value={
+                                isEditingSelectedProblemGroup
+                                  ? problemGroupDraftTopic
+                                  : solutionTopicDraftTitle
+                              }
+                              onChange={(event) => {
+                                if (isEditingSelectedProblemGroup) {
+                                  setProblemGroupDraftTopic(event.target.value);
+                                  return;
+                                }
+                                setSolutionTopicDraftTitle(event.target.value);
+                              }}
                               className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-lg font-semibold text-slate-900"
                             />
                           ) : (
@@ -2258,6 +2836,35 @@ export default function MeetingCanvasTab({
                               </>
                             )}
                           </div>
+                        ) : stage === "solution" && selectedSolutionTopic ? (
+                          <div className="flex shrink-0 gap-2">
+                            {isEditingSelectedSolutionTopic ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={handleCancelSolutionTopicEdit}
+                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                                >
+                                  취소
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleSaveSolutionTopicEdit}
+                                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                                >
+                                  저장
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handleStartSolutionTopicEdit}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                              >
+                                수정
+                              </button>
+                            )}
+                          </div>
                         ) : null}
                       </div>
                       {leftPanelDetail.badges.length > 0 ? (
@@ -2278,6 +2885,23 @@ export default function MeetingCanvasTab({
                               onClick={() => handleSetProblemGroupStatus(status)}
                               className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
                                 selectedProblemGroup.status === status
+                                  ? "bg-slate-900 text-white"
+                                  : "bg-white text-slate-600 hover:bg-slate-100"
+                              }`}
+                            >
+                              {problemGroupStatusLabel(status)}
+                            </button>
+                          ))}
+                        </div>
+                      ) : stage === "solution" && selectedSolutionTopic ? (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => handleSetSolutionTopicStatus(status)}
+                              className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                                selectedSolutionTopic.status === status
                                   ? "bg-slate-900 text-white"
                                   : "bg-white text-slate-600 hover:bg-slate-100"
                               }`}
@@ -2334,6 +2958,7 @@ export default function MeetingCanvasTab({
                       </section>
                     ) : null}
 
+                    {stage !== "solution" ? (
                     <section className="border-b border-slate-200/80 py-6">
                       <div className="flex items-center justify-between gap-3">
                         <h4 className="text-lg font-semibold text-slate-900">결론</h4>
@@ -2365,18 +2990,224 @@ export default function MeetingCanvasTab({
                         </p>
                       ) : null}
                     </section>
+                    ) : null}
 
+                    {stage === "solution" && selectedSolutionTopic ? (
+                      <>
+                        <section className="border-b border-slate-200/80 py-6">
+                          <h4 className="text-lg font-semibold text-slate-900">해결 방향</h4>
+                          {isEditingSelectedSolutionTopic ? (
+                            <textarea
+                              value={solutionTopicDraftConclusion}
+                              onChange={(event) => setSolutionTopicDraftConclusion(event.target.value)}
+                              className="mt-4 min-h-[120px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
+                            />
+                          ) : (
+                            <div className="mt-4 rounded-xl bg-[#fafafa] px-4 py-3">
+                              <p className="text-base leading-7 text-slate-700">
+                                {selectedSolutionTopic.conclusion || "아직 정리된 해결 방향이 없습니다."}
+                              </p>
+                            </div>
+                          )}
+                        </section>
+
+                        <section className="border-b border-slate-200/80 py-6">
+                          <div className="flex items-center justify-between gap-3">
+                            <h4 className="text-lg font-semibold text-slate-900">AI 초안</h4>
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                              {selectedSolutionTopic.ai_suggestions.length}개
+                            </span>
+                          </div>
+                          {isEditingSelectedSolutionTopic ? (
+                            <>
+                              <textarea
+                                value={solutionTopicDraftIdeas}
+                                onChange={(event) => setSolutionTopicDraftIdeas(event.target.value)}
+                                className="mt-4 min-h-[180px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
+                                placeholder="한 줄에 하나씩 아이디어를 입력합니다."
+                              />
+                              <p className="mt-3 text-sm leading-6 text-slate-500">각 줄이 하나의 실행 아이디어로 저장됩니다.</p>
+                            </>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {selectedSolutionTopic.ai_suggestions.length > 0 ? (
+                                selectedSolutionTopic.ai_suggestions.map((idea, index) => (
+                                  <div key={idea.id} className="rounded-xl bg-[#fafafa] px-4 py-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-slate-500">AI 제안 {index + 1}</p>
+                                        <p className={`mt-1 text-base leading-7 ${idea.status === "selected" ? "text-blue-600" : "text-slate-700"}`}>
+                                          {idea.text}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAdoptAiSuggestion(selectedSolutionTopic.group_id, idea.id)}
+                                        disabled={idea.status === "selected"}
+                                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                                      >
+                                        {idea.status === "selected" ? "채택됨" : "채택"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-base leading-7 text-slate-500">아직 제안된 AI 초안이 없습니다.</p>
+                              )}
+                            </div>
+                          )}
+                        </section>
+
+                        <section className="border-b border-slate-200/80 py-6">
+                          <div className="flex items-center justify-between gap-3">
+                            <h4 className="text-lg font-semibold text-slate-900">채택 메모</h4>
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                              {selectedSolutionTopic.notes.length}개
+                            </span>
+                          </div>
+                          <div className="mt-4 space-y-3">
+                            {selectedSolutionTopic.notes.length > 0 ? (
+                              selectedSolutionTopic.notes.map((note, index) => (
+                                <div key={note.id} className="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-semibold text-amber-700">
+                                        {note.source === "ai" ? `채택 메모 ${index + 1}` : `사용자 메모 ${index + 1}`}
+                                      </p>
+                                      <p className="mt-2 text-base leading-7 text-slate-700">{note.text}</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleFinalSolutionNote(selectedSolutionTopic.group_id, note.id)}
+                                      className={`shrink-0 rounded-xl px-3 py-2 text-sm font-medium ${
+                                        note.is_final_candidate
+                                          ? "bg-slate-900 text-white"
+                                          : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                      }`}
+                                    >
+                                      {note.is_final_candidate ? "최종 결론" : "결론 후보"}
+                                    </button>
+                                  </div>
+                                  {note.is_final_candidate ? (
+                                    <textarea
+                                      value={note.final_comment || ""}
+                                      onChange={(event) =>
+                                        handleUpdateFinalSolutionComment(
+                                          selectedSolutionTopic.group_id,
+                                          note.id,
+                                          event.target.value,
+                                        )
+                                      }
+                                      placeholder="추가 설명을 입력할 수 있습니다."
+                                      className="mt-3 min-h-[84px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm leading-6 text-slate-700"
+                                    />
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-base leading-7 text-slate-500">아직 채택된 메모가 없습니다. AI 초안이나 사용자 메모를 추가해 보세요.</p>
+                            )}
+                          </div>
+
+                          <div className="mt-5 rounded-xl bg-[#fafafa] px-4 py-4">
+                            <p className="text-sm font-semibold text-slate-600">사용자 메모 추가</p>
+                            <textarea
+                              value={solutionNoteDraft}
+                              onChange={(event) => setSolutionNoteDraft(event.target.value)}
+                              placeholder="직접 해결책 메모를 추가합니다."
+                              className="mt-3 min-h-[110px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleAddSolutionUserNote}
+                              className="mt-3 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
+                            >
+                              메모 추가
+                            </button>
+                          </div>
+                        </section>
+
+                        <section className="border-b border-slate-200/80 py-6">
+                          <div className="flex items-center justify-between gap-3">
+                            <h4 className="text-lg font-semibold text-slate-900">최종 결론 모음</h4>
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                              {allSolutionFinalNotes.length}개
+                            </span>
+                          </div>
+                          <div className="mt-4 space-y-3">
+                            {allSolutionFinalNotes.length > 0 ? (
+                              allSolutionFinalNotes.map((note) => (
+                                <button
+                                  key={note.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedSolutionTopicId(note.topicId);
+                                    setSelectedNodeId(`solution-${note.topicId}`);
+                                  }}
+                                  className={`w-full rounded-xl border px-4 py-3 text-left ${
+                                    note.topicId === selectedSolutionTopic.group_id
+                                      ? "border-slate-300 bg-white"
+                                      : "border-slate-200 bg-[#fafafa]"
+                                  }`}
+                                >
+                                  <p className="text-sm font-semibold text-slate-700">{note.topicTitle}</p>
+                                  <p className="mt-1 text-base leading-7 text-slate-700">{note.text}</p>
+                                  {note.final_comment ? (
+                                    <p className="mt-2 text-sm leading-6 text-slate-500">{note.final_comment}</p>
+                                  ) : null}
+                                </button>
+                              ))
+                            ) : (
+                              <p className="text-base leading-7 text-slate-500">최종 결론으로 표시된 메모가 아직 없습니다.</p>
+                            )}
+                          </div>
+                        </section>
+
+                        <section className="pt-6">
+                          <h4 className="text-lg font-semibold text-slate-900">연결 문제정의</h4>
+                          <div className="mt-4 space-y-3">
+                            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
+                              <p className="text-sm font-semibold text-slate-500">문제 정의 주제</p>
+                              <p className="mt-1 text-base leading-7 text-slate-700">
+                                {selectedSolutionTopic.problem_topic || "연결된 문제정의가 아직 없습니다."}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
+                              <p className="text-sm font-semibold text-slate-500">소결론</p>
+                              <p className="mt-1 text-base leading-7 text-slate-700">
+                                {selectedSolutionTopic.problem_insight || "연결된 소결론이 아직 없습니다."}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
+                              <p className="text-sm font-semibold text-slate-500">문제 정의 결론</p>
+                              <p className="mt-1 text-base leading-7 text-slate-700">
+                                {selectedSolutionTopic.problem_conclusion || "연결된 결론이 아직 없습니다."}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
+                              <p className="text-sm font-semibold text-slate-500">연결 안건</p>
+                              <p className="mt-1 text-base leading-7 text-slate-700">
+                                {selectedSolutionTopic.agenda_titles.length > 0
+                                  ? selectedSolutionTopic.agenda_titles.join(", ")
+                                  : "연결된 안건이 아직 없습니다."}
+                              </p>
+                            </div>
+                          </div>
+                        </section>
+                      </>
+                    ) : (
                     <section className="pt-6">
                       <h4 className="text-lg font-semibold text-slate-900">{leftPanelDetail.organizeTitle || "안건 정리"}</h4>
                       <div className="mt-4 space-y-3">
                         {leftPanelDetail.organizeItems.map((item, index) => (
                           <div key={`${leftPanelDetail.title}-organize-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
                             <p className="text-sm font-semibold text-slate-500">{item.label}</p>
-                            <p className="mt-1 text-base leading-7 text-slate-700">{stripLeadingTimestamp(item.value)}</p>
-                          </div>
-                        ))}
+                          <p className="mt-1 text-base leading-7 text-slate-700">{stripLeadingTimestamp(item.value)}</p>
+                        </div>
+                      ))}
                       </div>
                     </section>
+                    )}
                     {stage === "problem-definition" && leftPanelDetail.evidenceItems?.length ? (
                       <section className="pt-6">
                         <h4 className="text-lg font-semibold text-slate-900">근거 요약</h4>
@@ -2470,11 +3301,36 @@ export default function MeetingCanvasTab({
                       </button>
                     ))}
                     {solutionTopics.map((topic) => (
-                      <article key={topic.group_id} className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">해결책</p>
+                      <button
+                        key={topic.group_id}
+                        type="button"
+                        onClick={() => {
+                          setStage("solution");
+                          setSelectedSolutionTopicId(topic.group_id);
+                          setSelectedProblemGroupId("");
+                          setSelectedNodeId(`solution-${topic.group_id}`);
+                          setLeftPanelTab("detail");
+                        }}
+                        className={`w-full rounded-xl border p-4 text-left ${
+                          selectedSolutionTopicId === topic.group_id
+                            ? "border-emerald-200 bg-emerald-50/80"
+                            : "border-emerald-200 bg-emerald-50/60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">해결책</p>
+                          <span className={`rounded-full px-2.5 py-1 text-xs ${problemGroupStatusTone(topic.status || "draft")}`}>
+                            {problemGroupStatusLabel((topic.status as ProblemGroupStatus) || "draft")}
+                          </span>
+                        </div>
                         <h4 className="mt-1 text-base font-semibold text-slate-900">{topic.topic}</h4>
-                        <p className="mt-2 text-sm leading-6 text-slate-600">{topic.ideas.join(" / ") || topic.conclusion}</p>
-                      </article>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                          {topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다."}
+                        </p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          AI 초안 {topic.ai_suggestions.length}개 · 메모 {topic.notes.length}개
+                        </p>
+                      </button>
                     ))}
                   </div>
                 </section>
@@ -2496,7 +3352,13 @@ export default function MeetingCanvasTab({
                   setLeftPanelTab("detail");
                   if (node.id.startsWith("problem-")) {
                     setSelectedProblemGroupId(node.id.slice("problem-".length));
+                    setSelectedSolutionTopicId("");
                     setEditingProblemGroupId("");
+                  }
+                  if (node.id.startsWith("solution-")) {
+                    setSelectedSolutionTopicId(node.id.slice("solution-".length));
+                    setSelectedProblemGroupId("");
+                    setEditingSolutionTopicId("");
                   }
                   const agendaId = extractAgendaIdFromNodeId(node.id);
                   if (agendaId) {
@@ -2523,6 +3385,19 @@ export default function MeetingCanvasTab({
                   <p className="text-sm font-semibold uppercase tracking-[0.16em] text-violet-600">Problem Definition</p>
                   <p className="mt-2 text-base text-slate-700">
                     {busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {stage === "solution" && solutionTopics.length === 0 && !solutionStagePending ? (
+              <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+                <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-center shadow-lg shadow-slate-200/70">
+                  <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-600">Solution Stage</p>
+                  <p className="mt-2 text-base text-slate-700">
+                    {problemGroups.some((group) => group.status === "final")
+                      ? "해결책 토픽을 준비하는 중입니다."
+                      : "확정된 문제 정의 그룹이 있어야 해결책을 만들 수 있습니다."}
                   </p>
                 </div>
               </div>
