@@ -223,6 +223,9 @@ function hydrateProblemGroups(
     return {
       ...group,
       ideas: mergedIdeas,
+      insight_user_edited: group.insight_user_edited ?? previous?.insight_user_edited ?? false,
+      conclusion_user_edited:
+        group.conclusion_user_edited ?? previous?.conclusion_user_edited ?? false,
       status:
         group.status === "review" || group.status === "final" || group.status === "draft"
           ? group.status
@@ -387,7 +390,7 @@ function makeProblemGroupNodeLabel(
 
   return (
     <div
-      className={`nodrag min-w-0 rounded-[30px] p-2 transition ${selected ? "ring-2 ring-violet-300" : ""} ${dropTarget ? "ring-2 ring-blue-300 ring-offset-2" : ""}`}
+      className={`min-w-0 rounded-[30px] p-2 transition ${selected ? "ring-2 ring-violet-300" : ""} ${dropTarget ? "ring-2 ring-blue-300 ring-offset-2" : ""}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -671,6 +674,7 @@ export default function MeetingCanvasTab({
   const [selectedProblemGroupId, setSelectedProblemGroupId] = useState("");
   const [editingProblemGroupId, setEditingProblemGroupId] = useState("");
   const [problemGroupDraftTopic, setProblemGroupDraftTopic] = useState("");
+  const [problemGroupDraftInsight, setProblemGroupDraftInsight] = useState("");
   const [problemGroupDraftConclusion, setProblemGroupDraftConclusion] = useState("");
   const [draggingPersonalNoteId, setDraggingPersonalNoteId] = useState("");
   const [dropProblemGroupId, setDropProblemGroupId] = useState("");
@@ -877,6 +881,11 @@ export default function MeetingCanvasTab({
 
   const handleGenerateProblemGroupConclusion = useCallback(
     async (group: ProblemGroupViewModel, reason: "manual" | "drop" = "manual") => {
+      if (group.insight_user_edited && group.conclusion_user_edited) {
+        setActivityMessage("이 그룹의 Insight와 결론은 수동 수정 상태라 AI 재생성을 건너뜁니다.");
+        return;
+      }
+
       setProblemGroupsLoading([group.group_id], true);
       setConclusionRefreshingGroupId(group.group_id);
       try {
@@ -886,15 +895,23 @@ export default function MeetingCanvasTab({
             item.group_id === group.group_id
               ? {
                   ...item,
-                  insight_lens:
-                    (result.used_llm ? result.insight_lens : "") || item.insight_lens,
-                  conclusion: result.conclusion || item.conclusion,
+                  insight_lens: item.insight_user_edited
+                    ? item.insight_lens
+                    : (result.used_llm ? result.insight_lens : "") || item.insight_lens,
+                  conclusion: item.conclusion_user_edited
+                    ? item.conclusion
+                    : result.conclusion || item.conclusion,
                 }
               : item,
           ),
         );
         if (editingProblemGroupId === group.group_id) {
-          setProblemGroupDraftConclusion(result.conclusion || group.conclusion);
+          if (!group.insight_user_edited) {
+            setProblemGroupDraftInsight((result.used_llm ? result.insight_lens : "") || group.insight_lens || "");
+          }
+          if (!group.conclusion_user_edited) {
+            setProblemGroupDraftConclusion(result.conclusion || group.conclusion);
+          }
         }
         setActivityMessage(
           result.warning ||
@@ -915,13 +932,21 @@ export default function MeetingCanvasTab({
     async (groups: ProblemGroupViewModel[]) => {
       if (groups.length === 0) return;
 
+      const targetGroups = groups.filter(
+        (group) => !(group.insight_user_edited && group.conclusion_user_edited),
+      );
+      if (targetGroups.length === 0) {
+        setActivityMessage("모든 문제 정의 그룹의 Insight와 결론이 수동 수정 상태라 AI 재생성을 건너뜁니다.");
+        return;
+      }
+
       setConclusionBatchBusy(true);
-      setProblemGroupsLoading(groups.map((group) => group.group_id), true);
+      setProblemGroupsLoading(targetGroups.map((group) => group.group_id), true);
       try {
         let lastWarning = "";
         let firstError = "";
 
-        for (const group of groups) {
+        for (const group of targetGroups) {
           try {
             const result = await generateProblemGroupConclusion(buildProblemConclusionPayload(group));
             setProblemGroups((prev) =>
@@ -929,8 +954,12 @@ export default function MeetingCanvasTab({
                 item.group_id === group.group_id
                   ? {
                       ...item,
-                      conclusion: result.conclusion || item.conclusion,
-                      insight_lens: (result.used_llm ? result.insight_lens : "") || item.insight_lens,
+                      conclusion: item.conclusion_user_edited
+                        ? item.conclusion
+                        : result.conclusion || item.conclusion,
+                      insight_lens: item.insight_user_edited
+                        ? item.insight_lens
+                        : (result.used_llm ? result.insight_lens : "") || item.insight_lens,
                     }
                   : item,
               ),
@@ -949,7 +978,7 @@ export default function MeetingCanvasTab({
         setActivityMessage(
           firstError
             ? `전체 결론 생성 중 일부 실패: ${firstError}`
-            : lastWarning || `문제 정의 그룹 ${groups.length}개의 결론을 생성했습니다.`,
+            : lastWarning || `문제 정의 그룹 ${targetGroups.length}개의 결론을 생성했습니다.`,
         );
       } finally {
         setConclusionBatchBusy(false);
@@ -1025,12 +1054,14 @@ export default function MeetingCanvasTab({
           group_id: group.group_id,
           topic: group.topic,
           insight_lens: group.insight_lens,
+          insight_user_edited: group.insight_user_edited,
           keywords: group.keywords,
           agenda_ids: group.agenda_ids,
           agenda_titles: group.agenda_titles,
           ideas: group.ideas,
           source_summary_items: group.source_summary_items,
           conclusion: group.conclusion,
+          conclusion_user_edited: group.conclusion_user_edited,
           status: group.status,
         })),
         solution_topics: solutionTopics,
@@ -1293,7 +1324,13 @@ export default function MeetingCanvasTab({
       return {
         title: selectedGroup.topic,
         subtitle: "문제 정의 그룹",
-        badges: [problemGroupStatusLabel(selectedGroup.status), `${selectedGroup.agenda_titles.length}개 안건`, `${selectedGroup.ideas.length}개 메모`],
+        badges: [
+          problemGroupStatusLabel(selectedGroup.status),
+          `${selectedGroup.agenda_titles.length}개 안건`,
+          `${selectedGroup.ideas.length}개 메모`,
+          selectedGroup.insight_user_edited ? "Insight 수동 수정" : "",
+          selectedGroup.conclusion_user_edited ? "결론 수동 수정" : "",
+        ].filter(Boolean),
         insightLens: selectedGroup.insight_lens || "",
         keywords: (selectedGroup.keywords || []).slice(0, 3),
         summaryItems: [selectedGroup.conclusion, ...(selectedGroup.source_summary_items || []).slice(0, 2)]
@@ -1544,12 +1581,14 @@ export default function MeetingCanvasTab({
     if (!selectedProblemGroup) return;
     setEditingProblemGroupId(selectedProblemGroup.group_id);
     setProblemGroupDraftTopic(selectedProblemGroup.topic);
+    setProblemGroupDraftInsight(selectedProblemGroup.insight_lens || "");
     setProblemGroupDraftConclusion(selectedProblemGroup.conclusion);
   };
 
   const handleCancelProblemGroupEdit = () => {
     setEditingProblemGroupId("");
     setProblemGroupDraftTopic("");
+    setProblemGroupDraftInsight("");
     setProblemGroupDraftConclusion("");
   };
 
@@ -1557,7 +1596,10 @@ export default function MeetingCanvasTab({
     if (!selectedProblemGroup) return;
 
     const nextTopic = problemGroupDraftTopic.trim() || selectedProblemGroup.topic;
+    const nextInsight = problemGroupDraftInsight.trim() || selectedProblemGroup.insight_lens || "";
     const nextConclusion = problemGroupDraftConclusion.trim() || selectedProblemGroup.conclusion;
+    const insightEdited = nextInsight !== (selectedProblemGroup.insight_lens || "");
+    const conclusionEdited = nextConclusion !== selectedProblemGroup.conclusion;
 
     setProblemGroups((prev) =>
       prev.map((group) =>
@@ -1565,13 +1607,17 @@ export default function MeetingCanvasTab({
           ? {
               ...group,
               topic: nextTopic,
+              insight_lens: nextInsight,
+              insight_user_edited: group.insight_user_edited || insightEdited,
               conclusion: nextConclusion,
+              conclusion_user_edited: group.conclusion_user_edited || conclusionEdited,
             }
           : group,
       ),
     );
     setEditingProblemGroupId("");
     setProblemGroupDraftTopic("");
+    setProblemGroupDraftInsight("");
     setProblemGroupDraftConclusion("");
     setActivityMessage("문제 정의 그룹 내용을 수정했습니다.");
   };
@@ -1816,8 +1862,45 @@ export default function MeetingCanvasTab({
                       )}
                     </section>
 
+                    {stage === "problem-definition" && selectedProblemGroup ? (
+                      <section className="border-b border-slate-200/80 py-6">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="text-lg font-semibold text-slate-900">Insight</h4>
+                          {selectedProblemGroup.insight_user_edited ? (
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                              수동 수정됨
+                            </span>
+                          ) : null}
+                        </div>
+                        {isEditingSelectedProblemGroup ? (
+                          <>
+                            <textarea
+                              value={problemGroupDraftInsight}
+                              onChange={(event) => setProblemGroupDraftInsight(event.target.value)}
+                              className="mt-4 min-h-[110px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
+                              placeholder="이 그룹의 인사이트를 직접 정리할 수 있습니다."
+                            />
+                            <p className="mt-3 text-sm leading-6 text-slate-500">
+                              저장하면 이 Insight는 이후 AI 재생성으로 덮어쓰지 않습니다.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-4 text-base leading-7 text-slate-500">
+                            Insight는 노드 내부에서 확인하고, 수정 모드에서 직접 편집할 수 있습니다.
+                          </p>
+                        )}
+                      </section>
+                    ) : null}
+
                     <section className="border-b border-slate-200/80 py-6">
-                      <h4 className="text-lg font-semibold text-slate-900">결론</h4>
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-lg font-semibold text-slate-900">결론</h4>
+                        {stage === "problem-definition" && selectedProblemGroup?.conclusion_user_edited ? (
+                          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                            수동 수정됨
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="mt-4 space-y-3">
                         {leftPanelDetail.summaryItems.map((item, index) => (
                           <div key={`${leftPanelDetail.title}-summary-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
@@ -1834,6 +1917,11 @@ export default function MeetingCanvasTab({
                           </div>
                         ))}
                       </div>
+                      {stage === "problem-definition" && isEditingSelectedProblemGroup ? (
+                        <p className="mt-3 text-sm leading-6 text-slate-500">
+                          저장하면 이 결론은 이후 AI 재생성으로 덮어쓰지 않습니다.
+                        </p>
+                      ) : null}
                     </section>
 
                     <section className="pt-6">

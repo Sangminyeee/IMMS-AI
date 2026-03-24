@@ -9,7 +9,7 @@ import httpx
 import json
 import base64
 from datetime import datetime
-from ..config import get_supabase
+from ..config import get_supabase, settings
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ router = APIRouter()
 active_connections: Dict[str, List[Dict]] = {}
 
 # AI 백엔드 URL
-AI_BACKEND_URL = "http://localhost:8000"
+AI_BACKEND_URL = settings.ai_module_url.rstrip("/")
 
 
 async def broadcast_to_meeting(meeting_id: str, message: dict, exclude_user: str = None):

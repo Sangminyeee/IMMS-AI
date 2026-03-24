@@ -174,6 +174,7 @@ export interface CanvasProblemDefinitionGroup {
   group_id: string;
   topic: string;
   insight_lens?: string;
+  insight_user_edited?: boolean;
   keywords: string[];
   agenda_ids: string[];
   agenda_titles: string[];
@@ -185,6 +186,7 @@ export interface CanvasProblemDefinitionGroup {
   }>;
   source_summary_items: string[];
   conclusion: string;
+  conclusion_user_edited?: boolean;
 }
 
 export interface CanvasProblemDefinitionResponse {
@@ -209,6 +211,7 @@ export interface CanvasWorkspaceProblemGroup {
   group_id: string;
   topic: string;
   insight_lens?: string;
+  insight_user_edited?: boolean;
   keywords: string[];
   agenda_ids: string[];
   agenda_titles: string[];
@@ -220,6 +223,7 @@ export interface CanvasWorkspaceProblemGroup {
   }>;
   source_summary_items: string[];
   conclusion: string;
+  conclusion_user_edited?: boolean;
   status?: "draft" | "review" | "final" | string;
 }
 

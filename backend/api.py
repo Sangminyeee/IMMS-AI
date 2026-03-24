@@ -762,12 +762,14 @@ class CanvasWorkspaceProblemGroupInput(BaseModel):
     group_id: str = ""
     topic: str = ""
     insight_lens: str = ""
+    insight_user_edited: bool = False
     keywords: list[str] = Field(default_factory=list)
     agenda_ids: list[str] = Field(default_factory=list)
     agenda_titles: list[str] = Field(default_factory=list)
     ideas: list[CanvasWorkspaceIdeaInput] = Field(default_factory=list)
     source_summary_items: list[str] = Field(default_factory=list)
     conclusion: str = ""
+    conclusion_user_edited: bool = False
     status: str = "draft"
 
 
