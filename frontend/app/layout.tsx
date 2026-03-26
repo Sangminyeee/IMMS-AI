@@ -12,10 +12,10 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
-const fontVariables: CSSProperties = {
-  ["--font-body" as "--font-body"]: '"Segoe UI", "Noto Sans KR", sans-serif',
-  ["--font-display" as "--font-display"]: '"Segoe UI", "Noto Sans KR", sans-serif',
-};
+const fontVariables = {
+  "--font-body": '"Segoe UI", "Noto Sans KR", sans-serif',
+  "--font-display": '"Segoe UI", "Noto Sans KR", sans-serif',
+} as CSSProperties;
 
 export default function RootLayout({ children }: Readonly<RootLayoutProps>) {
   return (
