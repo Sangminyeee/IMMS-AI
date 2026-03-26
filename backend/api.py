@@ -18,16 +18,30 @@ from typing import Any, Callable
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+from supabase import Client, create_client
 
 from llm_client import get_client
 
 ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env", override=False)
+load_dotenv(ROOT / "gateway" / ".env", override=False)
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "large")
 SUMMARY_INTERVAL = 4
 SUMMARY_POINT_TARGET_LEN = None
 REALTIME_MIN_SHIFT_SPAN = 6
 LLM_IO_LOG_MAX = 160
 LLM_IO_PREVIEW_MAX = 6000
+RUNTIME_SHARED_STATE_TABLE = "meeting_runtime_states"
+RUNTIME_USER_STATE_TABLE = "meeting_user_states"
+
+_SUPABASE_CLIENT: Client | None = None
+_SUPABASE_CLIENT_INITIALIZED = False
+_SUPABASE_CLIENT_LOCK = threading.Lock()
+_SUPABASE_REQUEST_LOCK = threading.Lock()
+_RUNTIME_DB_DISABLED_TABLES: set[str] = set()
+_RUNTIME_DB_LOGGED_ERRORS: dict[str, float] = {}
+_RUNTIME_DB_STATE_LOCK = threading.Lock()
 
 STOPWORDS = {
     "그냥",
@@ -267,6 +281,362 @@ def _normalize_canvas_stage(raw: Any) -> str:
     return "ideation"
 
 
+def _utc_iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _env_first(*keys: str) -> str:
+    for key in keys:
+        value = _safe_text(os.environ.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _get_supabase_service_client() -> Client | None:
+    global _SUPABASE_CLIENT, _SUPABASE_CLIENT_INITIALIZED
+
+    with _SUPABASE_CLIENT_LOCK:
+        if _SUPABASE_CLIENT_INITIALIZED:
+            return _SUPABASE_CLIENT
+
+        _SUPABASE_CLIENT_INITIALIZED = True
+        supabase_url = _env_first("SUPABASE_URL", "supabase_url", "NEXT_PUBLIC_SUPABASE_URL")
+        supabase_service_role_key = _env_first(
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "supabase_service_role_key",
+        )
+        if not supabase_url or not supabase_service_role_key:
+            return None
+
+        try:
+            _SUPABASE_CLIENT = create_client(supabase_url, supabase_service_role_key)
+        except Exception as exc:
+            print(f"❌ Failed to initialize Supabase client: {exc}")
+            _SUPABASE_CLIENT = None
+        return _SUPABASE_CLIENT
+
+
+def _runtime_db_table_is_disabled(table_name: str) -> bool:
+    with _RUNTIME_DB_STATE_LOCK:
+        return table_name in _RUNTIME_DB_DISABLED_TABLES
+
+
+def _log_runtime_db_error(key: str, message: str, cooldown_sec: float = 10.0) -> None:
+    now = time.time()
+    with _RUNTIME_DB_STATE_LOCK:
+        last_logged_at = _RUNTIME_DB_LOGGED_ERRORS.get(key, 0.0)
+        if now - last_logged_at < cooldown_sec:
+            return
+        _RUNTIME_DB_LOGGED_ERRORS[key] = now
+    print(message)
+
+
+def _handle_runtime_db_exception(table_name: str, action: str, exc: Exception) -> None:
+    raw = str(exc)
+    if "PGRST205" in raw and table_name in raw:
+        with _RUNTIME_DB_STATE_LOCK:
+            _RUNTIME_DB_DISABLED_TABLES.add(table_name)
+        _log_runtime_db_error(
+            f"{table_name}:missing",
+            f"⚠️ Supabase 테이블 `{table_name}` 이 없어 runtime DB 저장을 비활성화합니다. "
+            "supabase_schema.sql 적용 후 backend를 재시작하세요.",
+            cooldown_sec=3600.0,
+        )
+        return
+
+    _log_runtime_db_error(
+        f"{table_name}:{action}:{raw}",
+        f"❌ Failed to {action} using Supabase table `{table_name}`: {raw}",
+        cooldown_sec=15.0,
+    )
+
+
+def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "stage": _normalize_canvas_stage(workspace.get("stage")),
+        "problem_groups": copy.deepcopy(workspace.get("problem_groups") or []),
+        "solution_topics": copy.deepcopy(workspace.get("solution_topics") or []),
+        "node_positions": copy.deepcopy(workspace.get("node_positions") or {}),
+        "imported_state": copy.deepcopy(workspace.get("imported_state"))
+        if isinstance(workspace.get("imported_state"), dict)
+        else None,
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
+
+
+def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[str, Any]:
+    shared_state = row.get("shared_state")
+    if not isinstance(shared_state, dict):
+        shared_state = {}
+    llm_cache = row.get("llm_cache")
+    if not isinstance(llm_cache, dict):
+        llm_cache = {}
+
+    return {
+        "meeting_id": _safe_text(meeting_id),
+        "stage": _normalize_canvas_stage(shared_state.get("stage")),
+        "problem_groups": copy.deepcopy(shared_state.get("problem_groups") or []),
+        "solution_topics": copy.deepcopy(shared_state.get("solution_topics") or []),
+        "node_positions": copy.deepcopy(shared_state.get("node_positions") or {}),
+        "imported_state": copy.deepcopy(shared_state.get("imported_state"))
+        if isinstance(shared_state.get("imported_state"), dict)
+        else None,
+        "saved_at": _safe_text(shared_state.get("saved_at") or row.get("updated_at")),
+        "llm_cache": copy.deepcopy(llm_cache),
+    }
+
+
+def _normalize_canvas_workspace_problem_groups(
+    groups: list[CanvasWorkspaceProblemGroupInput] | None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "group_id": _safe_text(group.group_id),
+            "topic": _safe_text(group.topic),
+            "insight_lens": _safe_text(group.insight_lens),
+            "insight_user_edited": bool(group.insight_user_edited),
+            "keywords": [_safe_text(item) for item in (group.keywords or []) if _safe_text(item)],
+            "agenda_ids": [_safe_text(item) for item in (group.agenda_ids or []) if _safe_text(item)],
+            "agenda_titles": [_safe_text(item) for item in (group.agenda_titles or []) if _safe_text(item)],
+            "ideas": [
+                {
+                    "id": _safe_text(idea.id),
+                    "kind": _safe_text(idea.kind, "note"),
+                    "title": _safe_text(idea.title),
+                    "body": _safe_text(idea.body),
+                }
+                for idea in (group.ideas or [])
+                if _safe_text(idea.id) or _safe_text(idea.title) or _safe_text(idea.body)
+            ],
+            "source_summary_items": [
+                _safe_text(item) for item in (group.source_summary_items or []) if _safe_text(item)
+            ],
+            "conclusion": _safe_text(group.conclusion),
+            "conclusion_user_edited": bool(group.conclusion_user_edited),
+            "status": _safe_text(group.status, "draft"),
+        }
+        for group in (groups or [])
+        if _safe_text(group.group_id) and _safe_text(group.topic)
+    ]
+
+
+def _normalize_canvas_workspace_solution_topics(
+    topics: list[CanvasWorkspaceSolutionTopicInput] | None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "group_id": _safe_text(topic.group_id),
+            "topic_no": int(topic.topic_no or 0),
+            "topic": _safe_text(topic.topic),
+            "conclusion": _safe_text(topic.conclusion),
+            "ideas": [_safe_text(item) for item in (topic.ideas or []) if _safe_text(item)],
+            "status": _safe_text(topic.status, "draft"),
+            "problem_topic": _safe_text(topic.problem_topic),
+            "problem_insight": _safe_text(topic.problem_insight),
+            "problem_conclusion": _safe_text(topic.problem_conclusion),
+            "problem_keywords": [_safe_text(item) for item in (topic.problem_keywords or []) if _safe_text(item)],
+            "agenda_titles": [_safe_text(item) for item in (topic.agenda_titles or []) if _safe_text(item)],
+            "ai_suggestions": [
+                {
+                    "id": _safe_text(item.get("id")),
+                    "text": _safe_text(item.get("text")),
+                    "status": _safe_text(item.get("status"), "draft"),
+                }
+                for item in (topic.ai_suggestions or [])
+                if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
+            ],
+            "notes": [
+                {
+                    "id": _safe_text(item.get("id")),
+                    "text": _safe_text(item.get("text")),
+                    "source": _safe_text(item.get("source"), "user"),
+                    "source_ai_id": _safe_text(item.get("source_ai_id")),
+                    "is_final_candidate": bool(item.get("is_final_candidate")),
+                    "final_comment": _safe_text(item.get("final_comment")),
+                }
+                for item in (topic.notes or [])
+                if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
+            ],
+        }
+        for topic in (topics or [])
+        if _safe_text(topic.group_id) and _safe_text(topic.topic)
+    ]
+
+
+def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], saved_at: str) -> dict[str, Any]:
+    return {
+        "meeting_id": _safe_text(meeting_id),
+        "stage": _normalize_canvas_stage(source.get("stage")),
+        "problem_groups": copy.deepcopy(source.get("problem_groups") or []),
+        "solution_topics": copy.deepcopy(source.get("solution_topics") or []),
+        "node_positions": _normalize_canvas_node_positions(source.get("node_positions") or {}),
+        "imported_state": copy.deepcopy(source.get("imported_state"))
+        if isinstance(source.get("imported_state"), dict)
+        else None,
+        "saved_at": _safe_text(saved_at),
+        "llm_cache": copy.deepcopy(source.get("llm_cache") or {})
+        if isinstance(source.get("llm_cache"), dict)
+        else {},
+    }
+
+
+def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "meeting_id": _safe_text(workspace.get("meeting_id")),
+        "stage": _normalize_canvas_stage(workspace.get("stage")),
+        "problem_groups": copy.deepcopy(workspace.get("problem_groups") or []),
+        "solution_topics": copy.deepcopy(workspace.get("solution_topics") or []),
+        "node_positions": copy.deepcopy(workspace.get("node_positions") or {}),
+        "imported_state": copy.deepcopy(workspace.get("imported_state"))
+        if isinstance(workspace.get("imported_state"), dict)
+        else None,
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
+
+
+def _load_canvas_workspace_from_db(meeting_id: str) -> dict[str, Any] | None:
+    client = _get_supabase_service_client()
+    normalized_meeting_id = _safe_text(meeting_id)
+    if client is None or not normalized_meeting_id:
+        return None
+    if _runtime_db_table_is_disabled(RUNTIME_SHARED_STATE_TABLE):
+        return None
+
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            response = (
+                client.table(RUNTIME_SHARED_STATE_TABLE)
+                .select("meeting_id,shared_state,llm_cache,updated_at")
+                .eq("meeting_id", normalized_meeting_id)
+                .limit(1)
+                .execute()
+            )
+        rows = response.data or []
+        if not rows:
+            return None
+        first_row = rows[0] if isinstance(rows[0], dict) else {}
+        if not isinstance(first_row, dict):
+            return None
+        return _workspace_from_storage_row(normalized_meeting_id, first_row)
+    except Exception as exc:
+        _handle_runtime_db_exception(RUNTIME_SHARED_STATE_TABLE, "load", exc)
+        return None
+
+
+def _save_canvas_workspace_to_db(meeting_id: str, workspace: dict[str, Any]) -> bool:
+    client = _get_supabase_service_client()
+    normalized_meeting_id = _safe_text(meeting_id)
+    if client is None or not normalized_meeting_id:
+        return False
+    if _runtime_db_table_is_disabled(RUNTIME_SHARED_STATE_TABLE):
+        return False
+
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            client.table(RUNTIME_SHARED_STATE_TABLE).upsert(
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "shared_state": _workspace_payload_from_runtime_workspace(workspace),
+                    "llm_cache": copy.deepcopy(workspace.get("llm_cache") or {}),
+                    "updated_at": _utc_iso_now(),
+                },
+                on_conflict="meeting_id",
+            ).execute()
+        return True
+    except Exception as exc:
+        _handle_runtime_db_exception(RUNTIME_SHARED_STATE_TABLE, "save", exc)
+        return False
+
+
+def _load_canvas_personal_notes_from_db(meeting_id: str, user_id: str) -> list[dict[str, Any]] | None:
+    client = _get_supabase_service_client()
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_user_id = _safe_text(user_id)
+    if client is None or not normalized_meeting_id or not normalized_user_id:
+        return None
+    if _runtime_db_table_is_disabled(RUNTIME_USER_STATE_TABLE):
+        return None
+
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            response = (
+                client.table(RUNTIME_USER_STATE_TABLE)
+                .select("meeting_id,user_id,personal_state,updated_at")
+                .eq("meeting_id", normalized_meeting_id)
+                .eq("user_id", normalized_user_id)
+                .limit(1)
+                .execute()
+            )
+        rows = response.data or []
+        if not rows:
+            return None
+        first_row = rows[0] if isinstance(rows[0], dict) else {}
+        if not isinstance(first_row, dict):
+            return None
+        personal_state = first_row.get("personal_state")
+        if not isinstance(personal_state, dict):
+            personal_state = {}
+        notes = personal_state.get("personal_notes")
+        if not isinstance(notes, list):
+            return []
+        return copy.deepcopy([item for item in notes if isinstance(item, dict)])
+    except Exception as exc:
+        _handle_runtime_db_exception(RUNTIME_USER_STATE_TABLE, "load", exc)
+        return None
+
+
+def _save_canvas_personal_notes_to_db(
+    meeting_id: str,
+    user_id: str,
+    personal_notes: list[dict[str, Any]],
+) -> bool:
+    client = _get_supabase_service_client()
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_user_id = _safe_text(user_id)
+    if client is None or not normalized_meeting_id or not normalized_user_id:
+        return False
+    if _runtime_db_table_is_disabled(RUNTIME_USER_STATE_TABLE):
+        return False
+
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            client.table(RUNTIME_USER_STATE_TABLE).upsert(
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "user_id": normalized_user_id,
+                    "personal_state": {"personal_notes": copy.deepcopy(personal_notes or [])},
+                    "updated_at": _utc_iso_now(),
+                },
+                on_conflict="meeting_id,user_id",
+            ).execute()
+        return True
+    except Exception as exc:
+        _handle_runtime_db_exception(RUNTIME_USER_STATE_TABLE, "save", exc)
+        return False
+
+
+def _warm_canvas_workspace_cache(rt: "RuntimeStore", meeting_id: str) -> dict[str, Any]:
+    normalized_meeting_id = _safe_text(meeting_id)
+    if not normalized_meeting_id:
+        return {}
+
+    with rt.lock:
+        cached = copy.deepcopy(rt.canvas_workspace_by_meeting.get(normalized_meeting_id) or {})
+        if cached:
+            return cached
+
+    loaded = _load_canvas_workspace_from_db(normalized_meeting_id)
+    if loaded:
+        with rt.lock:
+            rt.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(loaded)
+        return copy.deepcopy(loaded)
+
+    with rt.lock:
+        return copy.deepcopy(_ensure_canvas_workspace_entry(rt, normalized_meeting_id))
+
+
 def _payload_to_primitive(payload: Any) -> Any:
     if hasattr(payload, "model_dump"):
         try:
@@ -379,6 +749,8 @@ def _run_canvas_llm_cached_request(
     if not normalized_meeting_id or not normalized_cache_key or not normalized_signature:
         return compute()
 
+    _warm_canvas_workspace_cache(rt, normalized_meeting_id)
+
     while True:
         wait_event: threading.Event | None = None
         wait_error = ""
@@ -452,6 +824,7 @@ def _run_canvas_llm_cached_request(
                     rt.canvas_llm_inflight_by_meeting.pop(normalized_meeting_id, None)
             raise
 
+        workspace_snapshot: dict[str, Any] | None = None
         with rt.lock:
             _set_canvas_llm_cached_result(
                 rt,
@@ -460,13 +833,18 @@ def _run_canvas_llm_cached_request(
                 normalized_signature,
                 result,
             )
+            workspace_snapshot = copy.deepcopy(
+                _ensure_canvas_workspace_entry(rt, normalized_meeting_id),
+            )
             meeting_entries = rt.canvas_llm_inflight_by_meeting.get(normalized_meeting_id) or {}
             inflight = meeting_entries.pop(normalized_cache_key, None)
             if isinstance(inflight, dict) and isinstance(inflight.get("event"), threading.Event):
                 inflight["event"].set()
             if not meeting_entries:
                 rt.canvas_llm_inflight_by_meeting.pop(normalized_meeting_id, None)
-            return copy.deepcopy(result)
+        if workspace_snapshot:
+            _save_canvas_workspace_to_db(normalized_meeting_id, workspace_snapshot)
+        return copy.deepcopy(result)
 
 
 def _doc_freq(rows: list[dict[str, Any]]) -> Counter[str]:
@@ -964,6 +1342,14 @@ class CanvasWorkspaceIdeaInput(BaseModel):
     body: str = ""
 
 
+class CanvasPersonalNoteInput(BaseModel):
+    id: str = ""
+    agenda_id: str = ""
+    kind: str = "note"
+    title: str = ""
+    body: str = ""
+
+
 class CanvasNodePositionInput(BaseModel):
     x: float = 0
     y: float = 0
@@ -1009,6 +1395,21 @@ class CanvasWorkspaceStateInput(BaseModel):
     imported_state: dict[str, Any] | None = None
 
 
+class CanvasWorkspacePatchInput(BaseModel):
+    meeting_id: str = ""
+    stage: str | None = None
+    problem_groups: list[CanvasWorkspaceProblemGroupInput] | None = None
+    solution_topics: list[CanvasWorkspaceSolutionTopicInput] | None = None
+    node_positions: dict[str, dict[str, CanvasNodePositionInput]] | None = None
+    imported_state: dict[str, Any] | None = None
+
+
+class CanvasPersonalNotesStateInput(BaseModel):
+    meeting_id: str = ""
+    user_id: str = ""
+    personal_notes: list[CanvasPersonalNoteInput] = Field(default_factory=list)
+
+
 @dataclass
 class RuntimeStore:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -1051,6 +1452,7 @@ class RuntimeStore:
     canvas_last_placement: dict[str, Any] = field(default_factory=dict)
     canvas_workspace_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
     canvas_llm_inflight_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
+    canvas_personal_notes_by_meeting_user: dict[str, dict[str, list[dict[str, Any]]]] = field(default_factory=dict)
 
     def reset(self) -> None:
         self.meeting_goal = ""
@@ -1089,6 +1491,7 @@ class RuntimeStore:
         self.canvas_last_placement = {}
         self.canvas_workspace_by_meeting = {}
         self.canvas_llm_inflight_by_meeting = {}
+        self.canvas_personal_notes_by_meeting_user = {}
 
 
 RT = RuntimeStore()
@@ -4625,26 +5028,75 @@ def post_canvas_solution_stage(payload: SolutionStageGenerateInput):
     )
 
 
+@app.get("/api/canvas/personal-notes")
+def get_canvas_personal_notes(meeting_id: str, user_id: str):
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_user_id = _safe_text(user_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    loaded_notes = _load_canvas_personal_notes_from_db(normalized_meeting_id, normalized_user_id)
+    with RT.lock:
+        meeting_notes = RT.canvas_personal_notes_by_meeting_user.setdefault(normalized_meeting_id, {})
+        if loaded_notes is not None:
+            meeting_notes[normalized_user_id] = copy.deepcopy(loaded_notes)
+        personal_notes = copy.deepcopy(meeting_notes.get(normalized_user_id) or [])
+        return {
+            "ok": True,
+            "meeting_id": normalized_meeting_id,
+            "user_id": normalized_user_id,
+            "personal_notes": personal_notes,
+            "saved_at": _safe_text((RT.canvas_workspace_by_meeting.get(normalized_meeting_id) or {}).get("saved_at")),
+        }
+
+
+@app.post("/api/canvas/personal-notes")
+def post_canvas_personal_notes(payload: CanvasPersonalNotesStateInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    normalized_user_id = _safe_text(payload.user_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    saved_at = _now_ts()
+    normalized_notes = [
+        {
+            "id": _safe_text(note.id),
+            "agenda_id": _safe_text(note.agenda_id),
+            "kind": _safe_text(note.kind, "note"),
+            "title": _safe_text(note.title),
+            "body": _safe_text(note.body),
+        }
+        for note in (payload.personal_notes or [])
+        if _safe_text(note.id) or _safe_text(note.title) or _safe_text(note.body)
+    ]
+
+    with RT.lock:
+        meeting_notes = RT.canvas_personal_notes_by_meeting_user.setdefault(normalized_meeting_id, {})
+        meeting_notes[normalized_user_id] = copy.deepcopy(normalized_notes)
+
+    _save_canvas_personal_notes_to_db(normalized_meeting_id, normalized_user_id, normalized_notes)
+
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "user_id": normalized_user_id,
+        "personal_notes": copy.deepcopy(normalized_notes),
+        "saved_at": saved_at,
+    }
+
+
 @app.get("/api/canvas/workspace-state")
 def get_canvas_workspace_state(meeting_id: str):
     normalized_meeting_id = _safe_text(meeting_id)
     if not normalized_meeting_id:
         raise HTTPException(status_code=400, detail="meeting_id is required")
 
-    with RT.lock:
-        saved = copy.deepcopy(RT.canvas_workspace_by_meeting.get(normalized_meeting_id) or {})
-        return {
-            "ok": True,
-            "meeting_id": normalized_meeting_id,
-            "stage": _normalize_canvas_stage(saved.get("stage")),
-            "problem_groups": saved.get("problem_groups") or [],
-            "solution_topics": saved.get("solution_topics") or [],
-            "node_positions": saved.get("node_positions") or {},
-            "imported_state": copy.deepcopy(saved.get("imported_state"))
-            if isinstance(saved.get("imported_state"), dict)
-            else None,
-            "saved_at": _safe_text(saved.get("saved_at")),
-        }
+    saved = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    return _canvas_workspace_response(saved)
 
 
 @app.post("/api/canvas/workspace-state")
@@ -4653,106 +5105,53 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     if not normalized_meeting_id:
         raise HTTPException(status_code=400, detail="meeting_id is required")
 
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    workspace["stage"] = _normalize_canvas_stage(payload.stage)
+    workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
+    workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
+    workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions)
+    workspace["imported_state"] = (
+        copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
+    )
     with RT.lock:
-        saved_at = _now_ts()
-        previous_workspace = _ensure_canvas_workspace_entry(RT, normalized_meeting_id)
-        workspace = {
-            "meeting_id": normalized_meeting_id,
-            "stage": _normalize_canvas_stage(payload.stage),
-            "problem_groups": [
-                {
-                    "group_id": _safe_text(group.group_id),
-                    "topic": _safe_text(group.topic),
-                    "insight_lens": _safe_text(group.insight_lens),
-                    "insight_user_edited": bool(group.insight_user_edited),
-                    "keywords": [_safe_text(item) for item in (group.keywords or []) if _safe_text(item)],
-                    "agenda_ids": [_safe_text(item) for item in (group.agenda_ids or []) if _safe_text(item)],
-                    "agenda_titles": [_safe_text(item) for item in (group.agenda_titles or []) if _safe_text(item)],
-                    "ideas": [
-                        {
-                            "id": _safe_text(idea.id),
-                            "kind": _safe_text(idea.kind, "note"),
-                            "title": _safe_text(idea.title),
-                            "body": _safe_text(idea.body),
-                        }
-                        for idea in (group.ideas or [])
-                        if _safe_text(idea.id) or _safe_text(idea.title) or _safe_text(idea.body)
-                    ],
-                    "source_summary_items": [
-                        _safe_text(item) for item in (group.source_summary_items or []) if _safe_text(item)
-                    ],
-                    "conclusion": _safe_text(group.conclusion),
-                    "conclusion_user_edited": bool(group.conclusion_user_edited),
-                    "status": _safe_text(group.status, "draft"),
-                }
-                for group in (payload.problem_groups or [])
-                if _safe_text(group.group_id) and _safe_text(group.topic)
-            ],
-            "solution_topics": [
-                {
-                    "group_id": _safe_text(topic.group_id),
-                    "topic_no": int(topic.topic_no or 0),
-                    "topic": _safe_text(topic.topic),
-                    "conclusion": _safe_text(topic.conclusion),
-                    "ideas": [_safe_text(item) for item in (topic.ideas or []) if _safe_text(item)],
-                    "status": _safe_text(topic.status, "draft"),
-                    "problem_topic": _safe_text(topic.problem_topic),
-                    "problem_insight": _safe_text(topic.problem_insight),
-                    "problem_conclusion": _safe_text(topic.problem_conclusion),
-                    "problem_keywords": [
-                        _safe_text(item) for item in (topic.problem_keywords or []) if _safe_text(item)
-                    ],
-                    "agenda_titles": [
-                        _safe_text(item) for item in (topic.agenda_titles or []) if _safe_text(item)
-                    ],
-                    "ai_suggestions": [
-                        {
-                            "id": _safe_text(item.get("id")),
-                            "text": _safe_text(item.get("text")),
-                            "status": _safe_text(item.get("status"), "draft"),
-                        }
-                        for item in (topic.ai_suggestions or [])
-                        if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
-                    ],
-                    "notes": [
-                        {
-                            "id": _safe_text(item.get("id")),
-                            "text": _safe_text(item.get("text")),
-                            "source": _safe_text(item.get("source"), "user"),
-                            "source_ai_id": _safe_text(item.get("source_ai_id")),
-                            "is_final_candidate": bool(item.get("is_final_candidate")),
-                            "final_comment": _safe_text(item.get("final_comment")),
-                        }
-                        for item in (topic.notes or [])
-                        if isinstance(item, dict) and (_safe_text(item.get("id")) or _safe_text(item.get("text")))
-                    ],
-                }
-                for topic in (payload.solution_topics or [])
-                if _safe_text(topic.group_id) and _safe_text(topic.topic)
-            ],
-            "node_positions": _normalize_canvas_node_positions(payload.node_positions),
-            "imported_state": copy.deepcopy(payload.imported_state)
-            if isinstance(payload.imported_state, dict)
-            else None,
-            "saved_at": saved_at,
-            "llm_cache": copy.deepcopy(previous_workspace.get("llm_cache") or {})
-            if isinstance(previous_workspace.get("llm_cache"), dict)
-            else {},
-        }
         RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
 
-        return {
-            "ok": True,
-            "meeting_id": normalized_meeting_id,
-            "stage": workspace["stage"],
-            "problem_groups": workspace["problem_groups"],
-            "solution_topics": workspace["solution_topics"],
-            "node_positions": workspace["node_positions"],
-            "imported_state": copy.deepcopy(workspace["imported_state"])
-            if isinstance(workspace["imported_state"], dict)
-            else None,
-            "saved_at": saved_at,
-        }
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+
+    return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/workspace-patch")
+def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    provided_fields = set(getattr(payload, "model_fields_set", set()))
+
+    if "stage" in provided_fields:
+        workspace["stage"] = _normalize_canvas_stage(payload.stage)
+    if "problem_groups" in provided_fields:
+        workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
+    if "solution_topics" in provided_fields:
+        workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
+    if "node_positions" in provided_fields:
+        workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
+    if "imported_state" in provided_fields:
+        workspace["imported_state"] = (
+            copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
+        )
+
+    with RT.lock:
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+    return _canvas_workspace_response(workspace)
 
 
 @app.get("/api/export/agenda-markdown")

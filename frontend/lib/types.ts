@@ -197,6 +197,14 @@ export interface CanvasProblemDefinitionResponse {
   groups: CanvasProblemDefinitionGroup[];
 }
 
+export interface CanvasPersonalNote {
+  id: string;
+  agenda_id: string;
+  kind: string;
+  title: string;
+  body: string;
+}
+
 export interface CanvasProblemConclusionResponse {
   ok: boolean;
   used_llm: boolean;
@@ -246,6 +254,23 @@ export interface CanvasWorkspaceStateResponse {
   solution_topics: CanvasSolutionTopicResponse[];
   node_positions?: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;
+  saved_at?: string;
+}
+
+export interface CanvasWorkspacePatchRequest {
+  meeting_id: string;
+  stage?: "ideation" | "problem-definition" | "solution";
+  problem_groups?: CanvasWorkspaceProblemGroup[];
+  solution_topics?: CanvasSolutionTopicResponse[];
+  node_positions?: CanvasNodePositionsByStage;
+  imported_state?: MeetingState | null;
+}
+
+export interface CanvasPersonalNotesStateResponse {
+  ok: boolean;
+  meeting_id: string;
+  user_id: string;
+  personal_notes: CanvasPersonalNote[];
   saved_at?: string;
 }
 

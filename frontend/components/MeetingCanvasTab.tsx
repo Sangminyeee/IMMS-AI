@@ -21,12 +21,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getCanvasWorkspaceState,
+  getCanvasPersonalNotes,
   generateMeetingGoal,
   generateProblemGroupConclusion,
   generateCanvasProblemDefinition,
   generateCanvasSolutionStage,
   importAgendaSnapshot,
-  saveCanvasWorkspaceState,
+  saveCanvasPersonalNotes,
+  saveCanvasWorkspacePatch,
 } from "@/lib/api";
 import type {
   AgendaActionItemDetail,
@@ -93,6 +95,75 @@ type SolutionTopicViewModel = CanvasSolutionTopicResponse & {
     final_comment: string;
   }>;
 };
+
+type WorkspaceFieldSignatures = {
+  stage: string;
+  problem_groups: string;
+  solution_topics: string;
+  node_positions: string;
+  imported_state: string;
+};
+
+function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
+  return {
+    stage: "",
+    problem_groups: "",
+    solution_topics: "",
+    node_positions: "",
+    imported_state: "",
+  };
+}
+
+function buildWorkspaceProblemGroupsPayload(groups: ProblemGroupViewModel[]) {
+  return groups.map((group) => ({
+    group_id: group.group_id,
+    topic: group.topic,
+    insight_lens: group.insight_lens,
+    insight_user_edited: group.insight_user_edited,
+    keywords: group.keywords,
+    agenda_ids: group.agenda_ids,
+    agenda_titles: group.agenda_titles,
+    ideas: group.ideas,
+    source_summary_items: group.source_summary_items,
+    conclusion: group.conclusion,
+    conclusion_user_edited: group.conclusion_user_edited,
+    status: group.status,
+  }));
+}
+
+function buildWorkspaceSolutionTopicsPayload(topics: SolutionTopicViewModel[]) {
+  return topics.map((topic) => ({
+    group_id: topic.group_id,
+    topic_no: topic.topic_no,
+    topic: topic.topic,
+    conclusion: topic.conclusion,
+    ideas: topic.ideas,
+    status: topic.status,
+    problem_topic: topic.problem_topic,
+    problem_insight: topic.problem_insight,
+    problem_conclusion: topic.problem_conclusion,
+    problem_keywords: topic.problem_keywords,
+    agenda_titles: topic.agenda_titles,
+    ai_suggestions: topic.ai_suggestions,
+    notes: topic.notes,
+  }));
+}
+
+function buildWorkspaceFieldSignatures(input: {
+  stage: CanvasStage;
+  problemGroups: ProblemGroupViewModel[];
+  solutionTopics: SolutionTopicViewModel[];
+  nodePositions: CanvasNodePositionsByStage;
+  importedState: MeetingState | null;
+}): WorkspaceFieldSignatures {
+  return {
+    stage: input.stage,
+    problem_groups: JSON.stringify(buildWorkspaceProblemGroupsPayload(input.problemGroups)),
+    solution_topics: JSON.stringify(buildWorkspaceSolutionTopicsPayload(input.solutionTopics)),
+    node_positions: JSON.stringify(input.nodePositions || {}),
+    imported_state: JSON.stringify(input.importedState || null),
+  };
+}
 
 type SolutionAiSuggestionViewModel = SolutionTopicViewModel["ai_suggestions"][number];
 type SolutionNoteViewModel = SolutionTopicViewModel["notes"][number];
@@ -1030,6 +1101,8 @@ export default function MeetingCanvasTab({
   const workspaceLoadedRef = useRef(false);
   const workspaceHydratingRef = useRef(false);
   const workspaceSaveTimerRef = useRef<number | null>(null);
+  const lastWorkspaceFieldSignaturesRef = useRef<WorkspaceFieldSignatures>(createWorkspaceFieldSignatures());
+  const personalNotesSaveTimerRef = useRef<number | null>(null);
   const sharedSyncTimerRef = useRef<number | null>(null);
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
@@ -1058,11 +1131,16 @@ export default function MeetingCanvasTab({
     lastSharedSyncSignatureRef.current = "";
     applyingRemoteSharedSyncRef.current = false;
     localNodeOverridesRef.current = createLocalNodeOverrideMap();
+    lastWorkspaceFieldSignaturesRef.current = createWorkspaceFieldSignatures();
     workspaceLoadedRef.current = false;
     workspaceHydratingRef.current = false;
     if (workspaceSaveTimerRef.current) {
       window.clearTimeout(workspaceSaveTimerRef.current);
       workspaceSaveTimerRef.current = null;
+    }
+    if (personalNotesSaveTimerRef.current) {
+      window.clearTimeout(personalNotesSaveTimerRef.current);
+      personalNotesSaveTimerRef.current = null;
     }
     if (sharedSyncTimerRef.current) {
       window.clearTimeout(sharedSyncTimerRef.current);
@@ -1077,6 +1155,7 @@ export default function MeetingCanvasTab({
     workspaceHydratingRef.current = true;
     setProblemGroups([]);
     setSolutionTopics([]);
+    setPersonalNotes([]);
     setNodePositions({});
     setImportedState(null);
     setStage("ideation");
@@ -1097,8 +1176,8 @@ export default function MeetingCanvasTab({
       };
     }
 
-    void getCanvasWorkspaceState(meetingId)
-      .then((saved) => {
+    void Promise.all([getCanvasWorkspaceState(meetingId), getCanvasPersonalNotes(meetingId, userId)])
+      .then(([saved, savedPersonalNotes]) => {
         if (cancelled) return;
 
         const nextGroups = hydrateProblemGroups(saved.problem_groups || []);
@@ -1107,9 +1186,23 @@ export default function MeetingCanvasTab({
             ? saved.stage
             : "ideation";
         const nextSolutionTopics = hydrateSolutionTopics(saved.solution_topics || [], nextGroups);
+        const nextPersonalNotes: PersonalNote[] = (savedPersonalNotes.personal_notes || []).map((note) => {
+          const kind: ComposerTool =
+            note.kind === "comment" || note.kind === "topic" || note.kind === "note"
+              ? note.kind
+              : "note";
+          return {
+            id: note.id,
+            agendaId: note.agenda_id,
+            kind,
+            title: note.title,
+            body: note.body,
+          };
+        });
 
         setProblemGroups(nextGroups);
         setSolutionTopics(nextSolutionTopics);
+        setPersonalNotes(nextPersonalNotes);
         setNodePositions(saved.node_positions || {});
         setImportedState(saved.imported_state || null);
         setStage(nextStage);
@@ -1119,6 +1212,13 @@ export default function MeetingCanvasTab({
           solution_topics: serializeSharedSolutionTopics(nextSolutionTopics),
           node_positions: saved.node_positions || {},
           imported_state: saved.imported_state || null,
+        });
+        lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
+          stage: nextStage,
+          problemGroups: nextGroups,
+          solutionTopics: nextSolutionTopics,
+          nodePositions: saved.node_positions || {},
+          importedState: saved.imported_state || null,
         });
         setSelectedProblemGroupId(nextGroups[0]?.group_id || "");
         setSelectedSolutionTopicId(nextSolutionTopics[0]?.group_id || "");
@@ -1136,6 +1236,7 @@ export default function MeetingCanvasTab({
         if (cancelled) return;
         setProblemGroups([]);
         setSolutionTopics([]);
+        setPersonalNotes([]);
         setNodePositions({});
         setImportedState(null);
         setStage("ideation");
@@ -1145,6 +1246,13 @@ export default function MeetingCanvasTab({
           solution_topics: [],
           node_positions: {},
           imported_state: null,
+        });
+        lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
+          stage: "ideation",
+          problemGroups: [],
+          solutionTopics: [],
+          nodePositions: {},
+          importedState: null,
         });
         setSelectedProblemGroupId("");
         setSelectedSolutionTopicId("");
@@ -1161,7 +1269,7 @@ export default function MeetingCanvasTab({
     return () => {
       cancelled = true;
     };
-  }, [meetingId]);
+  }, [meetingId, userId]);
 
   useEffect(() => {
     if (problemGroups.length === 0) {
@@ -1500,27 +1608,63 @@ export default function MeetingCanvasTab({
   }, [handleGenerateProblemGroupConclusion, personalNotes, problemGroups]);
 
   useEffect(() => {
-    if (stage !== "problem-definition") {
-      problemConclusionEntryHandledRef.current = false;
-      return;
-    }
-
-    if (problemGroups.length === 0 || busy || conclusionBatchBusy || problemConclusionEntryHandledRef.current) {
-      return;
-    }
-
-    problemConclusionEntryHandledRef.current = true;
-    void handleGenerateAllProblemGroupConclusions(problemGroups);
-  }, [busy, conclusionBatchBusy, handleGenerateAllProblemGroupConclusions, problemGroups, stage]);
-
-  useEffect(() => {
     if (
       !meetingId ||
       !sharedSyncEnabled ||
       !workspaceLoadedRef.current ||
       workspaceHydratingRef.current ||
+      problemDefinitionStagePending ||
+      solutionStagePending ||
+      conclusionBatchBusy ||
       applyingRemoteSharedSyncRef.current
     ) {
+      return;
+    }
+
+    const nextProblemGroupsPayload = buildWorkspaceProblemGroupsPayload(problemGroups);
+    const nextSolutionTopicsPayload = buildWorkspaceSolutionTopicsPayload(solutionTopics);
+    const nextSignatures = buildWorkspaceFieldSignatures({
+      stage,
+      problemGroups,
+      solutionTopics,
+      nodePositions,
+      importedState,
+    });
+    const previousSignatures = lastWorkspaceFieldSignaturesRef.current;
+    const patch: {
+      meeting_id: string;
+      stage?: CanvasStage;
+      problem_groups?: ReturnType<typeof buildWorkspaceProblemGroupsPayload>;
+      solution_topics?: ReturnType<typeof buildWorkspaceSolutionTopicsPayload>;
+      node_positions?: CanvasNodePositionsByStage;
+      imported_state?: MeetingState | null;
+    } = {
+      meeting_id: meetingId,
+    };
+
+    let hasChanges = false;
+    if (nextSignatures.stage !== previousSignatures.stage) {
+      patch.stage = stage;
+      hasChanges = true;
+    }
+    if (nextSignatures.problem_groups !== previousSignatures.problem_groups) {
+      patch.problem_groups = nextProblemGroupsPayload;
+      hasChanges = true;
+    }
+    if (nextSignatures.solution_topics !== previousSignatures.solution_topics) {
+      patch.solution_topics = nextSolutionTopicsPayload;
+      hasChanges = true;
+    }
+    if (nextSignatures.node_positions !== previousSignatures.node_positions) {
+      patch.node_positions = nodePositions;
+      hasChanges = true;
+    }
+    if (nextSignatures.imported_state !== previousSignatures.imported_state) {
+      patch.imported_state = importedState;
+      hasChanges = true;
+    }
+
+    if (!hasChanges) {
       return;
     }
 
@@ -1529,29 +1673,13 @@ export default function MeetingCanvasTab({
     }
 
     workspaceSaveTimerRef.current = window.setTimeout(() => {
-      void saveCanvasWorkspaceState({
-        meeting_id: meetingId,
-        stage,
-        problem_groups: problemGroups.map((group) => ({
-          group_id: group.group_id,
-          topic: group.topic,
-          insight_lens: group.insight_lens,
-          insight_user_edited: group.insight_user_edited,
-          keywords: group.keywords,
-          agenda_ids: group.agenda_ids,
-          agenda_titles: group.agenda_titles,
-          ideas: group.ideas,
-          source_summary_items: group.source_summary_items,
-          conclusion: group.conclusion,
-          conclusion_user_edited: group.conclusion_user_edited,
-          status: group.status,
-        })),
-        solution_topics: solutionTopics,
-        node_positions: nodePositions,
-        imported_state: importedState,
-      }).catch(() => {
-        // 저장 실패는 작업 흐름을 끊지 않고 다음 변경 시 다시 시도한다.
-      });
+      void saveCanvasWorkspacePatch(patch)
+        .then(() => {
+          lastWorkspaceFieldSignaturesRef.current = nextSignatures;
+        })
+        .catch(() => {
+          // 저장 실패는 작업 흐름을 끊지 않고 다음 변경 시 다시 시도한다.
+        });
     }, 450);
 
     return () => {
@@ -1560,7 +1688,51 @@ export default function MeetingCanvasTab({
         workspaceSaveTimerRef.current = null;
       }
     };
-  }, [importedState, meetingId, nodePositions, problemGroups, sharedSyncEnabled, solutionTopics, stage]);
+  }, [
+    conclusionBatchBusy,
+    importedState,
+    meetingId,
+    nodePositions,
+    problemDefinitionStagePending,
+    problemGroups,
+    sharedSyncEnabled,
+    solutionStagePending,
+    solutionTopics,
+    stage,
+  ]);
+
+  useEffect(() => {
+    if (!meetingId || !userId || !workspaceLoadedRef.current || workspaceHydratingRef.current) {
+      return;
+    }
+
+    if (personalNotesSaveTimerRef.current) {
+      window.clearTimeout(personalNotesSaveTimerRef.current);
+    }
+
+    personalNotesSaveTimerRef.current = window.setTimeout(() => {
+      void saveCanvasPersonalNotes({
+        meeting_id: meetingId,
+        user_id: userId,
+        personal_notes: personalNotes.map((note) => ({
+          id: note.id,
+          agenda_id: note.agendaId,
+          kind: note.kind,
+          title: note.title,
+          body: note.body,
+        })),
+      }).catch(() => {
+        // 개인 메모 저장 실패는 다음 변경 시 다시 시도한다.
+      });
+    }, 300);
+
+    return () => {
+      if (personalNotesSaveTimerRef.current) {
+        window.clearTimeout(personalNotesSaveTimerRef.current);
+        personalNotesSaveTimerRef.current = null;
+      }
+    };
+  }, [meetingId, personalNotes, userId]);
 
   const sharedCanvasSnapshot = useMemo(
     () => ({
@@ -1631,6 +1803,13 @@ export default function MeetingCanvasTab({
     );
     setImportedState(incomingSharedCanvasSync.imported_state || null);
     setStage(incomingStage);
+    lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
+      stage: incomingStage,
+      problemGroups: nextProblemGroups,
+      solutionTopics: nextSolutionTopics,
+      nodePositions: incomingSharedCanvasSync.node_positions || {},
+      importedState: incomingSharedCanvasSync.imported_state || null,
+    });
     setLeftPanelTab("detail");
     if (incomingStage === "problem-definition") {
       const nextGroupId = nextProblemGroups[0]?.group_id || "";
@@ -2161,6 +2340,10 @@ export default function MeetingCanvasTab({
         });
       }
       setActivityMessage(result.warning || `문제 정의 주제 ${nextGroups.length}개를 생성했습니다.`);
+      if (nextGroups.length > 0) {
+        problemConclusionEntryHandledRef.current = true;
+        await handleGenerateAllProblemGroupConclusions(nextGroups);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setActivityMessage(`문제 정의 생성 실패: ${message}`);
@@ -2265,18 +2448,9 @@ export default function MeetingCanvasTab({
       setSelectedProblemGroupId(problemGroups[0]?.group_id || "");
       setSelectedNodeId(problemGroups[0] ? `problem-${problemGroups[0].group_id}` : "");
       setLeftPanelTab("detail");
-      problemConclusionEntryHandledRef.current = true;
-      await handleGenerateAllProblemGroupConclusions(problemGroups);
+      return;
     },
-    [
-      busy,
-      conclusionBatchBusy,
-      handleGenerateAllProblemGroupConclusions,
-      handleGenerateSolutionStage,
-      problemGroups,
-      solutionStagePending,
-      solutionTopics,
-    ],
+    [busy, conclusionBatchBusy, handleGenerateSolutionStage, problemGroups, solutionStagePending, solutionTopics],
   );
 
   const handleAddPersonalNote = () => {
@@ -2817,23 +2991,13 @@ export default function MeetingCanvasTab({
                                 </button>
                               </>
                             ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleGenerateProblemGroupConclusion(selectedProblemGroup)}
-                                  disabled={conclusionRefreshingGroupId === selectedProblemGroup.group_id}
-                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-                                >
-                                  {conclusionRefreshingGroupId === selectedProblemGroup.group_id ? "생성 중" : "결론 생성"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleStartProblemGroupEdit}
-                                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                                >
-                                  수정
-                                </button>
-                              </>
+                              <button
+                                type="button"
+                                onClick={handleStartProblemGroupEdit}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                              >
+                                수정
+                              </button>
                             )}
                           </div>
                         ) : stage === "solution" && selectedSolutionTopic ? (

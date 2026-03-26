@@ -58,31 +58,21 @@ async def broadcast_to_meeting(meeting_id: str, message: dict, exclude_user: str
 
 
 async def save_transcript(meeting_id: str, user_id: str, speaker: str, text: str):
-    """전사 결과를 Supabase에 저장 (중요 발화만)"""
-    # 중요 키워드 필터링
-    important_keywords = ['결정', '안건', '액션', '과제', '완료', '시작', '종료', '승인', '반대', '동의']
-    
-    # 짧은 발화나 중복 무시
-    if len(text.strip()) < 10:
+    """전사 결과를 Supabase에 저장"""
+    normalized_text = (text or "").strip()
+    if not normalized_text:
         return
-    
-    # 중요 키워드 포함 여부 확인
-    has_important_keyword = any(keyword in text for keyword in important_keywords)
-    
-    if not has_important_keyword:
-        # 중요하지 않은 발화는 저장하지 않음
-        return
-    
+
     try:
         supabase = get_supabase()
         supabase.table('transcripts').insert({
             'meeting_id': meeting_id,
             'user_id': user_id,
             'speaker': speaker,
-            'text': text,
+            'text': normalized_text,
             'timestamp': datetime.utcnow().isoformat()
         }).execute()
-        print(f"💾 Saved transcript: {speaker}: {text[:50]}...")
+        print(f"💾 Saved transcript: {speaker}: {normalized_text[:50]}...")
     except Exception as e:
         print(f"❌ Failed to save transcript: {e}")
 

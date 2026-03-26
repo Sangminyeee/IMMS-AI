@@ -4,6 +4,8 @@ import type {
   AgendaSnapshotImportResponse,
   CanvasNodePositionsByStage,
   CanvasPlacementConfirmResponse,
+  CanvasPersonalNotesStateResponse,
+  CanvasWorkspacePatchRequest,
   CanvasProblemConclusionResponse,
   CanvasProblemDefinitionResponse,
   CanvasSolutionStageResponse,
@@ -214,6 +216,44 @@ export async function saveCanvasWorkspaceState(payload: {
   imported_state?: MeetingState | null;
 }): Promise<CanvasWorkspaceStateResponse> {
   return requestJson<CanvasWorkspaceStateResponse>("/api/canvas/workspace-state", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function saveCanvasWorkspacePatch(
+  payload: CanvasWorkspacePatchRequest,
+): Promise<CanvasWorkspaceStateResponse> {
+  return requestJson<CanvasWorkspaceStateResponse>("/api/canvas/workspace-patch", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getCanvasPersonalNotes(
+  meetingId: string,
+  userId: string,
+): Promise<CanvasPersonalNotesStateResponse> {
+  const params = new URLSearchParams({ meeting_id: meetingId, user_id: userId });
+  return requestJson<CanvasPersonalNotesStateResponse>(`/api/canvas/personal-notes?${params.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+export async function saveCanvasPersonalNotes(payload: {
+  meeting_id: string;
+  user_id: string;
+  personal_notes: Array<{
+    id: string;
+    agenda_id: string;
+    kind: string;
+    title: string;
+    body: string;
+  }>;
+}): Promise<CanvasPersonalNotesStateResponse> {
+  return requestJson<CanvasPersonalNotesStateResponse>("/api/canvas/personal-notes", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
