@@ -200,6 +200,8 @@ export interface AudioImportJobStatusResponse {
 
 export interface CanvasProblemDefinitionGroup {
   group_id: string;
+  parent_group_id?: string;
+  depth?: number;
   topic: string;
   insight_lens?: string;
   insight_user_edited?: boolean;
@@ -214,6 +216,7 @@ export interface CanvasProblemDefinitionGroup {
   }>;
   discussion_items?: CanvasProblemDiscussionItem[];
   linked_group_ids?: string[];
+  evidence_utterance_ids?: string[];
   source_summary_items: string[];
   conclusion: string;
   conclusion_user_edited?: boolean;
@@ -250,6 +253,14 @@ export interface CanvasProblemDefinitionResponse {
   groups: CanvasProblemDefinitionGroup[];
 }
 
+export interface CanvasProblemTaxonomyResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  groups: CanvasProblemDefinitionGroup[];
+}
+
 export interface CanvasPersonalNote {
   id: string;
   project_id?: string;
@@ -269,6 +280,50 @@ export interface CanvasProblemConclusionResponse {
   group_id: string;
   insight_lens?: string;
   conclusion: string;
+}
+
+export interface CanvasProblemGroupingRationaleResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  group_id: string;
+  rationale: string;
+  basis_items: string[];
+}
+
+export interface CanvasProblemStructureGroup {
+  id: string;
+  title: string;
+  node_ids: string[];
+  rationale: string;
+  status?: "draft" | "review" | "final" | string;
+  created_by?: "ai" | "user" | string;
+}
+
+export interface CanvasProblemStructureNode {
+  id: string;
+  source_group_id?: string;
+  title: string;
+  body: string;
+  status?: string;
+  depth?: number;
+}
+
+export interface CanvasProblemStructureState {
+  phase: "explore" | "structure" | string;
+  method: "affinity" | "card-sorting" | string;
+  mode?: "" | "manual" | "ai" | string;
+  nodes: CanvasProblemStructureNode[];
+  groups: CanvasProblemStructureGroup[];
+}
+
+export interface CanvasProblemStructureResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  groups: CanvasProblemStructureGroup[];
 }
 
 export interface CanvasIdeationSuggestion {
@@ -365,6 +420,8 @@ export interface CanvasCustomGroup {
 
 export interface CanvasWorkspaceProblemGroup {
   group_id: string;
+  parent_group_id?: string;
+  depth?: number;
   topic: string;
   insight_lens?: string;
   insight_user_edited?: boolean;
@@ -378,6 +435,8 @@ export interface CanvasWorkspaceProblemGroup {
     body: string;
   }>;
   discussion_items?: CanvasProblemDiscussionItem[];
+  linked_group_ids?: string[];
+  evidence_utterance_ids?: string[];
   source_summary_items: string[];
   conclusion: string;
   conclusion_user_edited?: boolean;
@@ -415,6 +474,7 @@ export interface CanvasWorkspaceStateResponse {
   canvas_items: CanvasWorkspaceItem[];
   custom_groups?: CanvasCustomGroup[];
   problem_groups: CanvasWorkspaceProblemGroup[];
+  problem_structure?: CanvasProblemStructureState;
   solution_topics: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
@@ -441,6 +501,7 @@ export interface CanvasWorkspacePatchRequest {
   canvas_items?: CanvasWorkspaceItem[];
   custom_groups?: CanvasCustomGroup[];
   problem_groups?: CanvasWorkspaceProblemGroup[];
+  problem_structure?: CanvasProblemStructureState;
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
@@ -463,6 +524,7 @@ export interface CanvasLocalState {
   custom_groups?: CanvasCustomGroup[];
   stage?: "ideation" | "problem-definition" | "solution";
   problem_groups?: CanvasWorkspaceProblemGroup[];
+  problem_structure?: CanvasProblemStructureState;
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
@@ -498,6 +560,7 @@ export interface CanvasRealtimeSyncPayload {
   canvas_items: CanvasWorkspaceItem[];
   custom_groups?: CanvasCustomGroup[];
   problem_groups: CanvasWorkspaceProblemGroup[];
+  problem_structure?: CanvasProblemStructureState;
   solution_topics: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions: CanvasNodePositionsByStage;
@@ -534,6 +597,60 @@ export interface CanvasFinalSolutionSummary {
   topics: CanvasFinalSolutionSummaryTopic[];
   items: CanvasFinalSolutionSummaryItem[];
   markdown: string;
+  document_status?: "empty" | "ready" | "edited" | string;
+  generated_at?: string;
+  used_llm?: boolean;
+  warning?: string;
+  source_signature?: string;
+  sections?: CanvasSummaryDocumentSection[];
+}
+
+export interface CanvasSummaryEvidenceItem {
+  utterance_id: string;
+  speaker: string;
+  timestamp?: string;
+  text: string;
+}
+
+export interface CanvasSummaryDocumentSection {
+  group_id: string;
+  title: string;
+  status: "draft" | "review" | "final" | string;
+  status_label: string;
+  rationale?: string;
+  node_titles: string[];
+  evidence: CanvasSummaryEvidenceItem[];
+}
+
+export interface CanvasSummaryDocumentResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  source_signature: string;
+  markdown: string;
+  sections: CanvasSummaryDocumentSection[];
+}
+
+export interface CanvasQuickAskResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  answer: string;
+}
+
+export interface CanvasIdeationKeywordResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  source_signature: string;
+  keywords: Array<{
+    text: string;
+    count: number;
+    related?: string[];
+  }>;
 }
 
 export interface MeetingGoalSuggestionResponse {

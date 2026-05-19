@@ -9,13 +9,20 @@ import type {
   CanvasIdeaAssimilationIdea,
   CanvasIdeaAssimilationResponse,
   CanvasIdeaAssimilationUtterance,
+  CanvasIdeationKeywordResponse,
   CanvasIdeationSuggestionResponse,
   CanvasNodePositionsByStage,
   CanvasPlacementConfirmResponse,
   CanvasPersonalNotesStateResponse,
+  CanvasProblemStructureState,
   CanvasWorkspacePatchRequest,
   CanvasProblemConclusionResponse,
   CanvasProblemDefinitionResponse,
+  CanvasProblemGroupingRationaleResponse,
+  CanvasProblemStructureResponse,
+  CanvasProblemTaxonomyResponse,
+  CanvasQuickAskResponse,
+  CanvasSummaryDocumentResponse,
   CanvasSolutionStageResponse,
   CanvasWorkspaceProblemGroup,
   CanvasWorkspaceStateResponse,
@@ -156,6 +163,39 @@ export async function generateCanvasProblemDefinition(payload: {
   });
 }
 
+export async function generateCanvasProblemTaxonomy(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  debug_nonce?: string;
+  refresh_chunk_summaries?: boolean;
+  parent_group_id?: string;
+  parent_topic?: string;
+  parent_depth?: number;
+  parent_evidence_utterance_ids?: string[];
+  existing_group_ids?: string[];
+  existing_groups?: Array<{
+    group_id: string;
+    parent_group_id?: string;
+    depth?: number;
+    topic: string;
+    evidence_utterance_ids?: string[];
+    source_summary_items?: string[];
+  }>;
+  max_groups?: number;
+  utterances?: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
+}): Promise<CanvasProblemTaxonomyResponse> {
+  return requestJson<CanvasProblemTaxonomyResponse>("/api/canvas/problem-taxonomy", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function generateProblemGroupConclusion(payload: {
   meeting_id: string;
   meeting_topic: string;
@@ -174,6 +214,70 @@ export async function generateProblemGroupConclusion(payload: {
   };
 }): Promise<CanvasProblemConclusionResponse> {
   return requestJson<CanvasProblemConclusionResponse>("/api/canvas/problem-conclusion", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateProblemGroupingRationale(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  group: {
+    group_id: string;
+    topic: string;
+    insight_lens?: string;
+    conclusion?: string;
+    agenda_titles?: string[];
+    source_summary_items?: string[];
+    evidence_utterance_ids?: string[];
+    ideas?: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      body: string;
+    }>;
+  };
+  child_groups?: Array<{
+    group_id: string;
+    topic: string;
+    insight_lens?: string;
+    conclusion?: string;
+  }>;
+  utterances?: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
+}): Promise<CanvasProblemGroupingRationaleResponse> {
+  return requestJson<CanvasProblemGroupingRationaleResponse>("/api/canvas/problem-grouping-rationale", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateProblemStructure(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  method: "affinity" | "card-sorting" | string;
+  nodes: Array<{
+    id: string;
+    title: string;
+    body: string;
+    status?: string;
+    depth?: number;
+  }>;
+  existing_groups?: Array<{
+    id: string;
+    title: string;
+    node_ids: string[];
+    rationale?: string;
+  }>;
+  max_groups?: number;
+}): Promise<CanvasProblemStructureResponse> {
+  return requestJson<CanvasProblemStructureResponse>("/api/canvas/problem-structure", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -202,6 +306,66 @@ export async function generateCanvasSolutionStage(payload: {
   }>;
 }): Promise<CanvasSolutionStageResponse> {
   return requestJson<CanvasSolutionStageResponse>("/api/canvas/solution-stage", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateCanvasSummaryDocument(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  refresh_chunk_summaries?: boolean;
+  groups: Array<{
+    id: string;
+    title: string;
+    node_ids: string[];
+    rationale?: string;
+    status?: string;
+    created_by?: string;
+  }>;
+  nodes: Array<{
+    id: string;
+    source_group_id?: string;
+    title: string;
+    body?: string;
+    status?: string;
+    depth?: number;
+  }>;
+}): Promise<CanvasSummaryDocumentResponse> {
+  return requestJson<CanvasSummaryDocumentResponse>("/api/canvas/summary-document", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function askCanvasQuickQuestion(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  stage: "ideation" | "problem-definition" | "solution";
+  question: string;
+  context?: Record<string, unknown>;
+}): Promise<CanvasQuickAskResponse> {
+  return requestJson<CanvasQuickAskResponse>("/api/canvas/quick-ask", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function extractCanvasIdeationKeywords(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  utterances: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  max_keywords?: number;
+}): Promise<CanvasIdeationKeywordResponse> {
+  return requestJson<CanvasIdeationKeywordResponse>("/api/canvas/ideation-keywords", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -379,7 +543,9 @@ export async function saveCanvasWorkspaceState(payload: {
   stage: "ideation" | "problem-definition" | "solution";
   custom_groups?: CanvasCustomGroup[];
   problem_groups: CanvasWorkspaceProblemGroup[];
+  problem_structure?: CanvasProblemStructureState;
   solution_topics: CanvasSolutionStageResponse["topics"];
+  final_solution_summary?: CanvasWorkspaceStateResponse["final_solution_summary"];
   node_positions?: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;
 }): Promise<CanvasWorkspaceStateResponse> {
