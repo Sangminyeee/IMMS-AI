@@ -36,6 +36,61 @@ function getSupabaseHost() {
   }
 }
 
+function getSupabaseProjectRef() {
+  try {
+    const host = supabaseUrl ? new URL(supabaseUrl).hostname : ''
+    return host ? host.split('.')[0] : ''
+  } catch {
+    return ''
+  }
+}
+
+function isRefreshTokenNotFoundPayload(payload: unknown) {
+  const typedPayload = payload as { code?: unknown; error_code?: unknown; message?: unknown; msg?: unknown; error_description?: unknown }
+  const combined = [
+    typedPayload?.code,
+    typedPayload?.error_code,
+    typedPayload?.message,
+    typedPayload?.msg,
+    typedPayload?.error_description,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  return (
+    combined.includes('refresh_token_not_found') ||
+    combined.includes('refresh token not found') ||
+    combined.includes('invalid refresh token')
+  )
+}
+
+export function clearSupabaseAuthStorage() {
+  if (typeof window === 'undefined') return
+
+  const projectRef = getSupabaseProjectRef()
+  if (!projectRef) return
+
+  const prefixes = [`sb-${projectRef}-`]
+  const clearStorage = (storage: Storage) => {
+    const keys: string[] = []
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index)
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+        keys.push(key)
+      }
+    }
+    keys.forEach((key) => storage.removeItem(key))
+  }
+
+  try {
+    clearStorage(window.localStorage)
+    clearStorage(window.sessionStorage)
+  } catch (error) {
+    console.warn('[Supabase] failed to clear local auth storage', error)
+  }
+}
+
 function inferSupabaseFailureReason(error: unknown) {
   const typedError = error as { message?: string; name?: string; status?: number; code?: string }
 
@@ -106,7 +161,22 @@ const diagnosticFetch: typeof fetch = async (input, init) => {
   try {
     const response = await fetch(input, init)
     if (!response.ok && url.includes('/auth/v1/')) {
-      logSupabaseFailure('auth request', { status: response.status, message: response.statusText }, {
+      let authPayload: unknown = null
+      try {
+        authPayload = await response.clone().json()
+      } catch {
+        authPayload = null
+      }
+
+      if (isRefreshTokenNotFoundPayload(authPayload)) {
+        clearSupabaseAuthStorage()
+      }
+
+      logSupabaseFailure('auth request', {
+        status: response.status,
+        message: response.statusText,
+        ...(typeof authPayload === 'object' && authPayload !== null ? authPayload : {}),
+      }, {
         requestUrl: getSafeUrl(url),
         method,
         elapsedMs: Date.now() - startedAt,
@@ -129,7 +199,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
   auth: {
     persistSession: true,
-    autoRefreshToken: true,
+    autoRefreshToken: false,
     detectSessionInUrl: true
   }
 })
