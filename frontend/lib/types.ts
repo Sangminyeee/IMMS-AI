@@ -650,6 +650,12 @@ export interface CanvasIdeationKeywordResponse {
     text: string;
     count: number;
     related?: string[];
+    kind?: "entity" | "topic" | "relation" | "action" | "off_topic";
+    importance?: number;
+    relevance?: number;
+    off_topic?: boolean;
+    off_topic_reason?: string;
+    anchor?: string;
   }>;
 }
 

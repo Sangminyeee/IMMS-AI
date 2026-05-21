@@ -60,7 +60,7 @@ import type {
   TranscriptUtterance,
 } from "@/lib/types";
 import type { LiveSpeechPreview, SttFlowSummaryItem } from "@/app/page";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export type MeetingTranscript = {
   id: string;
@@ -783,6 +783,24 @@ type IdeationKeywordBubble = {
   count: number;
   weight: number;
   related: string[];
+  kind?: "entity" | "topic" | "relation" | "action" | "off_topic";
+  importance?: number;
+  relevance?: number;
+  offTopic?: boolean;
+  offTopicReason?: string;
+  anchorText?: string;
+  activity?: number;
+  opacity?: number;
+};
+
+type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
+  activity: number;
+  opacity: number;
+  size: number;
+  targetX: number;
+  targetY: number;
+  firstSeenTick: number;
+  lastSeenTick: number;
 };
 
 type IdeationKeywordBubblePlacement = {
@@ -790,6 +808,7 @@ type IdeationKeywordBubblePlacement = {
   x: number;
   y: number;
   size: number;
+  opacity?: number;
 };
 
 type IdeationKeywordBubbleClusterBox = {
@@ -2174,15 +2193,45 @@ function buildIdeationKeywordUtterances(transcripts: MeetingTranscript[]) {
     }));
 }
 
+function normalizeIdeationKeywordBubbleKind(value: unknown): IdeationKeywordBubble["kind"] {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "entity" || normalized === "topic" || normalized === "relation" || normalized === "action" || normalized === "off_topic") {
+    return normalized;
+  }
+  return "topic";
+}
+
 function normalizeIdeationKeywordBubblesFromResponse(
-  keywords: Array<{ text?: string; count?: number; related?: string[] }>,
+  keywords: Array<{
+    text?: string;
+    count?: number;
+    related?: string[];
+    kind?: string;
+    importance?: number;
+    relevance?: number;
+    off_topic?: boolean;
+    offTopic?: boolean;
+    off_topic_reason?: string;
+    offTopicReason?: string;
+    anchor?: string;
+    anchor_text?: string;
+  }>,
 ): IdeationKeywordBubble[] {
   const normalized = keywords
-    .map((keyword) => ({
-      text: String(keyword.text || "").trim(),
-      count: Math.max(1, Number(keyword.count || 1)),
-      related: (keyword.related || []).map((item) => String(item || "").trim()).filter(Boolean),
-    }))
+    .map((keyword) => {
+      const kind = normalizeIdeationKeywordBubbleKind(keyword.kind);
+      return {
+        text: String(keyword.text || "").trim(),
+        count: Math.max(1, Number(keyword.count || 1)),
+        related: (keyword.related || []).map((item) => String(item || "").trim()).filter(Boolean),
+        kind,
+        importance: clampNumber(Number(keyword.importance ?? 0.65), 0, 1),
+        relevance: clampNumber(Number(keyword.relevance ?? 1), 0, 1),
+        offTopic: Boolean(keyword.off_topic || keyword.offTopic || kind === "off_topic"),
+        offTopicReason: String(keyword.off_topic_reason || keyword.offTopicReason || "").trim(),
+        anchorText: String(keyword.anchor || keyword.anchor_text || "").trim(),
+      };
+    })
     .filter((keyword) => keyword.text.length >= 2);
   const maxCount = Math.max(1, ...normalized.map((keyword) => keyword.count));
   const selectedTexts = new Set(normalized.map((keyword) => keyword.text));
@@ -2192,6 +2241,12 @@ function normalizeIdeationKeywordBubblesFromResponse(
     count: keyword.count,
     weight: keyword.count / maxCount,
     related: keyword.related.filter((item) => selectedTexts.has(item) && item !== keyword.text).slice(0, 5),
+    kind: keyword.offTopic ? "off_topic" : keyword.kind,
+    importance: keyword.importance,
+    relevance: keyword.relevance,
+    offTopic: keyword.offTopic,
+    offTopicReason: keyword.offTopicReason,
+    anchorText: selectedTexts.has(keyword.anchorText) && keyword.anchorText !== keyword.text ? keyword.anchorText : "",
   }));
 }
 
@@ -2513,6 +2568,12 @@ const CANVAS_IDEATION_BUBBLE_CLUSTER_GAP = 145;
 const CANVAS_IDEATION_BUBBLE_CLUSTER_MAX_ITEMS = 6;
 const CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP = 0.06;
 const CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS = 600;
+const CANVAS_IDEATION_BUBBLE_MIN_OPACITY = 0.22;
+const CANVAS_IDEATION_BUBBLE_DECAY_RATE = 0.72;
+const CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE = 260;
+const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
+const CANVAS_IDEATION_BUBBLE_TRANSITION =
+  "transform 560ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease, width 420ms ease, height 420ms ease";
 
 function stripKoreanKeywordSuffixes(token: string) {
   let normalized = token;
@@ -3070,12 +3131,289 @@ function buildIdeationKeywordBubblePlacements(
   return applyIdeationBubbleGrowthDisplacement(placedBubbles, growthById);
 }
 
+function getIdeationBubbleVisualSize(
+  bubble: IdeationKeywordBubble,
+  maxCount: number,
+  activity: number,
+  growth = 1,
+) {
+  const baseSize = getIdeationKeywordBubbleSize(bubble, maxCount, growth);
+  return Math.round(baseSize * (0.82 + clampNumber(activity, 0, 1) * 0.18));
+}
+
+function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
+  const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
+  const emphasis = clampNumber(activity * relevance, 0, 1);
+  const minimum = bubble.offTopic || bubble.kind === "off_topic" ? 0.32 : CANVAS_IDEATION_BUBBLE_MIN_OPACITY;
+  return Number(clampNumber(minimum + emphasis * (1 - minimum), minimum, 1).toFixed(3));
+}
+
+function getIdeationBubbleIncomingActivity(bubble: IdeationKeywordBubble) {
+  const weight = clampNumber(Number(bubble.weight || 0.5), 0, 1);
+  const importance = clampNumber(Number(bubble.importance ?? weight), 0, 1);
+  const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
+  return clampNumber(0.26 + Math.max(weight, importance) * 0.52 + relevance * 0.22, 0.2, 1);
+}
+
+function clampIdeationBubblePosition(x: number, y: number, size: number) {
+  return {
+    x: clampNumber(x, 70, CANVAS_IDEATION_BUBBLE_PLANE_WIDTH - size - 70),
+    y: clampNumber(y, 80, CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT - size - 70),
+  };
+}
+
+function findIdeationBubbleVisualByText(
+  visuals: IdeationKeywordBubbleVisual[],
+  text?: string,
+) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return visuals.find((visual) => visual.text.trim().toLowerCase() === normalized) || null;
+}
+
+function findIdeationBubbleAnchorVisual(
+  bubble: IdeationKeywordBubble,
+  visuals: IdeationKeywordBubbleVisual[],
+) {
+  const directAnchor = findIdeationBubbleVisualByText(visuals, bubble.anchorText);
+  if (directAnchor) return directAnchor;
+  for (const relatedText of bubble.related || []) {
+    const related = findIdeationBubbleVisualByText(visuals, relatedText);
+    if (related) return related;
+  }
+  return null;
+}
+
+function isIdeationBubblePositionOpen(
+  candidate: { id: string; x: number; y: number; size: number },
+  occupied: Array<{ id: string; x: number; y: number; size: number }>,
+) {
+  return occupied.every((placement) => (
+    placement.id === candidate.id ||
+    !ideationBubbleCirclesOverlap(candidate, placement, CANVAS_IDEATION_BUBBLE_ORGANIC_GAP + 4)
+  ));
+}
+
+function findStableIdeationBubbleTarget(
+  bubble: IdeationKeywordBubble,
+  size: number,
+  visuals: IdeationKeywordBubbleVisual[],
+  occupied: Array<{ id: string; x: number; y: number; size: number }>,
+  tick: number,
+) {
+  const anchor = findIdeationBubbleAnchorVisual(bubble, visuals);
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+  if (anchor) {
+    const anchorCenterX = anchor.targetX + anchor.size / 2;
+    const anchorCenterY = anchor.targetY + anchor.size / 2;
+    const seedAngle = ideationBubbleSeedRatio(`${bubble.id}:${anchor.id}`, 17) * Math.PI * 2;
+    for (let attempt = 0; attempt < 96; attempt += 1) {
+      const ring = Math.floor(attempt / 20);
+      const angle = seedAngle + attempt * goldenAngle;
+      const radius = anchor.size / 2 + size / 2 + 22 + ring * 24;
+      const raw = {
+        x: anchorCenterX + Math.cos(angle) * radius - size / 2,
+        y: anchorCenterY + Math.sin(angle) * radius - size / 2,
+      };
+      const candidate = { id: bubble.id, size, ...clampIdeationBubblePosition(raw.x, raw.y, size) };
+      if (isIdeationBubblePositionOpen(candidate, occupied)) {
+        return { x: candidate.x, y: candidate.y };
+      }
+    }
+  }
+
+  const centerX = CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2;
+  const centerY = CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2;
+  const seedAngle = ideationBubbleSeedRatio(`${bubble.id}:${tick}`, 29) * Math.PI * 2;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    const radius = Math.sqrt(attempt + 1) * 78;
+    const angle = seedAngle + attempt * goldenAngle;
+    const raw = {
+      x: centerX + Math.cos(angle) * radius - size / 2,
+      y: centerY + Math.sin(angle) * radius * 0.72 - size / 2,
+    };
+    const candidate = { id: bubble.id, size, ...clampIdeationBubblePosition(raw.x, raw.y, size) };
+    if (isIdeationBubblePositionOpen(candidate, occupied)) {
+      return { x: candidate.x, y: candidate.y };
+    }
+  }
+
+  return clampIdeationBubblePosition(
+    centerX + ideationBubbleSeedRatio(bubble.id, 31) * 240 - 120,
+    centerY + ideationBubbleSeedRatio(bubble.id, 37) * 180 - 90,
+    size,
+  );
+}
+
+function getIdeationBubbleCenter(bubble: Pick<IdeationKeywordBubbleVisual, "targetX" | "targetY" | "size">) {
+  return {
+    x: bubble.targetX + bubble.size / 2,
+    y: bubble.targetY + bubble.size / 2,
+  };
+}
+
+function limitIdeationBubbleTargetShift(
+  current: { x: number; y: number },
+  target: { x: number; y: number },
+) {
+  const dx = target.x - current.x;
+  const dy = target.y - current.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  if (distance <= CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE || distance < 0.001) {
+    return target;
+  }
+
+  const ratio = CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE / distance;
+  return {
+    x: current.x + dx * ratio,
+    y: current.y + dy * ratio,
+  };
+}
+
+function applyIdeationBubbleProximityRetarget(
+  visuals: IdeationKeywordBubbleVisual[],
+  incomingIds: Set<string>,
+  tick: number,
+) {
+  const nextVisuals = visuals.map((visual) => ({ ...visual }));
+  const occupied = nextVisuals.map((visual) => ({
+    id: visual.id,
+    x: visual.targetX,
+    y: visual.targetY,
+    size: visual.size,
+  }));
+
+  nextVisuals.forEach((visual, index) => {
+    if (!incomingIds.has(visual.id)) return;
+    const anchor = findIdeationBubbleAnchorVisual(visual, nextVisuals);
+    if (!anchor || anchor.id === visual.id) return;
+
+    const visualCenter = getIdeationBubbleCenter(visual);
+    const anchorCenter = getIdeationBubbleCenter(anchor);
+    const dx = visualCenter.x - anchorCenter.x;
+    const dy = visualCenter.y - anchorCenter.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance <= CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE) return;
+
+    const target = findStableIdeationBubbleTarget(visual, visual.size, nextVisuals, occupied, tick);
+    const limitedTarget = limitIdeationBubbleTargetShift(
+      { x: visual.targetX, y: visual.targetY },
+      target,
+    );
+    const clampedTarget = clampIdeationBubblePosition(limitedTarget.x, limitedTarget.y, visual.size);
+    visual.targetX = clampedTarget.x;
+    visual.targetY = clampedTarget.y;
+    occupied[index] = { id: visual.id, x: visual.targetX, y: visual.targetY, size: visual.size };
+  });
+
+  return nextVisuals;
+}
+
+function buildStableIdeationBubbleVisuals(
+  previousVisuals: IdeationKeywordBubbleVisual[],
+  incomingBubbles: IdeationKeywordBubble[],
+  growthById: Record<string, number>,
+  tick: number,
+) {
+  const incomingById = new Map(incomingBubbles.map((bubble) => [bubble.id, bubble]));
+  const incomingIds = new Set(incomingById.keys());
+  const maxCount = Math.max(
+    1,
+    ...previousVisuals.map((bubble) => bubble.count),
+    ...incomingBubbles.map((bubble) => bubble.count),
+  );
+
+  if (previousVisuals.length === 0 && incomingBubbles.length > 0) {
+    return buildIdeationKeywordBubblePlacements(incomingBubbles, growthById, tick).map(({ bubble, x, y, size }) => {
+      const activity = getIdeationBubbleIncomingActivity(bubble);
+      return {
+        ...bubble,
+        activity,
+        opacity: getIdeationBubbleVisualOpacity(bubble, activity),
+        size,
+        targetX: x,
+        targetY: y,
+        firstSeenTick: tick,
+        lastSeenTick: tick,
+      };
+    });
+  }
+
+  const nextVisuals = previousVisuals.map((visual) => {
+    const incoming = incomingById.get(visual.id);
+    const isActive = Boolean(incoming);
+    const merged = incoming ? { ...visual, ...incoming } : visual;
+    const nextActivity = isActive
+      ? clampNumber(Math.max(visual.activity, 0.5) * 0.35 + getIdeationBubbleIncomingActivity(incoming || visual) * 0.65, 0.18, 1)
+      : clampNumber(visual.activity * CANVAS_IDEATION_BUBBLE_DECAY_RATE, 0.08, 1);
+    const size = getIdeationBubbleVisualSize(merged, maxCount, nextActivity, growthById[visual.id] || 1);
+    const centerX = visual.targetX + visual.size / 2;
+    const centerY = visual.targetY + visual.size / 2;
+    const position = clampIdeationBubblePosition(centerX - size / 2, centerY - size / 2, size);
+    return {
+      ...merged,
+      activity: nextActivity,
+      opacity: getIdeationBubbleVisualOpacity(merged, nextActivity),
+      size,
+      targetX: position.x,
+      targetY: position.y,
+      firstSeenTick: visual.firstSeenTick,
+      lastSeenTick: isActive ? tick : visual.lastSeenTick,
+    };
+  });
+
+  const occupied = nextVisuals.map((visual) => ({
+    id: visual.id,
+    x: visual.targetX,
+    y: visual.targetY,
+    size: visual.size,
+  }));
+
+  incomingBubbles.forEach((bubble) => {
+    if (previousVisuals.some((visual) => visual.id === bubble.id)) return;
+    const activity = getIdeationBubbleIncomingActivity(bubble);
+    const size = getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
+    const target = findStableIdeationBubbleTarget(bubble, size, nextVisuals, occupied, tick);
+    const visual: IdeationKeywordBubbleVisual = {
+      ...bubble,
+      activity,
+      opacity: getIdeationBubbleVisualOpacity(bubble, activity),
+      size,
+      targetX: target.x,
+      targetY: target.y,
+      firstSeenTick: tick,
+      lastSeenTick: tick,
+    };
+    nextVisuals.push(visual);
+    occupied.push({ id: visual.id, x: visual.targetX, y: visual.targetY, size: visual.size });
+  });
+
+  return applyIdeationBubbleProximityRetarget(nextVisuals, incomingIds, tick).sort((left, right) => {
+    const leftActive = incomingIds.has(left.id) ? 1 : 0;
+    const rightActive = incomingIds.has(right.id) ? 1 : 0;
+    return rightActive - leftActive || left.firstSeenTick - right.firstSeenTick;
+  });
+}
+
 function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble, size: number) {
   const fontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
+  const offTopic = bubble.offTopic || bubble.kind === "off_topic";
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center rounded-full border border-[#a13ab8]/10 bg-white/90 px-4 text-center font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_18px_44px_rgba(161,58,184,0.14)] backdrop-blur">
+    <div
+      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Inter','Noto_Sans_KR',sans-serif] backdrop-blur ${
+        offTopic
+          ? "border-[#ef4e4e]/35 bg-[#fff5f5]/92 shadow-[0_18px_44px_rgba(239,78,78,0.13)]"
+          : "border-[#a13ab8]/10 bg-white/90 shadow-[0_18px_44px_rgba(161,58,184,0.14)]"
+      }`}
+    >
+      {offTopic && size >= 92 ? (
+        <span className="mb-1 rounded-full bg-[#ef4e4e]/10 px-2 py-0.5 text-[10px] font-semibold leading-none text-[#b23b3b]">
+          이탈
+        </span>
+      ) : null}
       <strong
-        className="max-w-full whitespace-nowrap font-semibold text-[#a13ab8]"
+        className={`max-w-full whitespace-nowrap font-semibold ${offTopic ? "text-[#b23b3b]" : "text-[#a13ab8]"}`}
         style={{
           fontSize,
           lineHeight: 1.08,
@@ -4499,6 +4837,15 @@ export default function MeetingCanvasTab({
   recordingStatusText = "",
 }: MeetingCanvasTabProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const captureStageParam = searchParams.get("capture_stage");
+  const captureStageOverride: CanvasStage | "" =
+    captureStageParam === "ideation" || captureStageParam === "problem-definition" || captureStageParam === "solution"
+      ? captureStageParam
+      : "";
+  const captureProblemPhaseParam = searchParams.get("capture_problem_phase");
+  const captureProblemPhaseOverride: ProblemDefinitionPhase | "" =
+    captureProblemPhaseParam === "explore" || captureProblemPhaseParam === "structure" ? captureProblemPhaseParam : "";
   const [stage, setStage] = useState<CanvasStage>("ideation");
   const [, setComposerTool] = useState<ComposerTool>("note");
   const [armedCanvasTool, setArmedCanvasTool] = useState<CanvasTool | null>(null);
@@ -4553,6 +4900,7 @@ export default function MeetingCanvasTab({
   const [quickAskUnreadCount, setQuickAskUnreadCount] = useState(0);
   const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
   const [llmIdeationKeywordSignature, setLlmIdeationKeywordSignature] = useState("");
+  const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
   const [ideationBubbleDebugEnabled, setIdeationBubbleDebugEnabled] = useState(false);
   const [ideationBubbleDebugGrowthById, setIdeationBubbleDebugGrowthById] = useState<Record<string, number>>({});
   const [ideationBubbleLayoutRevision, setIdeationBubbleLayoutRevision] = useState(0);
@@ -4698,6 +5046,7 @@ export default function MeetingCanvasTab({
   const previousCanvasItemSignaturesRef = useRef<Record<string, string>>({});
   const pendingNodePlacementsRef = useRef<Record<string, { x: number; y: number }>>({});
   const hoveredProblemDropTargetElementRef = useRef<HTMLElement | null>(null);
+  const ideationBubbleUpdateTickRef = useRef(0);
 
   useEffect(() => {
     quickAskOpenRef.current = quickAskOpen;
@@ -4806,13 +5155,14 @@ export default function MeetingCanvasTab({
   const ideationKeywordSourceSignature = useMemo(
     () =>
       makeStableSignature({
-        version: 1,
+        version: 2,
+        meetingTopic: meetingTopicForAi,
         utterances: ideationKeywordUtterances.map((row) => ({
           id: row.id,
           text: row.text,
         })),
       }),
-    [ideationKeywordUtterances],
+    [ideationKeywordUtterances, meetingTopicForAi],
   );
   const activeIdeationKeywordBubbles = useMemo(() => {
     if (
@@ -4821,28 +5171,50 @@ export default function MeetingCanvasTab({
     ) {
       return llmIdeationKeywordBubbles;
     }
-    return localIdeationKeywordBubbles;
+    if (!meetingId) {
+      return localIdeationKeywordBubbles;
+    }
+    return [];
   }, [
     ideationKeywordSourceSignature,
     llmIdeationKeywordBubbles,
     llmIdeationKeywordSignature,
     localIdeationKeywordBubbles,
+    meetingId,
   ]);
   useEffect(() => {
-    const activeIds = new Set(activeIdeationKeywordBubbles.map((bubble) => bubble.id));
+    ideationBubbleUpdateTickRef.current = 0;
+    setIdeationBubbleVisuals([]);
+    setIdeationBubbleDebugGrowthById({});
+  }, [meetingId]);
+  useEffect(() => {
+    if (activeIdeationKeywordBubbles.length === 0) return;
+    const tick = ideationBubbleUpdateTickRef.current + 1;
+    ideationBubbleUpdateTickRef.current = tick;
+    setIdeationBubbleVisuals((current) =>
+      buildStableIdeationBubbleVisuals(
+        current,
+        activeIdeationKeywordBubbles,
+        ideationBubbleDebugGrowthById,
+        tick,
+      ),
+    );
+  }, [activeIdeationKeywordBubbles, ideationBubbleDebugGrowthById]);
+  useEffect(() => {
+    const activeIds = new Set(ideationBubbleVisuals.map((bubble) => bubble.id));
     setIdeationBubbleDebugGrowthById((current) => {
       const next = Object.fromEntries(Object.entries(current).filter(([id]) => activeIds.has(id)));
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
-  }, [activeIdeationKeywordBubbles]);
+  }, [ideationBubbleVisuals]);
   useEffect(() => {
-    if (activeIdeationKeywordBubbles.length === 0) {
+    if (ideationBubbleVisuals.length === 0) {
       setIdeationBubbleDebugGrowthById({});
       return undefined;
     }
     if (!ideationBubbleDebugEnabled || stage !== "ideation") return undefined;
 
-    const activeIds = activeIdeationKeywordBubbles.map((bubble) => bubble.id);
+    const activeIds = ideationBubbleVisuals.map((bubble) => bubble.id);
     const selectDebugBubbles = () => {
       const shuffledIds = [...activeIds];
       for (let index = shuffledIds.length - 1; index > 0; index -= 1) {
@@ -4863,7 +5235,7 @@ export default function MeetingCanvasTab({
     selectDebugBubbles();
     const intervalId = window.setInterval(selectDebugBubbles, CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [activeIdeationKeywordBubbles, ideationBubbleDebugEnabled, stage]);
+  }, [ideationBubbleVisuals, ideationBubbleDebugEnabled, stage]);
   const problemStructureStatePayload = useMemo(
     () =>
       buildProblemStructureStatePayload({
@@ -5074,10 +5446,15 @@ export default function MeetingCanvasTab({
         meeting_id: meetingId,
         meeting_topic: meetingTopicForAi,
         utterances: ideationKeywordUtterances,
-        max_keywords: 18,
+        max_keywords: 12,
       })
         .then((result) => {
           if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
+          if (!result.used_llm) {
+            setLlmIdeationKeywordBubbles([]);
+            setLlmIdeationKeywordSignature(ideationKeywordSourceSignature);
+            return;
+          }
           const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || []);
           setLlmIdeationKeywordBubbles(nextBubbles);
           setLlmIdeationKeywordSignature(ideationKeywordSourceSignature);
@@ -5431,6 +5808,14 @@ export default function MeetingCanvasTab({
             savedLocalCanvasState?.stage === "ideation")
             ? savedLocalCanvasState.stage
             : sharedStage;
+        const displayStage = captureStageOverride || nextStage;
+        const displayProblemStructure =
+          displayStage === "problem-definition" && captureProblemPhaseOverride
+            ? {
+                ...nextProblemStructure,
+                phase: captureProblemPhaseOverride,
+              }
+            : nextProblemStructure;
         const nextSolutionTopics = shouldUseLocalCanvas
           ? hydrateSolutionTopics(savedLocalCanvasState?.solution_topics || [], nextGroups, sharedSolutionTopics)
           : sharedSolutionTopics;
@@ -5474,29 +5859,29 @@ export default function MeetingCanvasTab({
         setSharedSyncEnabled(nextSharedSyncEnabled);
         setNodePositions(nextNodePositions);
         setImportedState(nextImportedState);
-        setProblemDefinitionMode(nextProblemStructure.mode);
-        setProblemDefinitionPhase(nextProblemStructure.phase);
-        setProblemStructureMethod(nextProblemStructure.method);
-        setProblemStructureDraftMethod(nextProblemStructure.method);
-        setProblemStructureDraftMode(nextProblemStructure.mode || "ai");
+        setProblemDefinitionMode(displayProblemStructure.mode);
+        setProblemDefinitionPhase(displayProblemStructure.phase);
+        setProblemStructureMethod(displayProblemStructure.method);
+        setProblemStructureDraftMethod(displayProblemStructure.method);
+        setProblemStructureDraftMode(displayProblemStructure.mode || "ai");
         setProblemStructureSetupOpen(false);
-        setProblemStructureNodes(nextProblemStructure.nodes);
-        setProblemStructureGroups(nextProblemStructure.groups);
+        setProblemStructureNodes(displayProblemStructure.nodes);
+        setProblemStructureGroups(displayProblemStructure.groups);
         setProblemStructurePending(false);
         analysisSignatureAtImportRef.current = nextImportedState
           ? buildMeetingStateSignature(nextImportedState)
           : "";
         setImportOverrideActive(nextImportOverrideActive);
-        setStage(nextStage);
+        setStage(displayStage);
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           meeting_goal: nextMeetingGoal,
           meeting_goal_context: nextMeetingGoalContext,
-          stage: nextStage,
+          stage: displayStage,
           agenda_overrides: nextAgendaOverrides,
           canvas_items: nextCanvasItems,
           custom_groups: serializeCustomGroups(nextCustomGroups),
           problem_groups: nextGroups,
-          problem_structure: buildProblemStructureStatePayload(nextProblemStructure),
+          problem_structure: buildProblemStructureStatePayload(displayProblemStructure),
           solution_topics: serializeSharedSolutionTopics(nextSolutionTopics),
           final_solution_summary: buildFinalSolutionSummaryPayload(nextSolutionTopics, nextFinalSummary),
           node_positions: nextNodePositions,
@@ -5505,24 +5890,24 @@ export default function MeetingCanvasTab({
         lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
           meetingGoal: nextMeetingGoal,
           meetingGoalContext: nextMeetingGoalContext,
-          stage: nextStage,
+          stage: displayStage,
           agendaOverrides: nextAgendaOverrides,
           canvasItems: nextCanvasItems,
           customGroups: nextCustomGroups,
           problemGroups: nextGroups,
-          problemStructure: buildProblemStructureStatePayload(nextProblemStructure),
+          problemStructure: buildProblemStructureStatePayload(displayProblemStructure),
           solutionTopics: nextSolutionTopics,
           finalSolutionSummary: nextFinalSummary,
           nodePositions: nextNodePositions,
           importedState: nextImportedState,
         });
-        setSelectedProblemGroupId(nextProblemStructure.phase === "structure" ? "" : nextGroups[0]?.group_id || "");
+        setSelectedProblemGroupId(displayProblemStructure.phase === "structure" ? "" : nextGroups[0]?.group_id || "");
         setSelectedSolutionTopicId(nextSolutionTopics[0]?.group_id || "");
         setSelectedCanvasItemId("");
         setSelectedNodeId(
-          nextStage === "problem-definition"
-            ? (nextProblemStructure.phase === "structure" ? "" : nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "")
-            : nextStage === "solution"
+          displayStage === "problem-definition"
+            ? (displayProblemStructure.phase === "structure" ? "" : nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "")
+            : displayStage === "solution"
               ? (nextSolutionTopics[0] ? `solution-${nextSolutionTopics[0].group_id}` : "")
               : "",
         );
@@ -5533,7 +5918,7 @@ export default function MeetingCanvasTab({
           meetingId,
           sharedSyncEnabled: nextSharedSyncEnabled,
           usingLocalCanvas: shouldUseLocalCanvas,
-          stage: nextStage,
+          stage: displayStage,
           canvasItems: nextCanvasItems.length,
           customGroups: nextCustomGroups.length,
           usedCachedNodePositions:
@@ -5616,7 +6001,14 @@ export default function MeetingCanvasTab({
     return () => {
       cancelled = true;
     };
-  }, [meetingId, onMeetingGoalChange, onMeetingGoalContextChange, userId]);
+  }, [
+    captureProblemPhaseOverride,
+    captureStageOverride,
+    meetingId,
+    onMeetingGoalChange,
+    onMeetingGoalContextChange,
+    userId,
+  ]);
 
   useEffect(() => {
     if (audioImportRevision <= 0) {
@@ -6699,6 +7091,7 @@ export default function MeetingCanvasTab({
   useEffect(() => {
     if (
       !meetingId ||
+      captureStageOverride ||
       !workspaceLoadedRef.current ||
       workspaceHydratingRef.current ||
       problemDefinitionStagePending ||
@@ -6834,6 +7227,7 @@ export default function MeetingCanvasTab({
     };
   }, [
     agendaOverrides,
+    captureStageOverride,
     canvasItems,
     conclusionBatchBusy,
     customGroups,
@@ -7317,6 +7711,7 @@ export default function MeetingCanvasTab({
       incomingSharedCanvasSync.stage === "solution"
         ? incomingSharedCanvasSync.stage
             : "ideation";
+    const displayIncomingStage = captureStageOverride || incomingStage;
     const incomingCanvasItems = hydrateCanvasItems(incomingSharedCanvasSync.canvas_items || []);
     const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
     const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
@@ -7363,7 +7758,14 @@ export default function MeetingCanvasTab({
       incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState(),
       nextProblemGroups,
     );
-    const nextProblemStructurePayload = buildProblemStructureStatePayload(nextProblemStructure);
+    const displayIncomingProblemStructure =
+      displayIncomingStage === "problem-definition" && captureProblemPhaseOverride
+        ? {
+            ...nextProblemStructure,
+            phase: captureProblemPhaseOverride,
+          }
+        : nextProblemStructure;
+    const nextProblemStructurePayload = buildProblemStructureStatePayload(displayIncomingProblemStructure);
     const incomingSolutionTopics = hydrateSolutionTopics(
       incomingSharedCanvasSync.solution_topics || [],
       nextProblemGroups,
@@ -7384,7 +7786,7 @@ export default function MeetingCanvasTab({
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
       meeting_goal: incomingMeetingGoal,
       meeting_goal_context: incomingMeetingGoalContext,
-      stage: incomingStage,
+      stage: displayIncomingStage,
       agenda_overrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvas_items: nextIncomingCanvasItems,
       custom_groups: serializeCustomGroups(incomingCustomGroups),
@@ -7398,13 +7800,13 @@ export default function MeetingCanvasTab({
     applyingRemoteSharedSyncRef.current = true;
 
     setProblemGroups(nextProblemGroups);
-    setProblemDefinitionMode(nextProblemStructure.mode);
-    setProblemDefinitionPhase(nextProblemStructure.phase);
-    setProblemStructureMethod(nextProblemStructure.method);
-    setProblemStructureDraftMethod(nextProblemStructure.method);
-    setProblemStructureDraftMode(nextProblemStructure.mode || "ai");
-    setProblemStructureNodes(nextProblemStructure.nodes);
-    setProblemStructureGroups(nextProblemStructure.groups);
+    setProblemDefinitionMode(displayIncomingProblemStructure.mode);
+    setProblemDefinitionPhase(displayIncomingProblemStructure.phase);
+    setProblemStructureMethod(displayIncomingProblemStructure.method);
+    setProblemStructureDraftMethod(displayIncomingProblemStructure.method);
+    setProblemStructureDraftMode(displayIncomingProblemStructure.mode || "ai");
+    setProblemStructureNodes(displayIncomingProblemStructure.nodes);
+    setProblemStructureGroups(displayIncomingProblemStructure.groups);
     setProblemStructurePending(false);
     setSolutionTopics(nextSolutionTopics);
     setFinalSummaryDocument(nextFinalSummary);
@@ -7435,11 +7837,11 @@ export default function MeetingCanvasTab({
       analysisSignatureAtImportRef.current = "";
       setImportOverrideActive(false);
     }
-    setStage(incomingStage);
+    setStage(displayIncomingStage);
     lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
       meetingGoal: incomingMeetingGoal,
       meetingGoalContext: incomingMeetingGoalContext,
-      stage: incomingStage,
+      stage: displayIncomingStage,
       agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvasItems: nextIncomingCanvasItems,
       customGroups: incomingCustomGroups,
@@ -7451,12 +7853,12 @@ export default function MeetingCanvasTab({
       importedState: incomingSharedCanvasSync.imported_state || null,
     });
     setLeftPanelTab("detail");
-    if (incomingStage === "problem-definition") {
-      const nextGroupId = nextProblemStructure.phase === "structure" ? "" : nextProblemGroups[0]?.group_id || "";
+    if (displayIncomingStage === "problem-definition") {
+      const nextGroupId = displayIncomingProblemStructure.phase === "structure" ? "" : nextProblemGroups[0]?.group_id || "";
       setSelectedProblemGroupId(nextGroupId);
       setSelectedSolutionTopicId("");
       setSelectedNodeId(nextGroupId ? `problem-${nextGroupId}` : "");
-    } else if (incomingStage === "solution") {
+    } else if (displayIncomingStage === "solution") {
       const nextTopicId = nextSolutionTopics[0]?.group_id || "";
       setSelectedProblemGroupId("");
       setSelectedSolutionTopicId(nextTopicId);
@@ -7499,6 +7901,9 @@ export default function MeetingCanvasTab({
 
   useEffect(() => {
     const flushPendingCanvasState = () => {
+      if (captureStageOverride) {
+        return;
+      }
       if (
         meetingId &&
         latestSharedSyncEnabledRef.current &&
@@ -7527,7 +7932,7 @@ export default function MeetingCanvasTab({
     return () => {
       window.removeEventListener("pagehide", flushPendingCanvasState);
     };
-  }, [meetingId]);
+  }, [captureStageOverride, meetingId]);
 
   useEffect(() => {
     if (
@@ -9425,14 +9830,16 @@ export default function MeetingCanvasTab({
     }
 
     if (stage === "ideation") {
-      const bubbles = activeIdeationKeywordBubbles;
-      const bubblePlacements = buildIdeationKeywordBubblePlacements(
-        bubbles,
-        ideationBubbleDebugGrowthById,
-        ideationBubbleLayoutRevision,
-      );
+      const bubbles = ideationBubbleVisuals;
+      const bubblePlacements: IdeationKeywordBubblePlacement[] = bubbles.map((bubble) => ({
+        bubble,
+        x: bubble.targetX,
+        y: bubble.targetY,
+        size: bubble.size,
+        opacity: bubble.opacity,
+      }));
       const bubbleDescriptors: CanvasNodeDescriptor[] = bubbles.length > 0
-        ? bubblePlacements.map(({ bubble, x, y, size }) => {
+        ? bubblePlacements.map(({ bubble, x, y, size, opacity }) => {
             const debugGrowth = ideationBubbleDebugGrowthById[bubble.id] || 1;
             return {
               id: bubble.id,
@@ -9443,8 +9850,15 @@ export default function MeetingCanvasTab({
               positionSource: "computed" as const,
               sourcePosition: Position.Bottom,
               targetPosition: Position.Top,
-              className: "!border-0 !bg-transparent !p-0 !shadow-none",
-              style: { width: size, height: size, padding: 0 },
+              className: "imms-ideation-keyword-node pointer-events-none !border-0 !bg-transparent !p-0 !shadow-none",
+              style: {
+                width: size,
+                height: size,
+                padding: 0,
+                opacity: opacity ?? 1,
+                transition: CANVAS_IDEATION_BUBBLE_TRANSITION,
+                willChange: "transform, opacity, width, height",
+              },
               draggable: false,
               selectable: false,
               data: {
@@ -9454,6 +9868,11 @@ export default function MeetingCanvasTab({
                   bubble.count,
                   bubble.weight,
                   debugGrowth,
+                  bubble.activity,
+                  bubble.opacity,
+                  bubble.kind,
+                  bubble.offTopic,
+                  bubble.offTopicReason,
                   ...bubble.related,
                 ]),
                 label: makeIdeationKeywordBubbleNodeLabel(bubble, size),
@@ -9490,6 +9909,13 @@ export default function MeetingCanvasTab({
           ...bubbles.flatMap((bubble) => [
             bubble.text,
             bubble.count,
+            bubble.activity,
+            bubble.opacity,
+            bubble.targetX,
+            bubble.targetY,
+            bubble.size,
+            bubble.kind,
+            bubble.offTopic,
             ideationBubbleDebugGrowthById[bubble.id] || 1,
             ...bubble.related,
           ]),
@@ -9837,7 +10263,7 @@ export default function MeetingCanvasTab({
     };
   }, [
     stage,
-    activeIdeationKeywordBubbles,
+    ideationBubbleVisuals,
     ideationBubbleDebugGrowthById,
     ideationBubbleLayoutRevision,
     agendaModels,
@@ -13749,6 +14175,10 @@ export default function MeetingCanvasTab({
   };
 
   const handleCanvasNodeClick = (event: React.MouseEvent, node: Node) => {
+    if (node.id.startsWith("ideation-keyword-")) {
+      event.stopPropagation();
+      return;
+    }
     setSelectedEdgeId("");
     setSelectedNodeId(node.id);
     setLeftPanelTab("detail");

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import queue
@@ -233,6 +234,16 @@ def _safe_nonnegative_int(raw: Any, fallback: int = 0) -> int:
     except (TypeError, ValueError):
         return fallback
     return max(0, value)
+
+
+def _safe_float(raw: Any, fallback: float = 0) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(value):
+        return fallback
+    return value
 
 
 def _strip_leading_timestamp(raw: Any) -> str:
@@ -5132,25 +5143,33 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         ],
     }
     return (
-        "너는 아이디어 회의의 STT 전사에서 캔버스 버블로 보여줄 명사만 추출하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 아이디어 회의의 STT 전사에서 캔버스 버블로 보여줄 핵심 의미 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- 사람들이 지금 어떤 주제들을 말하고 있는지 보여줄 명사/고유명사/짧은 명사구를 추출한다.\n"
+        "- 사람들이 지금 어떤 주제들을 말하고 있는지 보여줄 핵심 명사/고유명사/짧은 명사구만 추출한다.\n"
         "- 반드시 실제 전사에 나온 내용에서만 뽑는다. 새 개념을 만들지 않는다.\n"
         "- 동사, 형용사, 서술어, filler, 접속사, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
-        "- 같은 문장이나 가까운 발화에서 함께 나온 명사는 related에 서로 연결한다.\n\n"
+        "- 한 발화에서 보통 1~3개만 고른다. 정말 핵심 개념이 많을 때만 더 고른다.\n"
+        "- 문장 안에서는 눈에 띄어도 meeting_topic과 최근 흐름에 약하면 relevance를 낮게 주거나 off_topic으로 표시한다.\n"
+        "- 같은 문장이나 가까운 발화에서 함께 나온 명사는 related에 서로 연결한다.\n"
+        "- '미중 갈등', '미중 경쟁'처럼 복합 표현은 anchor='미중', related=['갈등','경쟁']처럼 중심 개체와 관계 단어가 붙도록 설계한다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
         "{\n"
         '  "keywords": [\n'
-        '    {"text": "경복궁", "count": 3, "related": ["교통", "역사"]},\n'
-        '    {"text": "국립중앙박물관", "count": 2, "related": ["역사"]}\n'
+        '    {"text": "미중", "count": 3, "kind": "entity", "importance": 0.95, "relevance": 0.98, "related": ["경쟁", "갈등"]},\n'
+        '    {"text": "경쟁", "count": 2, "kind": "relation", "importance": 0.72, "relevance": 0.9, "anchor": "미중", "related": ["미중"]},\n'
+        '    {"text": "사진", "count": 1, "kind": "off_topic", "importance": 0.35, "relevance": 0.15, "off_topic": true, "off_topic_reason": "현재 논점과 직접 관련이 낮음", "related": []}\n'
         "  ]\n"
         "}\n\n"
         "[규칙]\n"
         f"- keywords는 최대 {int(payload.max_keywords or 18)}개.\n"
         "- text는 2~18자 정도의 명사 또는 짧은 명사구. 불필요하게 긴 문장은 금지한다.\n"
         "- count는 해당 명사/동의 표현이 등장한 발화 수에 가깝게 추정한다. 최소 1 이상.\n"
+        "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
+        "- importance는 회의 전체에서의 중요도, relevance는 현재 meeting_topic/최근 흐름과의 관련도이며 0~1 숫자다.\n"
+        "- off_topic은 딴소리/논점 이탈일 때만 true로 둔다. 단순히 중요도가 낮다는 이유만으로 true로 두지 않는다.\n"
+        "- anchor는 keywords 안에 있는 중심 text만 넣는다. 중심 버블이 없으면 빈 문자열로 둔다.\n"
         "- related에는 keywords 안에 있는 text만 넣는다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
@@ -5168,14 +5187,30 @@ def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]
             text = _normalize_ideation_keyword_text(item.get("text") or item.get("keyword") or item.get("noun"))
             raw_count = item.get("count")
             raw_related = item.get("related")
+            raw_kind = _safe_text(item.get("kind"), "topic").lower()
+            raw_importance = item.get("importance")
+            raw_relevance = item.get("relevance")
+            raw_off_topic = item.get("off_topic") or item.get("offTopic")
+            raw_off_topic_reason = item.get("off_topic_reason") or item.get("offTopicReason")
+            raw_anchor = item.get("anchor") or item.get("anchor_text")
         else:
             text = _normalize_ideation_keyword_text(item)
             raw_count = 1
             raw_related = []
+            raw_kind = "topic"
+            raw_importance = 0.6
+            raw_relevance = 1
+            raw_off_topic = False
+            raw_off_topic_reason = ""
+            raw_anchor = ""
         if not text or text in seen:
             continue
         seen.add(text)
         count = _safe_nonnegative_int(raw_count, 1) or 1
+        kind = raw_kind if raw_kind in {"entity", "topic", "relation", "action", "off_topic"} else "topic"
+        off_topic = _boolify(raw_off_topic, False)
+        importance = _safe_float(raw_importance, 0.65)
+        relevance = _safe_float(raw_relevance, 1)
         related = [
             _normalize_ideation_keyword_text(value)
             for value in (raw_related if isinstance(raw_related, list) else [])
@@ -5184,6 +5219,12 @@ def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]
             {
                 "text": text,
                 "count": max(1, count),
+                "kind": "off_topic" if off_topic or kind == "off_topic" else kind,
+                "importance": max(0, min(1, importance)),
+                "relevance": max(0, min(1, relevance)),
+                "off_topic": bool(off_topic or kind == "off_topic"),
+                "off_topic_reason": _safe_text(raw_off_topic_reason),
+                "anchor": _normalize_ideation_keyword_text(raw_anchor),
                 "related": _dedup_preserve([value for value in related if value], limit=5),
             }
         )
@@ -5193,6 +5234,8 @@ def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]
     selected_texts = {item["text"] for item in candidates}
     for item in candidates:
         item["related"] = [value for value in item.get("related", []) if value in selected_texts and value != item["text"]]
+        if item.get("anchor") not in selected_texts or item.get("anchor") == item["text"]:
+            item["anchor"] = ""
     return candidates or fallback
 
 
@@ -11993,7 +12036,7 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
     max_keywords = int(payload.max_keywords or 18)
     signature = _canvas_llm_signature(
         {
-            "version": 1,
+            "version": 2,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "max_keywords": max_keywords,
             "rows": rows,
