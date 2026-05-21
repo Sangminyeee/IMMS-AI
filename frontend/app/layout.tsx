@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { CSSProperties, ReactNode } from "react";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { FigmaCaptureDebugButton } from "@/components/FigmaCaptureDebugButton";
 
 export const metadata: Metadata = {
   title: "IMMS Meeting AI Assistant",
@@ -25,9 +26,12 @@ export default function RootLayout({ children }: Readonly<RootLayoutProps>) {
   return (
     <html lang="ko">
       <body style={fontVariables}>
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+        <div data-imms-figma-capture-root>
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </div>
+        <FigmaCaptureDebugButton />
       </body>
     </html>
   );
