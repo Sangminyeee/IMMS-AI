@@ -1033,6 +1033,38 @@ async def websocket_endpoint(
                     'client_seq': client_seq,
                 }, exclude_user=user_id)
 
+            elif message_type == 'canvas_edit_presence':
+                target_type = str(message.get('target_type') or '').strip()
+                if target_type not in {
+                    'agenda',
+                    'canvas_item',
+                    'problem_group',
+                    'problem_structure_group',
+                    'problem_structure_node',
+                    'solution_topic',
+                    'solution_note',
+                }:
+                    continue
+
+                target_id = str(message.get('target_id') or '').strip()
+                if not target_id:
+                    continue
+
+                status = str(message.get('status') or 'start').strip()
+                if status not in {'start', 'stop'}:
+                    status = 'start'
+
+                await broadcast_to_meeting(meeting_id, {
+                    'type': 'canvas_edit_presence',
+                    'meeting_id': meeting_id,
+                    'target_type': target_type,
+                    'target_id': target_id,
+                    'note_id': str(message.get('note_id') or '').strip(),
+                    'status': status,
+                    'updated_by': user_id,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, exclude_user=user_id)
+
             elif message_type == 'meeting_goal_sync':
                 meeting_goal = str(message.get("meeting_goal") or "").strip()
                 meeting_goal_context = str(message.get("meeting_goal_context") or "").strip()

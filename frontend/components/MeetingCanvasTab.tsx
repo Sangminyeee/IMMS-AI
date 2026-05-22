@@ -44,6 +44,7 @@ import type {
   AgendaActionItemDetail,
   AgendaDecisionDetail,
   CanvasCustomGroup,
+  CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
   CanvasLocalState,
   CanvasNodePreviewPayload,
@@ -870,6 +871,24 @@ type ProblemIdeaPointerDragState = {
   active: boolean;
 };
 
+type LocalEditPresenceTarget = {
+  targetType: CanvasEditPresencePayload["target_type"];
+  targetId: string;
+  noteId?: string;
+};
+
+function makeEditPresenceKey(targetType: CanvasEditPresencePayload["target_type"], targetId: string, noteId = "") {
+  return `${targetType}:${targetId}:${noteId}`;
+}
+
+function renderEditPresenceBadge(label = "수정중") {
+  return (
+    <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+      {label}
+    </span>
+  );
+}
+
 type MeetingCanvasTabProps = {
   userId: string;
   meetingId: string;
@@ -887,6 +906,8 @@ type MeetingCanvasTabProps = {
   onSharedCanvasSync: (payload: CanvasRealtimeSyncPayload) => void;
   incomingNodePreview: CanvasNodePreviewPayload | null;
   onNodePreviewSync: (payload: CanvasNodePreviewPayload) => void;
+  incomingEditPresence: CanvasEditPresencePayload | null;
+  onEditPresenceSync: (payload: CanvasEditPresencePayload) => void;
   incomingCanvasStateRequestId: string;
   syncStatusText: string;
   autoSyncing: boolean;
@@ -2320,7 +2341,14 @@ function buildAgendaModels(
   ];
 }
 
-function makeAgendaNodeLabel(title: string, summary: string, status: string, keywords: string[]) {
+function makeAgendaNodeLabel(
+  title: string,
+  summary: string,
+  status: string,
+  keywords: string[],
+  remoteEditing = false,
+  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
+) {
   return (
     <div className="min-w-0 p-1">
       <div className="rounded-[24px] bg-gradient-to-br from-amber-50 via-white to-white p-4">
@@ -2328,9 +2356,22 @@ function makeAgendaNodeLabel(title: string, summary: string, status: string, key
           <span className="rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-800">
             Group
           </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-500">
-            {status}
-          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-500">
+              {status}
+            </span>
+            {remoteEditing ? renderEditPresenceBadge() : null}
+            {onEdit ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="nodrag nopan rounded-full border border-black/10 bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+              >
+                수정
+              </button>
+            ) : null}
+          </div>
         </div>
         <strong className="mt-4 block text-[17px] leading-7 text-slate-900">
           {title}
@@ -3666,6 +3707,8 @@ function makeCanvasItemNodeLabel(
   selected: boolean,
   _linkedAgendaTitle: string,
   onToggleTopicCollapsed?: (itemId: string) => void,
+  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
+  remoteEditing = false,
   highlighted = false,
 ) {
   const tone = canvasItemTone((item.kind as ComposerTool) || "note");
@@ -3687,22 +3730,35 @@ function makeCanvasItemNodeLabel(
       >
         <div className="flex min-h-[28px] w-full items-start justify-between gap-2">
           <span />
-          {showTopicToggle ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleTopicCollapsed?.(item.id);
-              }}
-              className="nodrag shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] shadow-[0_1px_2px_rgba(0,0,0,0.08)] hover:bg-white"
-            >
-              {item.topic_collapsed ? "펼치기" : "접기"} {topicChildCount}
-            </button>
-          ) : mergedSourceCount > 1 ? (
-            <span className="shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
-              묶음 {mergedSourceCount}
-            </span>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {remoteEditing ? renderEditPresenceBadge() : null}
+            {!pending && onEdit ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="nodrag nopan rounded-full border border-black/10 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] shadow-[0_1px_2px_rgba(0,0,0,0.08)] transition hover:bg-white"
+              >
+                수정
+              </button>
+            ) : null}
+            {showTopicToggle ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleTopicCollapsed?.(item.id);
+                }}
+                className="nodrag shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] shadow-[0_1px_2px_rgba(0,0,0,0.08)] hover:bg-white"
+              >
+                {item.topic_collapsed ? "펼치기" : "접기"} {topicChildCount}
+              </button>
+            ) : mergedSourceCount > 1 ? (
+              <span className="shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
+                묶음 {mergedSourceCount}
+              </span>
+            ) : null}
+          </div>
         </div>
         <strong className="mt-3 max-w-full text-[18px] font-semibold leading-[24.811px] text-black line-clamp-2">
           {title}
@@ -3775,7 +3831,12 @@ function solutionTopicFinalNotes(topic: SolutionTopicViewModel) {
   return (topic.notes || []).filter((note) => note.is_final_candidate);
 }
 
-function makeSolutionNodeLabel(topic: SolutionTopicViewModel, selected: boolean) {
+function makeSolutionNodeLabel(
+  topic: SolutionTopicViewModel,
+  selected: boolean,
+  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
+  remoteEditing = false,
+) {
   const selectedAiCount = solutionTopicSelectedSuggestions(topic).length;
   const finalCount = solutionTopicFinalNotes(topic).length;
   return (
@@ -3795,9 +3856,22 @@ function makeSolutionNodeLabel(topic: SolutionTopicViewModel, selected: boolean)
             {topic.topic}
           </strong>
         </div>
-        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${problemGroupStatusTone(topic.status)}`}>
-          {problemGroupStatusLabel(topic.status)}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${problemGroupStatusTone(topic.status)}`}>
+            {problemGroupStatusLabel(topic.status)}
+          </span>
+          {remoteEditing ? renderEditPresenceBadge() : null}
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={onEdit}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="nodrag nopan rounded-full border border-black/10 bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+            >
+              수정
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="mt-3 line-clamp-3 text-sm leading-6 text-[#4d4d4d]">
         {topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다."}
@@ -3817,7 +3891,11 @@ function makeSolutionNodeLabel(topic: SolutionTopicViewModel, selected: boolean)
   );
 }
 
-function makeSolutionOverviewNodeLabel(topic: SolutionTopicViewModel) {
+function makeSolutionOverviewNodeLabel(
+  topic: SolutionTopicViewModel,
+  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
+  remoteEditing = false,
+) {
   return (
     <div className="nopan box-border flex h-full w-full flex-col justify-start border border-black/10 bg-white px-5 py-5 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)]">
       <div className="flex items-start justify-between gap-4">
@@ -3825,9 +3903,22 @@ function makeSolutionOverviewNodeLabel(topic: SolutionTopicViewModel) {
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">해결 방향</p>
           <h4 className="mt-2 text-xl font-semibold leading-8 text-slate-950">{topic.topic}</h4>
         </div>
-        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${problemGroupStatusTone(topic.status)}`}>
-          {problemGroupStatusLabel(topic.status)}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${problemGroupStatusTone(topic.status)}`}>
+            {problemGroupStatusLabel(topic.status)}
+          </span>
+          {remoteEditing ? renderEditPresenceBadge() : null}
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={onEdit}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="nodrag nopan rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+            >
+              수정
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="mt-4 line-clamp-4 text-base leading-7 text-[#4d4d4d]">
         {topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다."}
@@ -3914,6 +4005,7 @@ function makeSolutionNoteNodeLabel(
   onFinalCommentDraftChange: (value: string) => void,
   onSaveEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onCancelEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
+  remoteEditing = false,
 ) {
   const sourceLabel = note.source === "ai" ? `AI 채택 카드 ${index + 1}` : `사용자 카드 ${index + 1}`;
   const shellClass = note.is_final_candidate
@@ -3931,9 +4023,12 @@ function makeSolutionNoteNodeLabel(
     <article className={`nopan box-border flex h-full w-full flex-col justify-start border px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)] ${shellClass}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${labelClass}`}>
-            {sourceLabel}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${labelClass}`}>
+              {sourceLabel}
+            </p>
+            {remoteEditing ? renderEditPresenceBadge() : null}
+          </div>
           {editing ? (
             <textarea
               value={textDraft}
@@ -4102,6 +4197,7 @@ function makeProblemTopicNodeLabel(
   childLoading: boolean,
   criteriaLoading: boolean,
   hasGroupingRationale: boolean,
+  remoteEditing: boolean,
   onShowGroupingRationale: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onGenerateChildren: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onToggleChildren: (event: React.MouseEvent<HTMLButtonElement>) => void,
@@ -4147,6 +4243,7 @@ function makeProblemTopicNodeLabel(
           <span className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold ${problemGroupStatusTone(group.status)}`}>
             {problemGroupStatusLabel(group.status)}
           </span>
+          {remoteEditing ? renderEditPresenceBadge() : null}
         </div>
       </div>
       <strong className="mt-3 block line-clamp-2 text-[18px] font-semibold leading-6 text-black">
@@ -4513,59 +4610,6 @@ function applySolutionNoteDraft(
   );
 }
 
-function preserveEditingSolutionNoteDraft(
-  incomingTopics: SolutionTopicViewModel[],
-  currentTopics: SolutionTopicViewModel[],
-  editKey: string,
-  textDraft: string,
-  finalCommentDraft: string,
-): SolutionTopicViewModel[] {
-  const { topicId, noteId } = parseSolutionNoteEditKey(editKey);
-  if (!topicId || !noteId) return incomingTopics;
-
-  const currentTopic = currentTopics.find((topic) => topic.group_id === topicId);
-  const currentNote = currentTopic?.notes.find((note) => note.id === noteId);
-  if (!currentTopic || !currentNote) return incomingTopics;
-
-  let foundTopic = false;
-  let foundNote = false;
-  const draftNote = makeSolutionNote(
-    {
-      ...currentNote,
-      text: textDraft.trim() || currentNote.text,
-      final_comment: currentNote.is_final_candidate ? finalCommentDraft : currentNote.final_comment,
-    },
-    currentNote.id,
-  );
-
-  const nextTopics = incomingTopics.map((topic) => {
-    if (topic.group_id !== topicId) return topic;
-    foundTopic = true;
-    const nextNotes: SolutionNoteViewModel[] = topic.notes.map((note) => {
-      if (note.id !== noteId) return makeSolutionNote(note, note.id);
-      foundNote = true;
-      return makeSolutionNote(note, note.id);
-    });
-
-    return {
-      ...topic,
-      notes: foundNote ? nextNotes : [...nextNotes, draftNote],
-    };
-  });
-
-  if (foundTopic) return nextTopics;
-
-  return [
-    {
-      ...currentTopic,
-      notes: currentTopic.notes.map((note) =>
-        note.id === noteId ? draftNote : makeSolutionNote(note, note.id),
-      ),
-    },
-    ...nextTopics,
-  ];
-}
-
 function serializeSharedSolutionTopics(topics: SolutionTopicViewModel[]) {
   return topics.map((topic) => ({
     group_id: topic.group_id,
@@ -4850,6 +4894,8 @@ export default function MeetingCanvasTab({
   onSharedCanvasSync,
   incomingNodePreview,
   onNodePreviewSync,
+  incomingEditPresence,
+  onEditPresenceSync,
   incomingCanvasStateRequestId,
   audioImportStatusText,
   audioImportRevision,
@@ -4897,6 +4943,8 @@ export default function MeetingCanvasTab({
   const [editingCanvasItemId, setEditingCanvasItemId] = useState("");
   const [canvasItemDraftTitle, setCanvasItemDraftTitle] = useState("");
   const [canvasItemDraftBody, setCanvasItemDraftBody] = useState("");
+  const [localEditPresenceTarget, setLocalEditPresenceTarget] = useState<LocalEditPresenceTarget | null>(null);
+  const [remoteEditPresenceByKey, setRemoteEditPresenceByKey] = useState<Record<string, CanvasEditPresencePayload>>({});
   const [editingPersonalNoteId, setEditingPersonalNoteId] = useState("");
   const [, setPersonalNoteDraftAgendaId] = useState("");
   const [personalNoteDraftTitle, setPersonalNoteDraftTitle] = useState("");
@@ -4912,6 +4960,11 @@ export default function MeetingCanvasTab({
   const [problemStructureGroups, setProblemStructureGroups] = useState<ProblemStructureGroupViewModel[]>([]);
   const [problemStructurePending, setProblemStructurePending] = useState(false);
   const [problemStructureDrag, setProblemStructureDrag] = useState<ProblemStructureDragState | null>(null);
+  const [editingProblemStructureGroupId, setEditingProblemStructureGroupId] = useState("");
+  const [problemStructureGroupDraftTitle, setProblemStructureGroupDraftTitle] = useState("");
+  const [problemStructureGroupDraftRationale, setProblemStructureGroupDraftRationale] = useState("");
+  const [editingProblemStructureNodeId, setEditingProblemStructureNodeId] = useState("");
+  const [problemStructureNodeDraftTitle, setProblemStructureNodeDraftTitle] = useState("");
   const [solutionTopics, setSolutionTopics] = useState<SolutionTopicViewModel[]>([]);
   const [finalSummaryDocument, setFinalSummaryDocument] = useState<CanvasFinalSolutionSummary>(() =>
     createEmptyFinalSolutionSummary(),
@@ -5074,6 +5127,7 @@ export default function MeetingCanvasTab({
   const lastRemoteNodePreviewSeqRef = useRef<Record<string, number>>({});
   const remoteNodePreviewTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const remoteNodePreviewFrameRef = useRef<number | null>(null);
+  const remoteEditPresenceTimersRef = useRef<Record<string, number>>({});
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
   const lastSharedSyncSignatureRef = useRef("");
@@ -5099,6 +5153,111 @@ export default function MeetingCanvasTab({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [quickAskMessages.length, quickAskOpen]);
+
+  useEffect(() => {
+    if (!localEditPresenceTarget || !meetingId || !userId) return;
+
+    const target = localEditPresenceTarget;
+    const sendPresence = (status: CanvasEditPresencePayload["status"]) => {
+      onEditPresenceSync({
+        meeting_id: meetingId,
+        target_type: target.targetType,
+        target_id: target.targetId,
+        note_id: target.noteId || "",
+        status,
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      });
+    };
+
+    sendPresence("start");
+    const timer = window.setInterval(() => sendPresence("start"), 8_000);
+    return () => {
+      window.clearInterval(timer);
+      sendPresence("stop");
+    };
+  }, [localEditPresenceTarget, meetingId, onEditPresenceSync, userId]);
+
+  useEffect(() => {
+    if (!localEditPresenceTarget) return;
+    const stillEditing =
+      (localEditPresenceTarget.targetType === "agenda" &&
+        editingAgendaId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "canvas_item" &&
+        editingCanvasItemId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "problem_group" &&
+        editingProblemGroupId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "problem_structure_group" &&
+        editingProblemStructureGroupId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "problem_structure_node" &&
+        editingProblemStructureNodeId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "solution_topic" &&
+        editingSolutionTopicId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "solution_note" &&
+        editingSolutionNoteKey === makeSolutionNoteEditKey(localEditPresenceTarget.targetId, localEditPresenceTarget.noteId || ""));
+
+    if (!stillEditing) {
+      setLocalEditPresenceTarget(null);
+    }
+  }, [
+    editingAgendaId,
+    editingCanvasItemId,
+    editingProblemGroupId,
+    editingProblemStructureGroupId,
+    editingProblemStructureNodeId,
+    editingSolutionNoteKey,
+    editingSolutionTopicId,
+    localEditPresenceTarget,
+  ]);
+
+  useEffect(() => {
+    if (!incomingEditPresence || incomingEditPresence.meeting_id !== meetingId) return;
+    if (incomingEditPresence.updated_by === userId) return;
+
+    const key = makeEditPresenceKey(
+      incomingEditPresence.target_type,
+      incomingEditPresence.target_id,
+      incomingEditPresence.note_id || "",
+    );
+    if (remoteEditPresenceTimersRef.current[key]) {
+      window.clearTimeout(remoteEditPresenceTimersRef.current[key]);
+      delete remoteEditPresenceTimersRef.current[key];
+    }
+
+    if (incomingEditPresence.status === "stop") {
+      setRemoteEditPresenceByKey((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+
+    setRemoteEditPresenceByKey((current) => ({
+      ...current,
+      [key]: incomingEditPresence,
+    }));
+    remoteEditPresenceTimersRef.current[key] = window.setTimeout(() => {
+      setRemoteEditPresenceByKey((current) => {
+        const currentPresence = current[key];
+        if (!currentPresence || currentPresence.updated_at !== incomingEditPresence.updated_at) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      delete remoteEditPresenceTimersRef.current[key];
+    }, 12_000);
+  }, [incomingEditPresence, meetingId, userId]);
+
+  useEffect(
+    () => () => {
+      Object.values(remoteEditPresenceTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+      remoteEditPresenceTimersRef.current = {};
+    },
+    [],
+  );
   const agendaDragPreviewRef = useRef<AgendaDragPreviewState | null>(null);
   const ideationDropPreviewRef = useRef<IdeationDropPreviewState | null>(null);
   const stableIdeationDragRef = useRef<StableIdeationDragState | null>(null);
@@ -5770,6 +5929,11 @@ export default function MeetingCanvasTab({
     setProblemStructureGroups([]);
     setProblemStructurePending(false);
     setProblemStructureDrag(null);
+    setEditingProblemStructureGroupId("");
+    setProblemStructureGroupDraftTitle("");
+    setProblemStructureGroupDraftRationale("");
+    setEditingProblemStructureNodeId("");
+    setProblemStructureNodeDraftTitle("");
     setSolutionTopics([]);
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
     setSummaryDocumentEditMode(false);
@@ -5793,6 +5957,11 @@ export default function MeetingCanvasTab({
     setProblemStructureGroups([]);
     setProblemStructurePending(false);
     setProblemStructureDrag(null);
+    setEditingProblemStructureGroupId("");
+    setProblemStructureGroupDraftTitle("");
+    setProblemStructureGroupDraftRationale("");
+    setEditingProblemStructureNodeId("");
+    setProblemStructureNodeDraftTitle("");
     setProblemDefinitionStagePending(false);
     setSolutionStagePending(false);
     setSelectedProblemGroupId("");
@@ -5933,6 +6102,11 @@ export default function MeetingCanvasTab({
         setProblemStructureNodes(displayProblemStructure.nodes);
         setProblemStructureGroups(displayProblemStructure.groups);
         setProblemStructurePending(false);
+        setEditingProblemStructureGroupId("");
+        setProblemStructureGroupDraftTitle("");
+        setProblemStructureGroupDraftRationale("");
+        setEditingProblemStructureNodeId("");
+        setProblemStructureNodeDraftTitle("");
         analysisSignatureAtImportRef.current = nextImportedState
           ? buildMeetingStateSignature(nextImportedState)
           : "";
@@ -6018,6 +6192,11 @@ export default function MeetingCanvasTab({
         setProblemStructureNodes([]);
         setProblemStructureGroups([]);
         setProblemStructurePending(false);
+        setEditingProblemStructureGroupId("");
+        setProblemStructureGroupDraftTitle("");
+        setProblemStructureGroupDraftRationale("");
+        setEditingProblemStructureNodeId("");
+        setProblemStructureNodeDraftTitle("");
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           meeting_goal: "",
           meeting_goal_context: "",
@@ -6095,6 +6274,11 @@ export default function MeetingCanvasTab({
     setSelectedNodeId("");
     setEditingProblemGroupId("");
     setEditingSolutionTopicId("");
+    setEditingProblemStructureGroupId("");
+    setProblemStructureGroupDraftTitle("");
+    setProblemStructureGroupDraftRationale("");
+    setEditingProblemStructureNodeId("");
+    setProblemStructureNodeDraftTitle("");
     setCollapsedProblemGroupIds(new Set());
     setProblemGroupingRationaleById({});
     setProblemGroupingRationalePendingId("");
@@ -8064,38 +8248,8 @@ export default function MeetingCanvasTab({
     const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
     const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
     const incomingMeetingGoalContext = incomingSharedCanvasSync.meeting_goal_context || "";
-    const editingCanvasItem =
-      stage === "ideation" && editingCanvasItemId
-        ? canvasItems.find((item) => item.id === editingCanvasItemId) || null
-        : null;
-    let nextIncomingCanvasItems = incomingCanvasItems;
+    const nextIncomingCanvasItems = incomingCanvasItems;
     const currentNodePositionsSnapshot = liveNodePositionsRef.current;
-
-    if (editingCanvasItem) {
-      let foundEditingItem = false;
-      nextIncomingCanvasItems = incomingCanvasItems.map((item) => {
-        if (item.id !== editingCanvasItem.id) return item;
-        foundEditingItem = true;
-        return {
-          ...item,
-          title: canvasItemDraftTitle,
-          body: canvasItemDraftBody,
-          user_edited: true,
-        };
-      });
-
-      if (!foundEditingItem) {
-        nextIncomingCanvasItems = [
-          {
-            ...editingCanvasItem,
-            title: canvasItemDraftTitle,
-            body: canvasItemDraftBody,
-            user_edited: true,
-          },
-          ...nextIncomingCanvasItems,
-        ];
-      }
-    }
 
     const nextProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], problemGroups);
     const nextProblemStructure = hydrateProblemStructureState(
@@ -8113,16 +8267,7 @@ export default function MeetingCanvasTab({
       nextProblemGroups,
       solutionTopics,
     );
-    const nextSolutionTopics =
-      stage === "solution" && editingSolutionNoteKey
-        ? preserveEditingSolutionNoteDraft(
-            incomingSolutionTopics,
-            solutionTopics,
-            editingSolutionNoteKey,
-            solutionNoteTextDraft,
-            solutionNoteFinalCommentDraft,
-        )
-        : incomingSolutionTopics;
+    const nextSolutionTopics = incomingSolutionTopics;
     const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
 
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
@@ -8185,11 +8330,6 @@ export default function MeetingCanvasTab({
       applyingRemoteSharedSyncRef.current = false;
     }, 0);
   }, [
-    canvasItemDraftBody,
-    canvasItemDraftTitle,
-    canvasItems,
-    editingCanvasItemId,
-    editingSolutionNoteKey,
     incomingSharedCanvasSync,
     meetingId,
     nodePositions,
@@ -8197,8 +8337,6 @@ export default function MeetingCanvasTab({
     onMeetingGoalContextChange,
     problemGroups,
     sharedSyncEnabled,
-    solutionNoteFinalCommentDraft,
-    solutionNoteTextDraft,
     solutionTopics,
     userId,
     ensureRemoteNodePreviewAnimation,
@@ -8472,12 +8610,14 @@ export default function MeetingCanvasTab({
   );
 
   const handleStartSolutionNoteEdit = useCallback((topicId: string, note: SolutionNoteViewModel) => {
+    setLocalEditPresenceTarget({ targetType: "solution_note", targetId: topicId, noteId: note.id });
     setEditingSolutionNoteKey(makeSolutionNoteEditKey(topicId, note.id));
     setSolutionNoteTextDraft(note.text);
     setSolutionNoteFinalCommentDraft(note.final_comment || "");
   }, []);
 
   const handleCancelSolutionNoteEdit = useCallback(() => {
+    setLocalEditPresenceTarget(null);
     setEditingSolutionNoteKey("");
     setSolutionNoteTextDraft("");
     setSolutionNoteFinalCommentDraft("");
@@ -8494,6 +8634,7 @@ export default function MeetingCanvasTab({
     );
 
     setSolutionTopics(nextSolutionTopics);
+    setLocalEditPresenceTarget(null);
     setEditingSolutionNoteKey("");
     setSolutionNoteTextDraft("");
     setSolutionNoteFinalCommentDraft("");
@@ -8679,30 +8820,49 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const handleQuickEditProblemGroup = useCallback(
-    (group: ProblemGroupViewModel) => {
-      const nextTopic = window.prompt("문제정의 노드 제목", group.topic);
-      if (nextTopic === null) return;
-      const trimmedTopic = nextTopic.trim();
-      if (!trimmedTopic) return;
-      const nextSummary = window.prompt("문제정의 노드 요약", group.conclusion || group.insight_lens || "");
-      if (nextSummary === null) return;
+  const handleQuickEditAgenda = useCallback((agenda: AgendaViewModel) => {
+    setSelectedAgendaId(agenda.id);
+    setSelectedCanvasItemId("");
+    setSelectedNodeId(`agenda-${agenda.id}`);
+    setLocalEditPresenceTarget({ targetType: "agenda", targetId: agenda.id });
+    setEditingAgendaId(agenda.id);
+    setAgendaDraftTitle(agenda.title);
+    setAgendaDraftKeywords((agenda.keywords || []).join(", "));
+    setAgendaDraftSummary((agenda.summaryBullets || []).join("\n"));
+    setActivityMessage("안건 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
+  }, []);
 
-      const nextGroups = problemGroups.map((item) =>
-        item.group_id === group.group_id
-          ? {
-              ...item,
-              topic: trimmedTopic,
-              conclusion: nextSummary.trim() || item.conclusion,
-              conclusion_user_edited: true,
-              insight_user_edited: item.insight_user_edited || trimmedTopic !== item.topic,
-            }
-          : item,
-      );
-      commitProblemGroupsSnapshot(nextGroups, "문제정의 노드를 수정했습니다.", group.group_id);
-    },
-    [commitProblemGroupsSnapshot, problemGroups],
-  );
+  const handleQuickEditCanvasItem = useCallback((item: CanvasItemViewModel) => {
+    setSelectedCanvasItemId(item.id);
+    setSelectedNodeId(`canvas-item-${item.id}`);
+    setLocalEditPresenceTarget({ targetType: "canvas_item", targetId: item.id });
+    setEditingCanvasItemId(item.id);
+    setCanvasItemDraftTitle(item.title);
+    setCanvasItemDraftBody(item.body || "");
+    setActivityMessage("공용 canvas 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
+  }, []);
+
+  const handleQuickEditProblemGroup = useCallback((group: ProblemGroupViewModel) => {
+    setSelectedProblemGroupId(group.group_id);
+    setSelectedNodeId(`problem-${group.group_id}`);
+    setLocalEditPresenceTarget({ targetType: "problem_group", targetId: group.group_id });
+    setEditingProblemGroupId(group.group_id);
+    setProblemGroupDraftTopic(group.topic);
+    setProblemGroupDraftInsight(group.insight_lens || "");
+    setProblemGroupDraftConclusion(group.conclusion);
+    setActivityMessage("문제정의 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
+  }, []);
+
+  const handleQuickEditSolutionTopic = useCallback((topic: SolutionTopicViewModel) => {
+    setSelectedSolutionTopicId(topic.group_id);
+    setSelectedNodeId(`solution-${topic.group_id}`);
+    setLocalEditPresenceTarget({ targetType: "solution_topic", targetId: topic.group_id });
+    setEditingSolutionTopicId(topic.group_id);
+    setSolutionTopicDraftTitle(topic.topic);
+    setSolutionTopicDraftConclusion(topic.conclusion);
+    setSolutionTopicDraftIdeas((topic.ai_suggestions || []).map((item) => item.text).join("\n"));
+    setActivityMessage("해결책 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
+  }, []);
 
   const handleDeleteProblemGroup = useCallback(
     (group: ProblemGroupViewModel) => {
@@ -8889,14 +9049,35 @@ export default function MeetingCanvasTab({
   }, [syncProblemStructureNodesFromDefinition]);
 
   const handleAddProblemStructureGroup = useCallback(() => {
-    setProblemStructureGroups((prev) => [...prev, makeProblemStructureGroup(prev.length)]);
-    setActivityMessage("정의 2단계 구조화 그룹을 추가했습니다.");
+    const nextGroup = makeProblemStructureGroup(problemStructureGroups.length);
+    setProblemStructureGroups((prev) => [...prev, nextGroup]);
+    setLocalEditPresenceTarget({ targetType: "problem_structure_group", targetId: nextGroup.id });
+    setEditingProblemStructureGroupId(nextGroup.id);
+    setProblemStructureGroupDraftTitle(nextGroup.title);
+    setProblemStructureGroupDraftRationale(nextGroup.rationale);
+    setActivityMessage("정의 2단계 구조화 그룹을 추가했습니다. 제목과 이유를 수정한 뒤 저장해 주세요.");
+  }, [problemStructureGroups.length]);
+
+  const clearProblemStructureGroupEdit = useCallback(() => {
+    setLocalEditPresenceTarget(null);
+    setEditingProblemStructureGroupId("");
+    setProblemStructureGroupDraftTitle("");
+    setProblemStructureGroupDraftRationale("");
+  }, []);
+
+  const clearProblemStructureNodeEdit = useCallback(() => {
+    setLocalEditPresenceTarget(null);
+    setEditingProblemStructureNodeId("");
+    setProblemStructureNodeDraftTitle("");
   }, []);
 
   const handleDeleteProblemStructureGroup = useCallback((groupId: string) => {
     setProblemStructureGroups((prev) => prev.filter((group) => group.id !== groupId));
+    if (editingProblemStructureGroupId === groupId) {
+      clearProblemStructureGroupEdit();
+    }
     setActivityMessage("구조화 그룹을 삭제했습니다. 포함된 노드는 묶지 않은 노드로 돌아갑니다.");
-  }, []);
+  }, [clearProblemStructureGroupEdit, editingProblemStructureGroupId]);
 
   const handleAssignProblemStructureNode = useCallback((nodeId: string, groupId: string) => {
     setProblemStructureGroups((prev) =>
@@ -9029,10 +9210,11 @@ export default function MeetingCanvasTab({
     [getProblemStructureDraggedNodeId, handleCreateProblemStructurePairGroup],
   );
 
-  const handleUpdateProblemStructureNodeTitle = useCallback((nodeId: string, title: string) => {
-    setProblemStructureNodes((prev) =>
-      prev.map((node) => (node.id === nodeId ? { ...node, title } : node)),
-    );
+  const handleStartProblemStructureGroupEdit = useCallback((group: ProblemStructureGroupViewModel) => {
+    setLocalEditPresenceTarget({ targetType: "problem_structure_group", targetId: group.id });
+    setEditingProblemStructureGroupId(group.id);
+    setProblemStructureGroupDraftTitle(group.title);
+    setProblemStructureGroupDraftRationale(group.rationale || "");
   }, []);
 
   const handleRemoveProblemStructureNode = useCallback((nodeId: string) => {
@@ -9043,26 +9225,82 @@ export default function MeetingCanvasTab({
         nodeIds: group.nodeIds.filter((item) => item !== nodeId),
       })),
     );
+    if (editingProblemStructureNodeId === nodeId) {
+      clearProblemStructureNodeEdit();
+    }
     setActivityMessage("정의 2단계 구조화 레이어에서 노드를 제외했습니다.");
+  }, [clearProblemStructureNodeEdit, editingProblemStructureNodeId]);
+
+  const handleCancelProblemStructureGroupEdit = useCallback(() => {
+    clearProblemStructureGroupEdit();
+  }, [clearProblemStructureGroupEdit]);
+
+  const handleSaveProblemStructureGroupEdit = useCallback(
+    (groupId: string) => {
+      const targetGroup = problemStructureGroups.find((group) => group.id === groupId);
+      if (!targetGroup) {
+        clearProblemStructureGroupEdit();
+        return;
+      }
+
+      const nextTitle = problemStructureGroupDraftTitle.trim() || targetGroup.title;
+      const nextRationale = problemStructureGroupDraftRationale.trim() || targetGroup.rationale || "";
+      setProblemStructureGroups((prev) =>
+        prev.map((group) =>
+          group.id === groupId
+            ? {
+                ...group,
+                title: nextTitle,
+                rationale: nextRationale,
+                createdBy: "user",
+              }
+            : group,
+        ),
+      );
+      clearProblemStructureGroupEdit();
+      setActivityMessage("구조화 그룹 텍스트를 수정했습니다.");
+    },
+    [
+      clearProblemStructureGroupEdit,
+      problemStructureGroupDraftRationale,
+      problemStructureGroupDraftTitle,
+      problemStructureGroups,
+    ],
+  );
+
+  const handleStartProblemStructureNodeEdit = useCallback((node: ProblemStructureNodeViewModel) => {
+    setLocalEditPresenceTarget({ targetType: "problem_structure_node", targetId: node.id });
+    setEditingProblemStructureNodeId(node.id);
+    setProblemStructureNodeDraftTitle(node.title);
   }, []);
 
-  const handleUpdateProblemStructureGroupTitle = useCallback((groupId: string, title: string) => {
-    setProblemStructureGroups((prev) =>
-      prev.map((group) => (group.id === groupId ? { ...group, title, createdBy: "user" } : group)),
-    );
-  }, []);
+  const handleCancelProblemStructureNodeEdit = useCallback(() => {
+    clearProblemStructureNodeEdit();
+  }, [clearProblemStructureNodeEdit]);
+
+  const handleSaveProblemStructureNodeEdit = useCallback(
+    (nodeId: string) => {
+      const targetNode = problemStructureNodes.find((node) => node.id === nodeId);
+      if (!targetNode) {
+        clearProblemStructureNodeEdit();
+        return;
+      }
+
+      const nextTitle = problemStructureNodeDraftTitle.trim() || targetNode.title;
+      setProblemStructureNodes((prev) =>
+        prev.map((node) => (node.id === nodeId ? { ...node, title: nextTitle } : node)),
+      );
+      clearProblemStructureNodeEdit();
+      setActivityMessage("구조화 노드 제목을 수정했습니다.");
+    },
+    [clearProblemStructureNodeEdit, problemStructureNodeDraftTitle, problemStructureNodes],
+  );
 
   const handleUpdateProblemStructureGroupStatus = useCallback((groupId: string, status: ProblemGroupStatus) => {
     setProblemStructureGroups((prev) =>
       prev.map((group) => (group.id === groupId ? { ...group, status, createdBy: "user" } : group)),
     );
     setActivityMessage(`구조화 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
-  }, []);
-
-  const handleUpdateProblemStructureGroupRationale = useCallback((groupId: string, rationale: string) => {
-    setProblemStructureGroups((prev) =>
-      prev.map((group) => (group.id === groupId ? { ...group, rationale, createdBy: "user" } : group)),
-    );
   }, []);
 
   const graphBlueprint = useMemo(() => {
@@ -9107,6 +9345,10 @@ export default function MeetingCanvasTab({
           const isColumnDropTarget =
             problemStructureDrag?.mode === "group" &&
             problemStructureDrag.overGroupId === columnDropGroupId;
+          const isGroupEditing = !isUngrouped && editingProblemStructureGroupId === column.id;
+          const remoteGroupEditPresence = !isUngrouped
+            ? remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_group", column.id)] || null
+            : null;
           const savedPosition = !isCardSorting ? nodePositions["problem-definition"]?.[nodeId] : undefined;
           const nodeHeight = Math.max(260, 184 + Math.max(1, columnNodes.length) * 92);
           const position = savedPosition || {
@@ -9133,8 +9375,20 @@ export default function MeetingCanvasTab({
                 column.title,
                 column.rationale,
                 column.status || "",
+                isGroupEditing,
+                isGroupEditing ? problemStructureGroupDraftTitle : "",
+                isGroupEditing ? problemStructureGroupDraftRationale : "",
+                remoteGroupEditPresence?.updated_at || "",
                 columnNodes.length,
-                ...columnNodes.flatMap((node) => [node.id, node.title, node.status, node.depth]),
+                ...columnNodes.flatMap((node) => [
+                  node.id,
+                  node.title,
+                  node.status,
+                  node.depth,
+                  editingProblemStructureNodeId === node.id,
+                  editingProblemStructureNodeId === node.id ? problemStructureNodeDraftTitle : "",
+                  remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)]?.updated_at || "",
+                ]),
                 ...problemStructureGroups.map((group) => `${group.id}:${group.nodeIds.join(",")}`),
                 problemStructureDrag?.nodeId,
                 problemStructureDrag?.mode,
@@ -9162,13 +9416,17 @@ export default function MeetingCanvasTab({
                         <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
                           {column.title}
                         </strong>
-                      ) : (
+                      ) : isGroupEditing ? (
                         <input
-                          value={column.title}
-                          onChange={(event) => handleUpdateProblemStructureGroupTitle(column.id, event.target.value)}
+                          value={problemStructureGroupDraftTitle}
+                          onChange={(event) => setProblemStructureGroupDraftTitle(event.target.value)}
                           onPointerDown={(event) => event.stopPropagation()}
-                          className="nodrag nopan mt-3 block w-full rounded-[8px] border border-black/10 bg-[#f9f9f9] px-3 py-2 text-[17px] font-semibold leading-6 text-black outline-none transition focus:border-[#a13ab8]/40 focus:bg-white"
+                          className="nodrag nopan mt-3 block w-full rounded-[8px] border border-[#a13ab8]/30 bg-white px-3 py-2 text-[17px] font-semibold leading-6 text-black outline-none transition focus:border-[#a13ab8]/60"
                         />
+                      ) : (
+                        <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
+                          {column.title || "구조화 그룹"}
+                        </strong>
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -9176,17 +9434,54 @@ export default function MeetingCanvasTab({
                         {columnNodes.length}개
                       </span>
                       {!isUngrouped ? (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteProblemStructureGroup(column.id)}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
-                        >
-                          삭제
-                        </button>
+                        isGroupEditing ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleCancelProblemStructureGroupEdit}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
+                            >
+                              취소
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveProblemStructureGroupEdit(column.id)}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className="nodrag nopan rounded-[8px] bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                            >
+                              저장
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleStartProblemStructureGroupEdit(column)}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+                            >
+                              수정
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteProblemStructureGroup(column.id)}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
+                            >
+                              삭제
+                            </button>
+                          </>
+                        )
                       ) : null}
                     </div>
                   </div>
+                  {remoteGroupEditPresence ? (
+                    <div className="mt-3 flex items-center gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900">
+                      {renderEditPresenceBadge()}
+                      <span>다른 참가자가 이 구조화 그룹을 수정 중입니다.</span>
+                    </div>
+                  ) : null}
                   {!isUngrouped ? (
                     <label className="mt-3 block">
                       <span className="mb-1 block text-[11px] font-semibold text-[#777]">그룹 상태</span>
@@ -9216,13 +9511,22 @@ export default function MeetingCanvasTab({
                       <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#a13ab8]">
                         {rationaleLabel}
                       </label>
-                      <textarea
-                        value={column.rationale}
-                        onChange={(event) => handleUpdateProblemStructureGroupRationale(column.id, event.target.value)}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        placeholder={column.createdBy === "ai" ? "AI가 왜 묶었는지 나중에 여기에 표시합니다." : "이 그룹으로 묶은 이유를 적어둘 수 있습니다."}
-                        className="nodrag nopan mt-2 min-h-[68px] w-full resize-none rounded-[8px] border border-black/10 bg-white px-3 py-2 text-xs leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/40"
-                      />
+                      {isGroupEditing ? (
+                        <textarea
+                          value={problemStructureGroupDraftRationale}
+                          onChange={(event) => setProblemStructureGroupDraftRationale(event.target.value)}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          placeholder={column.createdBy === "ai" ? "AI가 왜 묶었는지 나중에 여기에 표시합니다." : "이 그룹으로 묶은 이유를 적어둘 수 있습니다."}
+                          className="nodrag nopan mt-2 min-h-[68px] w-full resize-none rounded-[8px] border border-[#a13ab8]/30 bg-white px-3 py-2 text-xs leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/60"
+                        />
+                      ) : (
+                        <p className="mt-2 min-h-[44px] rounded-[8px] border border-transparent bg-white/70 px-3 py-2 text-xs leading-5 text-[#333]">
+                          {column.rationale ||
+                            (column.createdBy === "ai"
+                              ? "AI가 왜 묶었는지 나중에 여기에 표시합니다."
+                              : "수정을 눌러 이 그룹으로 묶은 이유를 적어둘 수 있습니다.")}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -9234,39 +9538,87 @@ export default function MeetingCanvasTab({
                           problemStructureDrag?.mode === "node" &&
                           problemStructureDrag.overNodeId === node.id &&
                           problemStructureDrag.nodeId !== node.id;
+                        const isNodeEditing = editingProblemStructureNodeId === node.id;
+                        const remoteNodeEditPresence =
+                          remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)] || null;
                         return (
                           <div
                             key={`${column.id}-${node.id}`}
-                            draggable
+                            draggable={!isNodeEditing}
                             onDragStart={(event) => handleProblemStructureNodeDragStart(event, node.id)}
                             onDragEnd={handleProblemStructureNodeDragEnd}
                             onDragOver={(event) => handleProblemStructureNodeDragOver(event, node.id)}
                             onDrop={(event) => handleProblemStructureNodeDrop(event, node.id)}
-                            className={`nodrag nopan cursor-grab rounded-[10px] border bg-white px-3 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition active:cursor-grabbing ${
+                            className={`nodrag nopan rounded-[10px] border bg-white px-3 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition ${
+                              isNodeEditing ? "cursor-default" : "cursor-grab active:cursor-grabbing"
+                            } ${
                               isNodeDropTarget
                                 ? "border-[#a13ab8] ring-2 ring-[#a13ab8]/20"
                                 : "border-black/10 hover:border-[#a13ab8]/25"
                               } ${isDraggingNode ? "opacity-55" : ""}`}
                           >
-                          <div className="flex items-start gap-2">
-                            <textarea
-                              value={node.title}
-                              onChange={(event) => handleUpdateProblemStructureNodeTitle(node.id, event.target.value)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              aria-label="구조화 노드 제목"
-                              rows={2}
-                              className="nodrag nopan block min-h-[44px] flex-1 resize-none rounded-[8px] border border-transparent bg-transparent px-1 py-1 text-sm font-semibold leading-5 text-black outline-none transition hover:border-black/10 hover:bg-[#f9f9f9] focus:border-[#a13ab8]/40 focus:bg-white"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveProblemStructureNode(node.id)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              aria-label="구조화 노드 제외"
-                              className="nodrag nopan flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-rose-200 bg-white text-[16px] font-semibold leading-none text-rose-600 transition hover:bg-rose-50"
-                            >
-                              ×
-                            </button>
-                          </div>
+                            <div className="flex items-start gap-2">
+                              {isNodeEditing ? (
+                                <textarea
+                                  value={problemStructureNodeDraftTitle}
+                                  onChange={(event) => setProblemStructureNodeDraftTitle(event.target.value)}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  aria-label="구조화 노드 제목"
+                                  rows={2}
+                                  className="nodrag nopan block min-h-[44px] flex-1 resize-none rounded-[8px] border border-[#a13ab8]/30 bg-white px-2 py-1.5 text-sm font-semibold leading-5 text-black outline-none transition focus:border-[#a13ab8]/60"
+                                />
+                              ) : (
+                                <strong className="block min-h-[44px] flex-1 px-1 py-1 text-sm font-semibold leading-5 text-black">
+                                  {node.title || "구조화 노드"}
+                                </strong>
+                              )}
+                              {isNodeEditing ? (
+                                <div className="flex shrink-0 flex-col gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelProblemStructureNodeEdit}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
+                                  >
+                                    취소
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveProblemStructureNodeEdit(node.id)}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    className="nodrag nopan rounded-[8px] bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                                  >
+                                    저장
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartProblemStructureNodeEdit(node)}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+                                  >
+                                    수정
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveProblemStructureNode(node.id)}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    aria-label="구조화 노드 제외"
+                                    className="nodrag nopan flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-rose-200 bg-white text-[16px] font-semibold leading-none text-rose-600 transition hover:bg-rose-50"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {remoteNodeEditPresence ? (
+                              <div className="mt-2 flex items-center gap-2 rounded-[8px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold leading-4 text-amber-900">
+                                {renderEditPresenceBadge()}
+                                <span>다른 참가자가 이 노드를 수정 중입니다.</span>
+                              </div>
+                            ) : null}
                           </div>
                         );
                       })
@@ -9404,6 +9756,8 @@ export default function MeetingCanvasTab({
           const childCollapsed = collapsedProblemGroupIds.has(group.group_id);
           const criteriaLoading = problemGroupingRationalePendingId === group.group_id;
           const hasGroupingRationale = Boolean(problemGroupingRationaleById[group.group_id]);
+          const remoteProblemGroupEditPresence =
+            remoteEditPresenceByKey[makeEditPresenceKey("problem_group", group.group_id)] || null;
 
           return {
             id: nodeId,
@@ -9436,6 +9790,7 @@ export default function MeetingCanvasTab({
                 problemChildGenerationPendingId === group.group_id,
                 criteriaLoading,
                 hasGroupingRationale,
+                remoteProblemGroupEditPresence?.updated_at || "",
               ]),
               label: makeProblemTopicNodeLabel(
                 group,
@@ -9450,6 +9805,7 @@ export default function MeetingCanvasTab({
                 problemChildGenerationPendingId === group.group_id,
                 criteriaLoading,
                 hasGroupingRationale,
+                Boolean(remoteProblemGroupEditPresence),
                 (event) => {
                   event.stopPropagation();
                   void handleShowProblemGroupingRationale(group);
@@ -9673,6 +10029,8 @@ export default function MeetingCanvasTab({
         const overviewHeight = solutionCanvasColumns > 1 ? 270 : 330;
         const sectionHeaderHeight = solutionCanvasColumns > 1 ? 72 : 108;
         const solutionSuggestionBusy = solutionSuggestionBusyTopicId === activeSolutionTopic.group_id;
+        const remoteActiveSolutionTopicEditPresence =
+          remoteEditPresenceByKey[makeEditPresenceKey("solution_topic", activeSolutionTopic.group_id)] || null;
         let rightBaseY = 32;
 
         rightDescriptors.push({
@@ -9694,8 +10052,13 @@ export default function MeetingCanvasTab({
               activeSolutionTopic.problem_insight,
               activeSolutionTopic.problem_conclusion,
               activeSolutionTopic.status,
+              editingSolutionTopicId === activeSolutionTopic.group_id,
+              remoteActiveSolutionTopicEditPresence?.updated_at || "",
             ]),
-            label: makeSolutionOverviewNodeLabel(activeSolutionTopic),
+            label: makeSolutionOverviewNodeLabel(activeSolutionTopic, (event) => {
+              event.stopPropagation();
+              handleQuickEditSolutionTopic(activeSolutionTopic);
+            }, Boolean(remoteActiveSolutionTopicEditPresence)),
           },
         });
 
@@ -9897,6 +10260,8 @@ export default function MeetingCanvasTab({
         noteItems.forEach((note, index) => {
           const noteEditKey = makeSolutionNoteEditKey(activeSolutionTopic.group_id, note.id);
           const noteEditing = editingSolutionNoteKey === noteEditKey;
+          const remoteNoteEditPresence =
+            remoteEditPresenceByKey[makeEditPresenceKey("solution_note", activeSolutionTopic.group_id, note.id)] || null;
           rightDescriptors.push({
             id: `solution-note::${activeSolutionTopic.group_id}::${note.id}`,
             position: notePositions[index],
@@ -9918,6 +10283,7 @@ export default function MeetingCanvasTab({
                 noteEditing,
                 noteEditing ? solutionNoteTextDraft : "",
                 noteEditing ? solutionNoteFinalCommentDraft : "",
+                remoteNoteEditPresence?.updated_at || "",
               ]),
               label: makeSolutionNoteNodeLabel(
                 note,
@@ -9943,6 +10309,7 @@ export default function MeetingCanvasTab({
                   event.stopPropagation();
                   handleCancelSolutionNoteEdit();
                 },
+                Boolean(remoteNoteEditPresence),
               ),
             },
           });
@@ -10097,6 +10464,8 @@ export default function MeetingCanvasTab({
           const nodeId = `solution-${topic.group_id}`;
           const selected = selectedSolutionTopicId === topic.group_id;
           const positionSource: CanvasNodeDescriptor["positionSource"] = "computed";
+          const remoteSolutionTopicEditPresence =
+            remoteEditPresenceByKey[makeEditPresenceKey("solution_topic", topic.group_id)] || null;
 
           return {
             id: nodeId,
@@ -10119,6 +10488,8 @@ export default function MeetingCanvasTab({
                 topic.problem_conclusion,
                 ...(topic.problem_keywords || []),
                 ...(topic.agenda_titles || []),
+                editingSolutionTopicId === topic.group_id,
+                remoteSolutionTopicEditPresence?.updated_at || "",
                 ...(topic.ai_suggestions || []).flatMap((item) => [item.id, item.text, item.status]),
                 ...(topic.notes || []).flatMap((note) => [
                   note.id,
@@ -10129,7 +10500,10 @@ export default function MeetingCanvasTab({
                   note.final_comment,
                 ]),
               ]),
-              label: makeSolutionNodeLabel(topic, selected),
+              label: makeSolutionNodeLabel(topic, selected, (event) => {
+                event.stopPropagation();
+                handleQuickEditSolutionTopic(topic);
+              }, Boolean(remoteSolutionTopicEditPresence)),
             },
           };
           }),
@@ -10397,6 +10771,8 @@ export default function MeetingCanvasTab({
             ? "persisted"
             : "fallback";
           const isAgendaDragSource = agendaDragPreview?.agendaId === agenda.id;
+          const remoteAgendaEditPresence =
+            remoteEditPresenceByKey[makeEditPresenceKey("agenda", agenda.id)] || null;
 
           return {
             id: nodeId,
@@ -10411,6 +10787,8 @@ export default function MeetingCanvasTab({
                 agenda.id,
                 agenda.title,
                 agenda.status,
+                editingAgendaId === agenda.id,
+                remoteAgendaEditPresence?.updated_at || "",
                 ...(agenda.keywords || []),
                 ...(agenda.summaryBullets || []),
               ]),
@@ -10419,6 +10797,11 @@ export default function MeetingCanvasTab({
                 stripLeadingTimestamp(agenda.summaryBullets[0] || "요약이 아직 없습니다."),
                 agenda.status,
                 agenda.keywords || [],
+                Boolean(remoteAgendaEditPresence),
+                (event) => {
+                  event.stopPropagation();
+                  handleQuickEditAgenda(agenda);
+                },
               ),
             },
           };
@@ -10526,6 +10909,8 @@ export default function MeetingCanvasTab({
             x: 180 + ((index % 3) * (CANVAS_ITEM_NODE_WIDTH + 36)),
             y: 320 + Math.floor(index / 3) * (itemHeight + CANVAS_TOP_LEVEL_GAP_Y),
           };
+          const remoteCanvasItemEditPresence =
+            remoteEditPresenceByKey[makeEditPresenceKey("canvas_item", item.id)] || null;
 
           return {
             id: nodeId,
@@ -10557,12 +10942,19 @@ export default function MeetingCanvasTab({
                 highlighted,
                 ...(item.child_item_ids || []),
                 selectedCanvasItemId === item.id,
+                editingCanvasItemId === item.id,
+                remoteCanvasItemEditPresence?.updated_at || "",
               ]),
               label: makeCanvasItemNodeLabel(
                 displayItem,
                 selectedCanvasItemId === item.id,
                 linkedAgendaTitle,
                 handleToggleTopicCollapsed,
+                (event) => {
+                  event.stopPropagation();
+                  handleQuickEditCanvasItem(item);
+                },
+                Boolean(remoteCanvasItemEditPresence),
                 highlighted,
               ),
             },
@@ -10599,11 +10991,17 @@ export default function MeetingCanvasTab({
     handleProblemStructureNodeDragStart,
     handleProblemStructureNodeDrop,
     handleRemoveProblemStructureNode,
-    handleUpdateProblemStructureNodeTitle,
-    handleUpdateProblemStructureGroupRationale,
+    handleCancelProblemStructureGroupEdit,
+    handleCancelProblemStructureNodeEdit,
+    handleSaveProblemStructureGroupEdit,
+    handleSaveProblemStructureNodeEdit,
+    handleStartProblemStructureGroupEdit,
+    handleStartProblemStructureNodeEdit,
     handleUpdateProblemStructureGroupStatus,
-    handleUpdateProblemStructureGroupTitle,
+    handleQuickEditAgenda,
+    handleQuickEditCanvasItem,
     handleQuickEditProblemGroup,
+    handleQuickEditSolutionTopic,
     handleShowProblemGroupingRationale,
     handleToggleProblemChildren,
     ideationDropPreview,
@@ -10619,9 +11017,18 @@ export default function MeetingCanvasTab({
     problemGroupingRationalePendingId,
     problemGroups,
     problemStructureDrag,
+    editingAgendaId,
+    editingCanvasItemId,
+    editingProblemStructureGroupId,
+    editingProblemStructureNodeId,
+    editingSolutionTopicId,
+    problemStructureGroupDraftRationale,
+    problemStructureGroupDraftTitle,
     problemStructureGroups,
     problemStructureMethod,
+    problemStructureNodeDraftTitle,
     problemStructureNodes,
+    remoteEditPresenceByKey,
     selectedCanvasItemId,
     selectedProblemGroupId,
     selectedSolutionTopicId,
@@ -10672,7 +11079,10 @@ export default function MeetingCanvasTab({
 
   useEffect(() => {
     const activeDragNodeId = stableIdeationDragRef.current?.nodeId || "";
-    const preserveNodeIds = new Set<string>(remoteNodePreviewTargetsRef.current.keys());
+    const preserveNodeIds = new Set<string>([
+      ...remoteNodePreviewTargetsRef.current.keys(),
+      ...localDraggingNodeIdsRef.current,
+    ]);
     if (activeDragNodeId) {
       preserveNodeIds.add(activeDragNodeId);
     }
@@ -10842,6 +11252,28 @@ export default function MeetingCanvasTab({
     stage === "solution" &&
     Boolean(selectedSolutionTopic) &&
     editingSolutionTopicId === selectedSolutionTopic?.group_id;
+  const selectedRemoteEditPresence = useMemo(() => {
+    if (stage === "ideation" && selectedCanvasItem) {
+      return remoteEditPresenceByKey[makeEditPresenceKey("canvas_item", selectedCanvasItem.id)] || null;
+    }
+    if (stage === "ideation" && selectedAgenda) {
+      return remoteEditPresenceByKey[makeEditPresenceKey("agenda", selectedAgenda.id)] || null;
+    }
+    if (stage === "problem-definition" && selectedProblemGroup) {
+      return remoteEditPresenceByKey[makeEditPresenceKey("problem_group", selectedProblemGroup.group_id)] || null;
+    }
+    if (stage === "solution" && selectedSolutionTopic) {
+      return (
+        remoteEditPresenceByKey[makeEditPresenceKey("solution_topic", selectedSolutionTopic.group_id)] ||
+        Object.values(remoteEditPresenceByKey).find(
+          (presence) =>
+            presence.target_type === "solution_note" && presence.target_id === selectedSolutionTopic.group_id,
+        ) ||
+        null
+      );
+    }
+    return null;
+  }, [remoteEditPresenceByKey, selectedAgenda, selectedCanvasItem, selectedProblemGroup, selectedSolutionTopic, stage]);
 
   useEffect(() => {
     if (stage !== "problem-definition" || !selectedProblemGroup) {
@@ -13420,13 +13852,11 @@ export default function MeetingCanvasTab({
 
   const handleStartAgendaEdit = () => {
     if (!selectedAgenda) return;
-    setEditingAgendaId(selectedAgenda.id);
-    setAgendaDraftTitle(selectedAgenda.title);
-    setAgendaDraftKeywords((selectedAgenda.keywords || []).join(", "));
-    setAgendaDraftSummary((selectedAgenda.summaryBullets || []).join("\n"));
+    handleQuickEditAgenda(selectedAgenda);
   };
 
   const handleCancelAgendaEdit = () => {
+    setLocalEditPresenceTarget(null);
     setEditingAgendaId("");
     setAgendaDraftTitle("");
     setAgendaDraftKeywords("");
@@ -13462,6 +13892,7 @@ export default function MeetingCanvasTab({
       );
 
       setCustomGroups(nextCustomGroupsSnapshot);
+      setLocalEditPresenceTarget(null);
       setEditingAgendaId("");
       setAgendaDraftTitle("");
       setAgendaDraftKeywords("");
@@ -13502,6 +13933,7 @@ export default function MeetingCanvasTab({
       };
       return nextAgendaOverridesSnapshot;
     });
+    setLocalEditPresenceTarget(null);
     setEditingAgendaId("");
     setAgendaDraftTitle("");
     setAgendaDraftKeywords("");
@@ -13522,12 +13954,11 @@ export default function MeetingCanvasTab({
 
   const handleStartCanvasItemEdit = () => {
     if (!selectedCanvasItem) return;
-    setEditingCanvasItemId(selectedCanvasItem.id);
-    setCanvasItemDraftTitle(selectedCanvasItem.title);
-    setCanvasItemDraftBody(selectedCanvasItem.body || "");
+    handleQuickEditCanvasItem(selectedCanvasItem);
   };
 
   const handleCancelCanvasItemEdit = () => {
+    setLocalEditPresenceTarget(null);
     setEditingCanvasItemId("");
     setCanvasItemDraftTitle("");
     setCanvasItemDraftBody("");
@@ -13554,6 +13985,7 @@ export default function MeetingCanvasTab({
       return nextCanvasItemsSnapshot;
     });
 
+    setLocalEditPresenceTarget(null);
     setEditingCanvasItemId("");
     setCanvasItemDraftTitle("");
     setCanvasItemDraftBody("");
@@ -13653,6 +14085,7 @@ export default function MeetingCanvasTab({
 
     setSelectedCanvasItemId("");
     setSelectedNodeId("");
+    setLocalEditPresenceTarget(null);
     setEditingCanvasItemId("");
     setCanvasItemDraftTitle("");
     setCanvasItemDraftBody("");
@@ -13729,13 +14162,11 @@ export default function MeetingCanvasTab({
 
   const handleStartProblemGroupEdit = () => {
     if (!selectedProblemGroup) return;
-    setEditingProblemGroupId(selectedProblemGroup.group_id);
-    setProblemGroupDraftTopic(selectedProblemGroup.topic);
-    setProblemGroupDraftInsight(selectedProblemGroup.insight_lens || "");
-    setProblemGroupDraftConclusion(selectedProblemGroup.conclusion);
+    handleQuickEditProblemGroup(selectedProblemGroup);
   };
 
   const handleCancelProblemGroupEdit = () => {
+    setLocalEditPresenceTarget(null);
     setEditingProblemGroupId("");
     setProblemGroupDraftTopic("");
     setProblemGroupDraftInsight("");
@@ -13765,6 +14196,7 @@ export default function MeetingCanvasTab({
           : group,
       ),
     );
+    setLocalEditPresenceTarget(null);
     setEditingProblemGroupId("");
     setProblemGroupDraftTopic("");
     setProblemGroupDraftInsight("");
@@ -13790,13 +14222,11 @@ export default function MeetingCanvasTab({
 
   const handleStartSolutionTopicEdit = () => {
     if (!selectedSolutionTopic) return;
-    setEditingSolutionTopicId(selectedSolutionTopic.group_id);
-    setSolutionTopicDraftTitle(selectedSolutionTopic.topic);
-    setSolutionTopicDraftConclusion(selectedSolutionTopic.conclusion);
-    setSolutionTopicDraftIdeas((selectedSolutionTopic.ai_suggestions || []).map((item) => item.text).join("\n"));
+    handleQuickEditSolutionTopic(selectedSolutionTopic);
   };
 
   const handleCancelSolutionTopicEdit = () => {
+    setLocalEditPresenceTarget(null);
     setEditingSolutionTopicId("");
     setSolutionTopicDraftTitle("");
     setSolutionTopicDraftConclusion("");
@@ -13839,6 +14269,7 @@ export default function MeetingCanvasTab({
           : topic,
       ),
     );
+    setLocalEditPresenceTarget(null);
     setEditingSolutionTopicId("");
     setSolutionTopicDraftTitle("");
     setSolutionTopicDraftConclusion("");
@@ -15050,6 +15481,11 @@ export default function MeetingCanvasTab({
             ))}
           </div>
         ) : null}
+        {selectedRemoteEditPresence ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+            다른 참가자가 이 항목을 수정 중입니다. 저장 전에 내용이 바뀔 수 있으니 확인 후 저장해 주세요.
+          </div>
+        ) : null}
       </section>
     );
   };
@@ -15301,13 +15737,18 @@ export default function MeetingCanvasTab({
               selectedSolutionTopic.notes.map((note, index) => {
                 const noteEditKey = makeSolutionNoteEditKey(selectedSolutionTopic.group_id, note.id);
                 const noteEditing = editingSolutionNoteKey === noteEditKey;
+                const remoteNoteEditPresence =
+                  remoteEditPresenceByKey[makeEditPresenceKey("solution_note", selectedSolutionTopic.group_id, note.id)] || null;
                 return (
                   <div key={note.id} className="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-amber-700">
-                          {note.source === "ai" ? `채택 메모 ${index + 1}` : `사용자 메모 ${index + 1}`}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-amber-700">
+                            {note.source === "ai" ? `채택 메모 ${index + 1}` : `사용자 메모 ${index + 1}`}
+                          </p>
+                          {remoteNoteEditPresence ? renderEditPresenceBadge() : null}
+                        </div>
                         {noteEditing ? (
                           <textarea
                             value={solutionNoteTextDraft}
@@ -15922,6 +16363,8 @@ export default function MeetingCanvasTab({
                           {summaryEligibleStructureGroups.map((group, index) => {
                             const section = summaryDocumentSectionByGroupId.get(group.id);
                             const evidenceOpen = summaryEvidenceOpenGroupIds.has(group.id);
+                            const remoteGroupEditPresence =
+                              remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_group", group.id)] || null;
                             const groupNodes = group.nodeIds
                               .map((nodeId) => problemStructureNodes.find((node) => node.id === nodeId))
                               .filter((node): node is ProblemStructureNodeViewModel => Boolean(node));
@@ -15934,19 +16377,31 @@ export default function MeetingCanvasTab({
                                       {group.title}
                                     </h5>
                                   </div>
-                                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                                    group.status === "final" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
-                                  }`}>
-                                    {problemStructureStatusLabel(group.status)}
-                                  </span>
+                                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                      group.status === "final" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                                    }`}>
+                                      {problemStructureStatusLabel(group.status)}
+                                    </span>
+                                    {remoteGroupEditPresence ? renderEditPresenceBadge() : null}
+                                  </div>
                                 </div>
                                 {groupNodes.length > 0 ? (
                                   <div className="mt-3 space-y-1.5">
-                                    {groupNodes.slice(0, 4).map((node) => (
-                                      <p key={`summary-node-${group.id}-${node.id}`} className="line-clamp-2 bg-[#f5f6f8] px-3 py-2 text-xs leading-5 text-[#4d4d4d]">
-                                        {node.title}
-                                      </p>
-                                    ))}
+                                    {groupNodes.slice(0, 4).map((node) => {
+                                      const remoteNodeEditPresence =
+                                        remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)] || null;
+                                      return (
+                                        <div key={`summary-node-${group.id}-${node.id}`} className="bg-[#f5f6f8] px-3 py-2">
+                                          <p className="line-clamp-2 text-xs leading-5 text-[#4d4d4d]">
+                                            {node.title}
+                                          </p>
+                                          {remoteNodeEditPresence ? (
+                                            <div className="mt-1">{renderEditPresenceBadge()}</div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
                                     {groupNodes.length > 4 ? (
                                       <p className="px-1 text-[11px] font-medium text-[#777]">+ {groupNodes.length - 4}개 더 있음</p>
                                     ) : null}

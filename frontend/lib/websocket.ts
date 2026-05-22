@@ -19,7 +19,7 @@ export class WebSocketClient {
   private pendingMessages: QueuedWebSocketMessage[] = []
   private maxPendingMessages = 40
   private coalescedMessageTypes = new Set(['canvas_sync', 'meeting_goal_sync', 'mic_calibration'])
-  private volatileMessageTypes = new Set(['canvas_node_preview'])
+  private volatileMessageTypes = new Set(['canvas_node_preview', 'canvas_edit_presence'])
 
   constructor(meetingId: string, userId: string) {
     this.meetingId = meetingId

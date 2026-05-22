@@ -568,6 +568,23 @@ export interface CanvasRealtimeSyncPayload {
   imported_state?: MeetingState | null;
 }
 
+export interface CanvasEditPresencePayload {
+  meeting_id: string;
+  target_type:
+    | "agenda"
+    | "canvas_item"
+    | "problem_group"
+    | "problem_structure_group"
+    | "problem_structure_node"
+    | "solution_topic"
+    | "solution_note";
+  target_id: string;
+  note_id?: string;
+  status: "start" | "stop";
+  updated_by: string;
+  updated_at: string;
+}
+
 export interface CanvasNodePreviewPayload {
   meeting_id: string;
   stage: "ideation" | "problem-definition" | "solution";

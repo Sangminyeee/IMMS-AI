@@ -7,7 +7,13 @@ import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
 import { supabase } from "@/lib/supabase";
 import { getAudioImportJobStatus, getCanvasWorkspaceState, startAudioImportJob, syncTranscript } from "@/lib/api";
-import type { AudioImportJobStatusResponse, CanvasNodePreviewPayload, CanvasRealtimeSyncPayload, MeetingState } from "@/lib/types";
+import type {
+  AudioImportJobStatusResponse,
+  CanvasEditPresencePayload,
+  CanvasNodePreviewPayload,
+  CanvasRealtimeSyncPayload,
+  MeetingState,
+} from "@/lib/types";
 import MeetingCanvasTab, { type MeetingAgenda as CanvasAgenda, type MeetingTranscript as CanvasTranscript } from "@/components/MeetingCanvasTab";
 
 interface Transcript {
@@ -252,6 +258,7 @@ function HomeContent() {
   const [autoSyncing] = useState(false);
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
   const [incomingCanvasNodePreview, setIncomingCanvasNodePreview] = useState<CanvasNodePreviewPayload | null>(null);
+  const [incomingCanvasEditPresence, setIncomingCanvasEditPresence] = useState<CanvasEditPresencePayload | null>(null);
   const [incomingCanvasStateRequestId, setIncomingCanvasStateRequestId] = useState("");
   const [calibrationState, setCalibrationState] = useState<CalibrationState>("idle");
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(0);
@@ -676,6 +683,32 @@ function HomeContent() {
       });
     });
 
+    wsClient.on("canvas_edit_presence", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload) || readString(payload.meeting_id) !== meetingId) return;
+      const targetType = readString(payload.target_type);
+      if (
+        targetType !== "canvas_item" &&
+        targetType !== "problem_group" &&
+        targetType !== "solution_topic" &&
+        targetType !== "solution_note"
+      ) {
+        return;
+      }
+      const targetId = readString(payload.target_id);
+      const updatedBy = readString(payload.updated_by);
+      if (!targetId || !updatedBy) return;
+      setIncomingCanvasEditPresence({
+        meeting_id: meetingId,
+        target_type: targetType,
+        target_id: targetId,
+        note_id: readString(payload.note_id),
+        status: readString(payload.status) === "stop" ? "stop" : "start",
+        updated_by: updatedBy,
+        updated_at: readString(payload.updated_at, new Date().toISOString()),
+      });
+    });
+
     wsClient.on("canvas_state_request", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload) || payload.meeting_id !== meetingId) return;
@@ -1063,6 +1096,9 @@ function HomeContent() {
   const broadcastCanvasNodePreview = useCallback((payload: CanvasNodePreviewPayload) => {
     wsClientRef.current?.sendMessage("canvas_node_preview", payload as unknown as Record<string, unknown>);
   }, []);
+  const broadcastCanvasEditPresence = useCallback((payload: CanvasEditPresencePayload) => {
+    wsClientRef.current?.sendMessage("canvas_edit_presence", payload as unknown as Record<string, unknown>);
+  }, []);
   const broadcastMeetingGoalSync = useCallback((goal: string, context = meetingGoalContextRef.current) => {
     wsClientRef.current?.sendMessage("meeting_goal_sync", {
       meeting_goal: goal,
@@ -1108,6 +1144,8 @@ function HomeContent() {
         onSharedCanvasSync={broadcastCanvasSync}
         incomingNodePreview={incomingCanvasNodePreview}
         onNodePreviewSync={broadcastCanvasNodePreview}
+        incomingEditPresence={incomingCanvasEditPresence}
+        onEditPresenceSync={broadcastCanvasEditPresence}
         incomingCanvasStateRequestId={incomingCanvasStateRequestId}
         syncStatusText={canvasSyncStatus}
         autoSyncing={autoSyncing}
