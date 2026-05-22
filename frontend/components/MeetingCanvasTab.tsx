@@ -108,6 +108,16 @@ const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const NODE_PREVIEW_SYNC_THROTTLE_MS = 64;
 const NODE_PREVIEW_ANIMATION_LERP = 0.38;
 const NODE_PREVIEW_SETTLE_DISTANCE = 0.75;
+const EMPTY_EDGES: Edge[] = [];
+const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
+const CANVAS_CONNECTION_LINE_STYLE = { stroke: "#0f172a", strokeOpacity: 0.9, strokeWidth: 2 } as const;
+const DEFAULT_CANVAS_EDGE_OPTIONS = {
+  type: "smoothstep",
+  markerEnd: { type: MarkerType.ArrowClosed, color: "#475569" },
+  interactionWidth: 28,
+  zIndex: 10,
+  style: { stroke: "#475569", strokeOpacity: 0.95, strokeWidth: 2 },
+} as const;
 const PROBLEM_STRUCTURE_NODE_DRAG_MIME = "application/x-imms-problem-structure-node";
 const DEFAULT_LEFT_PANEL_RATIO = 0.19;
 const DEFAULT_RIGHT_PANEL_RATIO = 0.2;
@@ -8181,6 +8191,8 @@ export default function MeetingCanvasTab({
     solutionNoteTextDraft,
     solutionTopics,
     userId,
+    captureProblemPhaseOverride,
+    captureStageOverride,
   ]);
 
   useEffect(() => {
@@ -15834,7 +15846,7 @@ export default function MeetingCanvasTab({
               {stage === "ideation" || stage === "problem-definition" ? (
                 <ReactFlow<Node, Edge>
                   nodes={nodes}
-                  edges={stage === "problem-definition" ? problemSplitEdges.left : ([] as Edge[])}
+                  edges={stage === "problem-definition" ? problemSplitEdges.left : EMPTY_EDGES}
                   onInit={(instance) => {
                     flowRef.current = instance;
                   }}
@@ -15851,7 +15863,7 @@ export default function MeetingCanvasTab({
                   nodesDraggable={stage === "problem-definition"}
                   minZoom={0.45}
                   maxZoom={1.6}
-                  proOptions={{ hideAttribution: true }}
+                  proOptions={REACT_FLOW_PRO_OPTIONS}
                 >
                   {stage === "problem-definition" ? (
                     <Background
@@ -16043,17 +16055,11 @@ export default function MeetingCanvasTab({
                   onConnect={onConnect}
                   nodesConnectable={false}
                   elevateEdgesOnSelect
-                  connectionLineStyle={{ stroke: "#0f172a", strokeOpacity: 0.9, strokeWidth: 2 }}
+                  connectionLineStyle={CANVAS_CONNECTION_LINE_STYLE}
                   minZoom={0.45}
                   maxZoom={1.6}
-                  defaultEdgeOptions={{
-                    type: "smoothstep",
-                    markerEnd: { type: MarkerType.ArrowClosed, color: "#475569" },
-                    interactionWidth: 28,
-                    zIndex: 10,
-                    style: { stroke: "#475569", strokeOpacity: 0.95, strokeWidth: 2 },
-                  }}
-                  proOptions={{ hideAttribution: true }}
+                  defaultEdgeOptions={DEFAULT_CANVAS_EDGE_OPTIONS}
+                  proOptions={REACT_FLOW_PRO_OPTIONS}
                 >
                   <MiniMap
                     zoomable
