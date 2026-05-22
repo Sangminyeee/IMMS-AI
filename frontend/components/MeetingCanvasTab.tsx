@@ -847,6 +847,14 @@ type IdeationDropTargetElement = {
   itemId: string;
 };
 
+type PendingIdeationDragFrame = {
+  node: Node;
+  itemId: string;
+  clientX: number;
+  clientY: number;
+  position: { x: number; y: number };
+};
+
 type ProblemIdeaDragState = {
   sourceGroupId: string;
   sourceNodeId: string;
@@ -5133,6 +5141,8 @@ export default function MeetingCanvasTab({
   const lastRemoteNodePreviewSeqRef = useRef<Record<string, number>>({});
   const remoteNodePreviewTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const remoteNodePreviewFrameRef = useRef<number | null>(null);
+  const pendingIdeationDragFrameRef = useRef<PendingIdeationDragFrame | null>(null);
+  const ideationDragFrameRef = useRef<number | null>(null);
   const remoteEditPresenceTimersRef = useRef<Record<string, number>>({});
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
@@ -5808,6 +5818,11 @@ export default function MeetingCanvasTab({
       window.cancelAnimationFrame(remoteNodePreviewFrameRef.current);
       remoteNodePreviewFrameRef.current = null;
     }
+    if (ideationDragFrameRef.current !== null) {
+      window.cancelAnimationFrame(ideationDragFrameRef.current);
+      ideationDragFrameRef.current = null;
+    }
+    pendingIdeationDragFrameRef.current = null;
     liveNodePositionsRef.current = {};
     pendingNodePreviewsRef.current = {};
     lastNodePreviewFlushAtRef.current = 0;
@@ -5873,6 +5888,11 @@ export default function MeetingCanvasTab({
       window.cancelAnimationFrame(remoteNodePreviewFrameRef.current);
       remoteNodePreviewFrameRef.current = null;
     }
+    if (ideationDragFrameRef.current !== null) {
+      window.cancelAnimationFrame(ideationDragFrameRef.current);
+      ideationDragFrameRef.current = null;
+    }
+    pendingIdeationDragFrameRef.current = null;
   }, [stage]);
 
   useEffect(() => {
@@ -13140,10 +13160,82 @@ export default function MeetingCanvasTab({
     ],
   );
 
+  const cancelPendingIdeationDragFrame = () => {
+    if (ideationDragFrameRef.current !== null) {
+      window.cancelAnimationFrame(ideationDragFrameRef.current);
+      ideationDragFrameRef.current = null;
+    }
+    pendingIdeationDragFrameRef.current = null;
+  };
+
+  const applyPendingIdeationDragFrame = () => {
+    ideationDragFrameRef.current = null;
+    const pendingFrame = pendingIdeationDragFrameRef.current;
+    pendingIdeationDragFrameRef.current = null;
+    if (!pendingFrame) {
+      return;
+    }
+
+    const { node, itemId, clientX, clientY, position } = pendingFrame;
+    setIdeationDragGhost((current) =>
+      current?.itemId === itemId && current.x === clientX && current.y === clientY
+        ? current
+        : {
+            itemId,
+            x: clientX,
+            y: clientY,
+          },
+    );
+    scheduleNodePreview(node.id, position);
+    setNodes((current) => {
+      const targetNode = current.find((item) => item.id === node.id);
+      if (!targetNode || positionsEqual(targetNode.position, position)) {
+        return current;
+      }
+
+      return current.map((item) =>
+        item.id === node.id
+          ? {
+              ...item,
+              position,
+            }
+          : item,
+      );
+    });
+
+    const dragNode = {
+      ...node,
+      position,
+    };
+    const nextPreview = resolveIdeationDropPreview(clientX, clientY, dragNode);
+    ideationDropPreviewRef.current = nextPreview;
+    setIdeationDropPreview((current) =>
+      current?.draggedItemId === nextPreview?.draggedItemId &&
+      current?.targetId === nextPreview?.targetId &&
+      current?.mode === nextPreview?.mode &&
+      current?.agendaId === nextPreview?.agendaId &&
+      current?.position.x === nextPreview?.position.x &&
+      current?.position.y === nextPreview?.position.y
+        ? current
+        : nextPreview,
+    );
+    setProblemDropHighlight(null);
+  };
+
+  const queueIdeationDragFrame = (pendingFrame: PendingIdeationDragFrame) => {
+    pendingIdeationDragFrameRef.current = pendingFrame;
+    if (ideationDragFrameRef.current !== null) {
+      return;
+    }
+
+    ideationDragFrameRef.current = window.requestAnimationFrame(applyPendingIdeationDragFrame);
+  };
+
   const onNodeDragStop = (event: React.MouseEvent, node: Node) => {
     setProblemDropHighlight(null);
     setIdeationNodeDragActive(false);
     setIdeationDragGhost(null);
+    cancelPendingIdeationDragFrame();
     const dragNode =
       stage === "ideation" && node.id.startsWith("canvas-item-")
         ? {
@@ -13232,9 +13324,8 @@ export default function MeetingCanvasTab({
         getReactFlowCanvasRect(ideationRightPaneRef.current),
       );
       let dropPreview =
-        activeIdeationDropPreview?.draggedItemId === canvasItemId
-          ? activeIdeationDropPreview
-          : resolveIdeationDropPreview(event.clientX, event.clientY, dragNode);
+        resolveIdeationDropPreview(event.clientX, event.clientY, dragNode) ||
+        (activeIdeationDropPreview?.draggedItemId === canvasItemId ? activeIdeationDropPreview : null);
       let topicToExpandId = "";
       let ideationMoveMessage = "";
       let nextSelectedIdeationItemId = canvasItemId;
@@ -14699,46 +14790,14 @@ export default function MeetingCanvasTab({
   const onNodeDrag = (event: React.MouseEvent, node: Node) => {
     if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
       event.stopPropagation();
-      setIdeationDragGhost({
-        itemId: node.id.slice("canvas-item-".length),
-        x: event.clientX,
-        y: event.clientY,
-      });
       const stablePosition = getStableIdeationDragPosition(event, node);
-      const dragNode = {
-        ...node,
+      queueIdeationDragFrame({
+        node,
+        itemId: node.id.slice("canvas-item-".length),
+        clientX: event.clientX,
+        clientY: event.clientY,
         position: stablePosition,
-      };
-      scheduleNodePreview(node.id, stablePosition);
-      setNodes((current) => {
-        const targetNode = current.find((item) => item.id === node.id);
-        if (!targetNode || positionsEqual(targetNode.position, stablePosition)) {
-          return current;
-        }
-
-        return current.map((item) =>
-          item.id === node.id
-            ? {
-                ...item,
-                position: stablePosition,
-              }
-            : item,
-        );
       });
-
-      const nextPreview = resolveIdeationDropPreview(event.clientX, event.clientY, dragNode);
-      ideationDropPreviewRef.current = nextPreview;
-      setIdeationDropPreview((current) =>
-        current?.draggedItemId === nextPreview?.draggedItemId &&
-        current?.targetId === nextPreview?.targetId &&
-        current?.mode === nextPreview?.mode &&
-        current?.agendaId === nextPreview?.agendaId &&
-        current?.position.x === nextPreview?.position.x &&
-        current?.position.y === nextPreview?.position.y
-          ? current
-          : nextPreview,
-      );
-      setProblemDropHighlight(null);
       return;
     }
 
@@ -14759,6 +14818,7 @@ export default function MeetingCanvasTab({
       `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     ideationDropPreviewRef.current = null;
     setIdeationDropPreview(null);
+    cancelPendingIdeationDragFrame();
     ideationDropTargetElementsRef.current = [];
 
     if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
