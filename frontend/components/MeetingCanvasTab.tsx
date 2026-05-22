@@ -841,6 +841,12 @@ type AgendaDragPreviewState = {
   originPosition: { x: number; y: number };
 };
 
+type IdeationDropTargetElement = {
+  element: HTMLElement;
+  nodeId: string;
+  itemId: string;
+};
+
 type ProblemIdeaDragState = {
   sourceGroupId: string;
   sourceNodeId: string;
@@ -5135,6 +5141,7 @@ export default function MeetingCanvasTab({
   const previousCanvasItemSignaturesRef = useRef<Record<string, string>>({});
   const pendingNodePlacementsRef = useRef<Record<string, { x: number; y: number }>>({});
   const hoveredProblemDropTargetElementRef = useRef<HTMLElement | null>(null);
+  const ideationDropTargetElementsRef = useRef<IdeationDropTargetElement[]>([]);
   const ideationBubbleUpdateTickRef = useRef(0);
 
   useEffect(() => {
@@ -5342,6 +5349,19 @@ export default function MeetingCanvasTab({
 
     return [...hydratedBaseModels, ...customAgendaModels];
   }, [effectiveState, agendas, transcripts, agendaOverrides, customGroups]);
+  const selectedAgendaForDrop = selectedAgendaId || agendaModels[0]?.id || "";
+  const canvasItemById = useMemo(
+    () => new Map(canvasItems.map((item) => [item.id, item] as const)),
+    [canvasItems],
+  );
+  const canvasItemIndexById = useMemo(
+    () => new Map(canvasItems.map((item, index) => [item.id, index] as const)),
+    [canvasItems],
+  );
+  const flowNodeById = useMemo(
+    () => new Map(nodes.map((node) => [node.id, node] as const)),
+    [nodes],
+  );
   const activeMeetingGoal = meetingGoalDraft.trim();
   const meetingTopicForAi = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim() || "회의 주제";
   const ideationKeywordUtterances = useMemo(() => buildIdeationKeywordUtterances(transcripts), [transcripts]);
@@ -12738,6 +12758,30 @@ export default function MeetingCanvasTab({
     [],
   );
 
+  const collectIdeationDropTargetElements = useCallback((draggedNodeId: string): IdeationDropTargetElement[] => {
+    if (typeof document === "undefined") {
+      return [];
+    }
+
+    return Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
+      .map((element) => {
+        const nodeId = element.getAttribute("data-id") || "";
+        const itemId = extractCanvasItemIdFromNodeId(nodeId);
+        return {
+          element,
+          nodeId,
+          itemId,
+        };
+      })
+      .filter(
+        (candidate) =>
+          candidate.nodeId &&
+          candidate.itemId &&
+          candidate.nodeId !== draggedNodeId &&
+          candidate.nodeId !== "ideation-drop-placeholder",
+      );
+  }, []);
+
   const findIdeationLeftGroupDropTarget = useCallback(
     (clientX: number, clientY: number, draggedItem: CanvasItemViewModel) => {
       if (stage !== "ideation") {
@@ -12749,52 +12793,63 @@ export default function MeetingCanvasTab({
         return null;
       }
 
-      const selectedAgendaForDrop = selectedAgendaId || agendaModels[0]?.id || "";
       const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
       const draggedDescendantIds = new Set(getCanvasItemDescendantIds(canvasItems, draggedItem.id));
+      const candidates =
+        ideationDropTargetElementsRef.current.length > 0
+          ? ideationDropTargetElementsRef.current
+          : collectIdeationDropTargetElements(`canvas-item-${draggedItem.id}`);
+      let bestTarget: {
+        nodeId: string;
+        targetItem: CanvasItemViewModel;
+        targetNode: Node | null;
+        isCurrentRoot: boolean;
+        distance: number;
+      } | null = null;
 
-      return Array.from(leftPane.querySelectorAll<HTMLElement>(".react-flow__node"))
-        .map((element) => {
-          const nodeId = element.getAttribute("data-id") || "";
-          const targetItemId = extractCanvasItemIdFromNodeId(nodeId);
-          const targetItem = targetItemId
-            ? canvasItems.find((item) => item.id === targetItemId) || null
-            : null;
-          if (!targetItem) {
-            return null;
-          }
+      for (const { element, nodeId, itemId } of candidates) {
+        if (!leftPane.contains(element)) {
+          continue;
+        }
+        const targetItem = canvasItemById.get(itemId) || null;
+        if (!targetItem) {
+          continue;
+        }
 
-          const rect = element.getBoundingClientRect();
-          const inside =
-            clientX >= rect.left &&
-            clientX <= rect.right &&
-            clientY >= rect.top &&
-            clientY <= rect.bottom;
-          if (!inside) {
-            return null;
-          }
+        const rect = element.getBoundingClientRect();
+        const inside =
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom;
+        if (!inside) {
+          continue;
+        }
 
-          if (
-            targetItem.parent_topic_id ||
-            targetItem.agenda_id !== selectedAgendaForDrop ||
-            targetItem.id === draggedItem.id ||
-            draggedDescendantIds.has(targetItem.id)
-          ) {
-            return null;
-          }
+        if (
+          targetItem.parent_topic_id ||
+          targetItem.agenda_id !== selectedAgendaForDrop ||
+          targetItem.id === draggedItem.id ||
+          draggedDescendantIds.has(targetItem.id)
+        ) {
+          continue;
+        }
 
-          return {
-            nodeId,
-            targetItem,
-            targetNode: nodes.find((candidate) => candidate.id === nodeId) || null,
-            isCurrentRoot: targetItem.id === draggedRootId,
-            distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-        .sort((left, right) => left.distance - right.distance)[0] || null;
+        const target = {
+          nodeId,
+          targetItem,
+          targetNode: flowNodeById.get(nodeId) || null,
+          isCurrentRoot: targetItem.id === draggedRootId,
+          distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
+        };
+        if (!bestTarget || target.distance < bestTarget.distance) {
+          bestTarget = target;
+        }
+      }
+
+      return bestTarget;
     },
-    [agendaModels, canvasItems, nodes, selectedAgendaId, stage],
+    [canvasItemById, canvasItems, collectIdeationDropTargetElements, flowNodeById, selectedAgendaForDrop, stage],
   );
 
   const resolveIdeationDropPreview = useCallback(
@@ -12804,12 +12859,11 @@ export default function MeetingCanvasTab({
       }
 
       const draggedItemId = node.id.slice("canvas-item-".length);
-      const draggedItem = canvasItems.find((item) => item.id === draggedItemId) || null;
+      const draggedItem = canvasItemById.get(draggedItemId) || null;
       if (!draggedItem) {
         return null;
       }
 
-      const selectedAgendaForDrop = selectedAgendaId || agendaModels[0]?.id || "";
       const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
       const draggedDescendantIds = getCanvasItemDescendantIds(canvasItems, draggedItem.id);
       const splitLeftDropTarget = findIdeationLeftGroupDropTarget(clientX, clientY, draggedItem);
@@ -12863,7 +12917,7 @@ export default function MeetingCanvasTab({
           ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
           : "";
         const selectedRootItemForDrop = selectedRootIdForDrop
-          ? canvasItems.find((item) => item.id === selectedRootIdForDrop) || null
+          ? canvasItemById.get(selectedRootIdForDrop) || null
           : null;
 
         if (
@@ -12887,99 +12941,109 @@ export default function MeetingCanvasTab({
         return null;
       }
 
-      const candidateElements = Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
-        .map((element) => ({
-          element,
-          nodeId: element.getAttribute("data-id") || "",
-        }))
-        .filter(({ nodeId }) =>
-          nodeId &&
-          nodeId !== node.id &&
-          nodeId !== "ideation-drop-placeholder" &&
-          nodeId.startsWith("canvas-item-"),
-        );
+      const candidateElements =
+        ideationDropTargetElementsRef.current.length > 0
+          ? ideationDropTargetElementsRef.current
+          : collectIdeationDropTargetElements(node.id);
+      let candidateDropTarget: {
+        nodeId: string;
+        targetItem: CanvasItemViewModel;
+        targetNode: Node;
+        childCount: number;
+        directAction: "group-move" | "group-merge" | "";
+        distance: number;
+      } | null = null;
 
-      const candidateDropTargets = candidateElements
-        .map(({ element, nodeId }) => {
-          const targetItemId = nodeId.slice("canvas-item-".length);
-          const targetItem = canvasItems.find((item) => item.id === targetItemId) || null;
-          const targetNode = nodes.find((candidate) => candidate.id === nodeId) || null;
-          if (!targetItem || !targetNode || targetItem.id === draggedItem.id) {
-            return null;
-          }
+      for (const { element, nodeId, itemId } of candidateElements) {
+        if (!nodeId.startsWith("canvas-item-")) {
+          continue;
+        }
+        const targetItem = canvasItemById.get(itemId) || null;
+        const targetNode = flowNodeById.get(nodeId) || null;
+        if (!targetItem || !targetNode || targetItem.id === draggedItem.id) {
+          continue;
+        }
 
-          const rect = element.getBoundingClientRect();
-          const insideNodeRect =
-            clientX >= rect.left &&
-            clientX <= rect.right &&
-            clientY >= rect.top &&
-            clientY <= rect.bottom;
-          const canDropOnSplitGroup =
-            insideNodeRect &&
-            Boolean(draggedItem.parent_topic_id) &&
-            !targetItem.parent_topic_id &&
-            targetItem.agenda_id === selectedAgendaForDrop &&
-            targetItem.id !== draggedRootId &&
-            !draggedDescendantIds.includes(targetItem.id);
-          if (canDropOnSplitGroup) {
-            return {
-              nodeId,
-              targetItem,
-              targetNode,
-              childCount: 0,
-              directAction: "group-move" as const,
-              distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-            };
-          }
-          const canMergeSplitGroups =
-            insideNodeRect &&
-            !draggedItem.parent_topic_id &&
-            !targetItem.parent_topic_id &&
-            targetItem.agenda_id === selectedAgendaForDrop &&
-            targetItem.id !== draggedItem.id &&
-            !draggedDescendantIds.includes(targetItem.id);
-          if (canMergeSplitGroups) {
-            return {
-              nodeId,
-              targetItem,
-              targetNode,
-              childCount: 0,
-              directAction: "group-merge" as const,
-              distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-            };
-          }
-
-          const screenGap = Math.max(10, rect.width * 0.045);
-          const childCount =
-            isTopicCanvasItem(targetItem) && !isTopicCanvasItem(draggedItem)
-              ? getTopicDirectChildIds(canvasItems, targetItem.id).filter((childId) => childId !== draggedItem.id).length
-              : 0;
-          const dropLeft = rect.right + screenGap + childCount * (rect.width + screenGap);
-          const dropRight = dropLeft + rect.width;
-          const dropTop = rect.top - CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
-          const dropBottom = rect.bottom + CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
-          const insideDropZone =
-            clientX >= dropLeft &&
-            clientX <= dropRight &&
-            clientY >= dropTop &&
-            clientY <= dropBottom;
-          if (!insideDropZone) {
-            return null;
-          }
-
-          return {
+        const rect = element.getBoundingClientRect();
+        const insideNodeRect =
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom;
+        const canDropOnSplitGroup =
+          insideNodeRect &&
+          Boolean(draggedItem.parent_topic_id) &&
+          !targetItem.parent_topic_id &&
+          targetItem.agenda_id === selectedAgendaForDrop &&
+          targetItem.id !== draggedRootId &&
+          !draggedDescendantIds.includes(targetItem.id);
+        if (canDropOnSplitGroup) {
+          const target = {
             nodeId,
             targetItem,
             targetNode,
-            childCount,
-            directAction: "" as const,
-            distance: Math.hypot(clientX - dropLeft, clientY - (rect.top + rect.height / 2)),
+            childCount: 0,
+            directAction: "group-move" as const,
+            distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
           };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-        .sort((left, right) => left.distance - right.distance);
+          if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
+            candidateDropTarget = target;
+          }
+          continue;
+        }
+        const canMergeSplitGroups =
+          insideNodeRect &&
+          !draggedItem.parent_topic_id &&
+          !targetItem.parent_topic_id &&
+          targetItem.agenda_id === selectedAgendaForDrop &&
+          targetItem.id !== draggedItem.id &&
+          !draggedDescendantIds.includes(targetItem.id);
+        if (canMergeSplitGroups) {
+          const target = {
+            nodeId,
+            targetItem,
+            targetNode,
+            childCount: 0,
+            directAction: "group-merge" as const,
+            distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
+          };
+          if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
+            candidateDropTarget = target;
+          }
+          continue;
+        }
 
-      const candidateDropTarget = candidateDropTargets[0] || null;
+        const screenGap = Math.max(10, rect.width * 0.045);
+        const childCount =
+          isTopicCanvasItem(targetItem) && !isTopicCanvasItem(draggedItem)
+            ? getTopicDirectChildIds(canvasItems, targetItem.id).filter((childId) => childId !== draggedItem.id).length
+            : 0;
+        const dropLeft = rect.right + screenGap + childCount * (rect.width + screenGap);
+        const dropRight = dropLeft + rect.width;
+        const dropTop = rect.top - CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
+        const dropBottom = rect.bottom + CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
+        const insideDropZone =
+          clientX >= dropLeft &&
+          clientX <= dropRight &&
+          clientY >= dropTop &&
+          clientY <= dropBottom;
+        if (!insideDropZone) {
+          continue;
+        }
+
+        const target = {
+          nodeId,
+          targetItem,
+          targetNode,
+          childCount,
+          directAction: "" as const,
+          distance: Math.hypot(clientX - dropLeft, clientY - (rect.top + rect.height / 2)),
+        };
+        if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
+          candidateDropTarget = target;
+        }
+      }
+
       const candidateNodeId = candidateDropTarget?.nodeId || "";
 
       if (candidateNodeId.startsWith("canvas-item-")) {
@@ -13063,7 +13127,17 @@ export default function MeetingCanvasTab({
 
       return null;
     },
-    [agendaModels, canvasItems, findIdeationLeftGroupDropTarget, getIdeationDropPlaceholderPosition, nodes, selectedAgendaId, selectedCanvasItemId, stage],
+    [
+      canvasItemById,
+      canvasItems,
+      collectIdeationDropTargetElements,
+      findIdeationLeftGroupDropTarget,
+      flowNodeById,
+      getIdeationDropPlaceholderPosition,
+      selectedAgendaForDrop,
+      selectedCanvasItemId,
+      stage,
+    ],
   );
 
   const onNodeDragStop = (event: React.MouseEvent, node: Node) => {
@@ -13081,6 +13155,7 @@ export default function MeetingCanvasTab({
     stableIdeationDragRef.current = null;
     const clearNodeDragSession = () => {
       delete dragIdByNodeIdRef.current[node.id];
+      ideationDropTargetElementsRef.current = [];
     };
     const activeIdeationDropPreview = ideationDropPreviewRef.current || ideationDropPreview;
     ideationDropPreviewRef.current = null;
@@ -13150,7 +13225,7 @@ export default function MeetingCanvasTab({
 
     if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
       const canvasItemId = node.id.slice("canvas-item-".length);
-      const draggedItem = canvasItems.find((item) => item.id === canvasItemId) || null;
+      const draggedItem = canvasItemById.get(canvasItemId) || null;
       const droppedOnRightPane = pointInRect(
         event.clientX,
         event.clientY,
@@ -13169,7 +13244,7 @@ export default function MeetingCanvasTab({
           ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
           : "";
         const selectedRootItemForDrop = selectedRootIdForDrop
-          ? canvasItems.find((item) => item.id === selectedRootIdForDrop) || null
+          ? canvasItemById.get(selectedRootIdForDrop) || null
           : null;
 
         if (selectedRootItemForDrop && selectedRootItemForDrop.id !== draggedItem.id) {
@@ -13188,7 +13263,8 @@ export default function MeetingCanvasTab({
 
       if (draggedItem && dropPreview?.mode === "topic-merge") {
         const draggedTopic = isTopicCanvasItem(draggedItem) ? draggedItem : null;
-        const targetTopic = canvasItems.find((item) => item.id === dropPreview.targetId && isTopicCanvasItem(item)) || null;
+        const targetTopicCandidate = canvasItemById.get(dropPreview.targetId) || null;
+        const targetTopic = targetTopicCandidate && isTopicCanvasItem(targetTopicCandidate) ? targetTopicCandidate : null;
         if (draggedTopic && targetTopic && draggedTopic.id !== targetTopic.id) {
           const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
           const nextAgendaId = dropPreview.agendaId || targetTopic.agenda_id || draggedTopic.agenda_id;
@@ -13239,8 +13315,8 @@ export default function MeetingCanvasTab({
             x: undefined,
             y: undefined,
           };
-          const targetIndex = canvasItems.findIndex((item) => item.id === targetTopic.id);
-          const draggedIndex = canvasItems.findIndex((item) => item.id === draggedTopic.id);
+          const targetIndex = canvasItemIndexById.get(targetTopic.id) ?? canvasItems.length;
+          const draggedIndex = canvasItemIndexById.get(draggedTopic.id) ?? canvasItems.length;
           const insertIndex = Math.max(0, Math.min(
             targetIndex >= 0 ? targetIndex : canvasItems.length,
             draggedIndex >= 0 ? draggedIndex : canvasItems.length,
@@ -13304,7 +13380,8 @@ export default function MeetingCanvasTab({
         }
       } else if (draggedItem && dropPreview?.mode === "topic-idea-merge") {
         const draggedTopic = isTopicCanvasItem(draggedItem) ? draggedItem : null;
-        const targetItem = canvasItems.find((item) => item.id === dropPreview.targetId && !isTopicCanvasItem(item)) || null;
+        const targetItemCandidate = canvasItemById.get(dropPreview.targetId) || null;
+        const targetItem = targetItemCandidate && !isTopicCanvasItem(targetItemCandidate) ? targetItemCandidate : null;
         if (draggedTopic && targetItem) {
           const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
           const nextAgendaId = dropPreview.agendaId || targetItem.agenda_id || draggedTopic.agenda_id;
@@ -13369,8 +13446,8 @@ export default function MeetingCanvasTab({
             x: undefined,
             y: undefined,
           };
-          const targetIndex = canvasItems.findIndex((item) => item.id === targetItem.id);
-          const draggedIndex = canvasItems.findIndex((item) => item.id === draggedTopic.id);
+          const targetIndex = canvasItemIndexById.get(targetItem.id) ?? canvasItems.length;
+          const draggedIndex = canvasItemIndexById.get(draggedTopic.id) ?? canvasItems.length;
           const insertIndex = Math.max(0, Math.min(
             targetIndex >= 0 ? targetIndex : canvasItems.length,
             draggedIndex >= 0 ? draggedIndex : canvasItems.length,
@@ -13439,7 +13516,7 @@ export default function MeetingCanvasTab({
           ideationMoveMessage = `"${draggedTopic.title || "토픽"}"과 "${targetItem.title || "대상 노드"}"를 새 토픽으로 통합했습니다.`;
         }
       } else if (draggedItem && dropPreview?.mode === "topic") {
-        const targetGroup = canvasItems.find((item) => item.id === dropPreview.targetId) || null;
+        const targetGroup = canvasItemById.get(dropPreview.targetId) || null;
         if (targetGroup && targetGroup.id !== draggedItem.id) {
           const nextAgendaId = targetGroup.agenda_id || draggedItem.agenda_id;
           nextCanvasItemsSnapshot = canvasItems.map((item) =>
@@ -13478,7 +13555,8 @@ export default function MeetingCanvasTab({
           ideationMoveMessage = `"${draggedItem.title || "노드"}"를 "${targetGroup.title || "그룹"}"에 추가했습니다.`;
         }
       } else if (draggedItem && dropPreview?.mode === "merge") {
-        const targetItem = canvasItems.find((item) => item.id === dropPreview.targetId && !isTopicCanvasItem(item));
+        const targetItemCandidate = canvasItemById.get(dropPreview.targetId) || null;
+        const targetItem = targetItemCandidate && !isTopicCanvasItem(targetItemCandidate) ? targetItemCandidate : null;
         if (targetItem && targetItem.id !== draggedItem.id) {
           const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
           const nextAgendaId = dropPreview.agendaId || targetItem.agenda_id || draggedItem.agenda_id;
@@ -13512,8 +13590,8 @@ export default function MeetingCanvasTab({
             x: undefined,
             y: undefined,
           };
-          const targetIndex = canvasItems.findIndex((item) => item.id === targetItem.id);
-          const draggedIndex = canvasItems.findIndex((item) => item.id === draggedItem.id);
+          const targetIndex = canvasItemIndexById.get(targetItem.id) ?? canvasItems.length;
+          const draggedIndex = canvasItemIndexById.get(draggedItem.id) ?? canvasItems.length;
           const insertIndex = Math.max(0, Math.min(
             targetIndex >= 0 ? targetIndex : canvasItems.length,
             draggedIndex >= 0 ? draggedIndex : canvasItems.length,
@@ -14681,9 +14759,11 @@ export default function MeetingCanvasTab({
       `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     ideationDropPreviewRef.current = null;
     setIdeationDropPreview(null);
+    ideationDropTargetElementsRef.current = [];
 
     if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
       event.stopPropagation();
+      ideationDropTargetElementsRef.current = collectIdeationDropTargetElements(node.id);
       setIdeationNodeDragActive(true);
       setIdeationDragGhost({
         itemId: node.id.slice("canvas-item-".length),
