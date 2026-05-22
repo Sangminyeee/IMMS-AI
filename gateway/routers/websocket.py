@@ -966,6 +966,39 @@ async def websocket_endpoint(
                     broadcast_to_meeting(meeting_id, sync_message, exclude_user=user_id),
                 )
 
+            elif message_type == 'canvas_node_preview':
+                node_id = str(message.get('node_id') or '').strip()
+                if not node_id:
+                    continue
+
+                stage = str(message.get('stage') or 'ideation').strip()
+                if stage not in {'ideation', 'problem-definition', 'solution'}:
+                    stage = 'ideation'
+
+                try:
+                    x = float(message.get('x') or 0)
+                    y = float(message.get('y') or 0)
+                except (TypeError, ValueError):
+                    continue
+
+                try:
+                    client_seq = int(message.get('client_seq') or 0)
+                except (TypeError, ValueError):
+                    client_seq = 0
+
+                await broadcast_to_meeting(meeting_id, {
+                    'type': 'canvas_node_preview',
+                    'meeting_id': meeting_id,
+                    'stage': stage,
+                    'node_id': node_id,
+                    'x': x,
+                    'y': y,
+                    'updated_by': user_id,
+                    'updated_at': datetime.utcnow().isoformat(),
+                    'drag_id': str(message.get('drag_id') or ''),
+                    'client_seq': client_seq,
+                }, exclude_user=user_id)
+
             elif message_type == 'meeting_goal_sync':
                 meeting_goal = str(message.get("meeting_goal") or "").strip()
                 meeting_goal_context = str(message.get("meeting_goal_context") or "").strip()

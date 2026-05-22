@@ -7,7 +7,7 @@ import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
 import { supabase } from "@/lib/supabase";
 import { getAudioImportJobStatus, getCanvasWorkspaceState, startAudioImportJob, syncTranscript } from "@/lib/api";
-import type { AudioImportJobStatusResponse, CanvasRealtimeSyncPayload, MeetingState } from "@/lib/types";
+import type { AudioImportJobStatusResponse, CanvasNodePreviewPayload, CanvasRealtimeSyncPayload, MeetingState } from "@/lib/types";
 import MeetingCanvasTab, { type MeetingAgenda as CanvasAgenda, type MeetingTranscript as CanvasTranscript } from "@/components/MeetingCanvasTab";
 
 interface Transcript {
@@ -251,6 +251,7 @@ function HomeContent() {
   const [canvasSyncStatus, setCanvasSyncStatus] = useState("실시간 전사가 저장되고 키워드 버블에 반영됩니다.");
   const [autoSyncing] = useState(false);
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
+  const [incomingCanvasNodePreview, setIncomingCanvasNodePreview] = useState<CanvasNodePreviewPayload | null>(null);
   const [incomingCanvasStateRequestId, setIncomingCanvasStateRequestId] = useState("");
   const [calibrationState, setCalibrationState] = useState<CalibrationState>("idle");
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(0);
@@ -652,6 +653,29 @@ function HomeContent() {
       setIncomingCanvasSync(payload);
     });
 
+    wsClient.on("canvas_node_preview", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload) || readString(payload.meeting_id) !== meetingId) return;
+      const stage = readString(payload.stage, "ideation");
+      if (stage !== "ideation" && stage !== "problem-definition" && stage !== "solution") return;
+      const nodeId = readString(payload.node_id);
+      const updatedBy = readString(payload.updated_by);
+      const x = Number(payload.x);
+      const y = Number(payload.y);
+      if (!nodeId || !updatedBy || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      setIncomingCanvasNodePreview({
+        meeting_id: meetingId,
+        stage,
+        node_id: nodeId,
+        x,
+        y,
+        updated_by: updatedBy,
+        updated_at: readString(payload.updated_at, new Date().toISOString()),
+        drag_id: readString(payload.drag_id),
+        client_seq: Number(payload.client_seq) || 0,
+      });
+    });
+
     wsClient.on("canvas_state_request", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload) || payload.meeting_id !== meetingId) return;
@@ -1036,6 +1060,9 @@ function HomeContent() {
       workspace: payload,
     });
   }, []);
+  const broadcastCanvasNodePreview = useCallback((payload: CanvasNodePreviewPayload) => {
+    wsClientRef.current?.sendMessage("canvas_node_preview", payload as unknown as Record<string, unknown>);
+  }, []);
   const broadcastMeetingGoalSync = useCallback((goal: string, context = meetingGoalContextRef.current) => {
     wsClientRef.current?.sendMessage("meeting_goal_sync", {
       meeting_goal: goal,
@@ -1079,6 +1106,8 @@ function HomeContent() {
         onSyncFromMeeting={syncBackendFromMeeting}
         incomingSharedCanvasSync={incomingCanvasSync}
         onSharedCanvasSync={broadcastCanvasSync}
+        incomingNodePreview={incomingCanvasNodePreview}
+        onNodePreviewSync={broadcastCanvasNodePreview}
         incomingCanvasStateRequestId={incomingCanvasStateRequestId}
         syncStatusText={canvasSyncStatus}
         autoSyncing={autoSyncing}

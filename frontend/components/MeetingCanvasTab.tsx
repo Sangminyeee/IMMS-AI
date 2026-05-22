@@ -46,6 +46,7 @@ import type {
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
   CanvasLocalState,
+  CanvasNodePreviewPayload,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
   CanvasProblemStructureState,
@@ -104,6 +105,9 @@ type ProblemStructureMethod = "affinity" | "card-sorting";
 const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
+const NODE_PREVIEW_SYNC_THROTTLE_MS = 64;
+const NODE_PREVIEW_ANIMATION_LERP = 0.38;
+const NODE_PREVIEW_SETTLE_DISTANCE = 0.75;
 const PROBLEM_STRUCTURE_NODE_DRAG_MIME = "application/x-imms-problem-structure-node";
 const DEFAULT_LEFT_PANEL_RATIO = 0.19;
 const DEFAULT_RIGHT_PANEL_RATIO = 0.2;
@@ -872,6 +876,8 @@ type MeetingCanvasTabProps = {
   onSyncFromMeeting: (analyze?: boolean) => Promise<MeetingState | null>;
   incomingSharedCanvasSync: CanvasRealtimeSyncPayload | null;
   onSharedCanvasSync: (payload: CanvasRealtimeSyncPayload) => void;
+  incomingNodePreview: CanvasNodePreviewPayload | null;
+  onNodePreviewSync: (payload: CanvasNodePreviewPayload) => void;
   incomingCanvasStateRequestId: string;
   syncStatusText: string;
   autoSyncing: boolean;
@@ -4826,6 +4832,8 @@ export default function MeetingCanvasTab({
   analysisState,
   incomingSharedCanvasSync,
   onSharedCanvasSync,
+  incomingNodePreview,
+  onNodePreviewSync,
   incomingCanvasStateRequestId,
   audioImportStatusText,
   audioImportRevision,
@@ -5039,6 +5047,16 @@ export default function MeetingCanvasTab({
   const lastWorkspaceFieldSignaturesRef = useRef<WorkspaceFieldSignatures>(createWorkspaceFieldSignatures());
   const personalNotesSaveTimerRef = useRef<number | null>(null);
   const sharedSyncTimerRef = useRef<number | null>(null);
+  const nodePreviewFlushTimerRef = useRef<number | null>(null);
+  const liveNodePositionsRef = useRef<CanvasNodePositionsByStage>({});
+  const pendingNodePreviewsRef = useRef<Record<string, CanvasNodePreviewPayload>>({});
+  const lastNodePreviewFlushAtRef = useRef(0);
+  const nodePreviewSeqRef = useRef(0);
+  const localDraggingNodeIdsRef = useRef<Set<string>>(new Set());
+  const dragIdByNodeIdRef = useRef<Record<string, string>>({});
+  const lastRemoteNodePreviewSeqRef = useRef<Record<string, number>>({});
+  const remoteNodePreviewTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const remoteNodePreviewFrameRef = useRef<number | null>(null);
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
   const lastSharedSyncSignatureRef = useRef("");
@@ -5586,6 +5604,22 @@ export default function MeetingCanvasTab({
       window.clearTimeout(sharedSyncTimerRef.current);
       sharedSyncTimerRef.current = null;
     }
+    if (nodePreviewFlushTimerRef.current) {
+      window.clearTimeout(nodePreviewFlushTimerRef.current);
+      nodePreviewFlushTimerRef.current = null;
+    }
+    if (remoteNodePreviewFrameRef.current) {
+      window.cancelAnimationFrame(remoteNodePreviewFrameRef.current);
+      remoteNodePreviewFrameRef.current = null;
+    }
+    liveNodePositionsRef.current = {};
+    pendingNodePreviewsRef.current = {};
+    lastNodePreviewFlushAtRef.current = 0;
+    nodePreviewSeqRef.current = 0;
+    localDraggingNodeIdsRef.current.clear();
+    dragIdByNodeIdRef.current = {};
+    lastRemoteNodePreviewSeqRef.current = {};
+    remoteNodePreviewTargetsRef.current.clear();
     if (placementFeedbackTimerRef.current) {
       window.clearTimeout(placementFeedbackTimerRef.current);
       placementFeedbackTimerRef.current = null;
@@ -5631,6 +5665,10 @@ export default function MeetingCanvasTab({
     solutionTopics,
     stage,
   ]);
+
+  useEffect(() => {
+    liveNodePositionsRef.current = normalizeCanvasNodePositionsForComputedIdeation(nodePositions);
+  }, [nodePositions]);
 
   useEffect(() => {
     const nextSignatures = Object.fromEntries(
@@ -6271,10 +6309,17 @@ export default function MeetingCanvasTab({
             : persistedSharedImportedState,
       };
 
+      if (nodePreviewFlushTimerRef.current) {
+        window.clearTimeout(nodePreviewFlushTimerRef.current);
+        nodePreviewFlushTimerRef.current = null;
+      }
+      pendingNodePreviewsRef.current = {};
+      lastNodePreviewFlushAtRef.current = Date.now();
       lastSharedSyncSignatureRef.current = buildSharedCanvasSignature(snapshot);
       onSharedCanvasSync({
         sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         meeting_id: meetingId,
+        sync_scope: "full",
         updated_by: userId,
         updated_at: new Date().toISOString(),
         meeting_goal: snapshot.meeting_goal,
@@ -6309,6 +6354,174 @@ export default function MeetingCanvasTab({
       userId,
     ],
   );
+
+  const flushPendingNodePreviews = useCallback(() => {
+    if (nodePreviewFlushTimerRef.current) {
+      window.clearTimeout(nodePreviewFlushTimerRef.current);
+    }
+    nodePreviewFlushTimerRef.current = null;
+    if (
+      !meetingId ||
+      !userId ||
+      !latestSharedSyncEnabledRef.current ||
+      !workspaceLoadedRef.current ||
+      workspaceHydratingRef.current ||
+      applyingRemoteSharedSyncRef.current
+    ) {
+      pendingNodePreviewsRef.current = {};
+      return;
+    }
+
+    const pendingPreviews = Object.values(pendingNodePreviewsRef.current);
+    pendingNodePreviewsRef.current = {};
+    if (pendingPreviews.length === 0) {
+      return;
+    }
+
+    lastNodePreviewFlushAtRef.current = Date.now();
+    pendingPreviews.forEach((preview) => {
+      onNodePreviewSync(preview);
+    });
+  }, [meetingId, onNodePreviewSync, userId]);
+
+  const scheduleNodePreview = useCallback(
+    (nodeId: string, position: { x: number; y: number }) => {
+      if (
+        !meetingId ||
+        !userId ||
+        !nodeId ||
+        !latestSharedSyncEnabledRef.current ||
+        !workspaceLoadedRef.current ||
+        workspaceHydratingRef.current ||
+        applyingRemoteSharedSyncRef.current
+      ) {
+        return;
+      }
+
+      const dragId =
+        dragIdByNodeIdRef.current[nodeId] ||
+        `${meetingId}:${userId}:${nodeId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+      dragIdByNodeIdRef.current[nodeId] = dragId;
+      const preview: CanvasNodePreviewPayload = {
+        meeting_id: meetingId,
+        stage,
+        node_id: nodeId,
+        x: Number(position.x || 0),
+        y: Number(position.y || 0),
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+        drag_id: dragId,
+        client_seq: ++nodePreviewSeqRef.current,
+      };
+      pendingNodePreviewsRef.current[`${preview.stage}:${preview.node_id}`] = preview;
+
+      const elapsed = Date.now() - lastNodePreviewFlushAtRef.current;
+      const delay = Math.max(0, NODE_PREVIEW_SYNC_THROTTLE_MS - elapsed);
+      if (delay === 0) {
+        flushPendingNodePreviews();
+        return;
+      }
+
+      if (!nodePreviewFlushTimerRef.current) {
+        nodePreviewFlushTimerRef.current = window.setTimeout(flushPendingNodePreviews, delay);
+      }
+    },
+    [flushPendingNodePreviews, meetingId, stage, userId],
+  );
+
+  const ensureRemoteNodePreviewAnimation = useCallback(() => {
+    if (remoteNodePreviewFrameRef.current !== null) {
+      return;
+    }
+
+    const animate = () => {
+      remoteNodePreviewFrameRef.current = null;
+      if (remoteNodePreviewTargetsRef.current.size === 0) {
+        return;
+      }
+
+      setNodes((current) => {
+        const visibleNodeIds = new Set(current.map((node) => node.id));
+        remoteNodePreviewTargetsRef.current.forEach((_, nodeId) => {
+          if (!visibleNodeIds.has(nodeId) || localDraggingNodeIdsRef.current.has(nodeId)) {
+            remoteNodePreviewTargetsRef.current.delete(nodeId);
+          }
+        });
+
+        let changed = false;
+        const nextNodes = current.map((node) => {
+          const target = remoteNodePreviewTargetsRef.current.get(node.id);
+          if (!target) {
+            return node;
+          }
+
+          const dx = target.x - node.position.x;
+          const dy = target.y - node.position.y;
+          const distance = Math.hypot(dx, dy);
+          const nextPosition =
+            distance <= NODE_PREVIEW_SETTLE_DISTANCE
+              ? target
+              : {
+                  x: node.position.x + dx * NODE_PREVIEW_ANIMATION_LERP,
+                  y: node.position.y + dy * NODE_PREVIEW_ANIMATION_LERP,
+                };
+
+          if (distance <= NODE_PREVIEW_SETTLE_DISTANCE) {
+            remoteNodePreviewTargetsRef.current.delete(node.id);
+          }
+
+          if (positionsEqual(node.position, nextPosition)) {
+            return node;
+          }
+
+          changed = true;
+          return {
+            ...node,
+            position: nextPosition,
+          };
+        });
+
+        return changed ? nextNodes : current;
+      });
+
+      if (remoteNodePreviewTargetsRef.current.size > 0) {
+        remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
+      }
+    };
+
+    remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !incomingNodePreview ||
+      incomingNodePreview.meeting_id !== meetingId ||
+      incomingNodePreview.updated_by === userId ||
+      incomingNodePreview.stage !== stage ||
+      !workspaceLoadedRef.current ||
+      workspaceHydratingRef.current
+    ) {
+      return;
+    }
+
+    const nodeId = incomingNodePreview.node_id;
+    if (!nodeId || localDraggingNodeIdsRef.current.has(nodeId)) {
+      return;
+    }
+
+    const sequenceKey = `${incomingNodePreview.updated_by}:${incomingNodePreview.stage}:${nodeId}`;
+    const previousSequence = lastRemoteNodePreviewSeqRef.current[sequenceKey] ?? -1;
+    if (incomingNodePreview.client_seq <= previousSequence) {
+      return;
+    }
+
+    lastRemoteNodePreviewSeqRef.current[sequenceKey] = incomingNodePreview.client_seq;
+    remoteNodePreviewTargetsRef.current.set(nodeId, {
+      x: incomingNodePreview.x,
+      y: incomingNodePreview.y,
+    });
+    ensureRemoteNodePreviewAnimation();
+  }, [ensureRemoteNodePreviewAnimation, incomingNodePreview, meetingId, stage, userId]);
 
   const applyServerIdeaWorkspace = useCallback(
     (workspace: CanvasWorkspaceStateResponse | undefined | null) => {
@@ -7706,6 +7919,31 @@ export default function MeetingCanvasTab({
     }
 
     lastIncomingSharedSyncIdRef.current = incomingSharedCanvasSync.sync_id;
+    if (incomingSharedCanvasSync.sync_scope === "node_positions") {
+      const nextIncomingNodePositions = normalizeCanvasNodePositionsForComputedIdeation(
+        incomingSharedCanvasSync.node_positions || {},
+      );
+
+      applyingRemoteSharedSyncRef.current = true;
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        nodePositions: nextIncomingNodePositions,
+      };
+      setNodePositions((prev) =>
+        sharedSyncEnabled
+          ? nextIncomingNodePositions
+          : mergeNodePositionsWithLocalOverrides(
+              prev,
+              nextIncomingNodePositions,
+              localNodeOverridesRef.current,
+            ),
+      );
+      window.setTimeout(() => {
+        applyingRemoteSharedSyncRef.current = false;
+      }, 0);
+      return;
+    }
+
     const incomingStage =
       incomingSharedCanvasSync.stage === "problem-definition" ||
       incomingSharedCanvasSync.stage === "solution"
@@ -7960,6 +8198,7 @@ export default function MeetingCanvasTab({
       onSharedCanvasSync({
         sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         meeting_id: meetingId,
+        sync_scope: "full",
         meeting_goal: sharedCanvasSnapshot.meeting_goal,
         meeting_goal_context: sharedCanvasSnapshot.meeting_goal_context,
         updated_by: userId,
@@ -11834,6 +12073,42 @@ export default function MeetingCanvasTab({
     }
 
     setNodes((current) => applyNodeChanges(changes, current));
+    let livePositionsChanged = false;
+    let nextLiveStagePositions = { ...(liveNodePositionsRef.current[stage] || {}) };
+
+    changes.forEach((change) => {
+      if (change.type !== "position" || !("position" in change) || !change.position) {
+        return;
+      }
+      if (stage === "ideation" && !change.id.startsWith("agenda-")) {
+        return;
+      }
+
+      const nextPosition = {
+        x: Number(change.position.x || 0),
+        y: Number(change.position.y || 0),
+      };
+      const previousPosition = nextLiveStagePositions[change.id];
+      if (previousPosition?.x === nextPosition.x && previousPosition.y === nextPosition.y) {
+        return;
+      }
+
+      scheduleNodePreview(change.id, nextPosition);
+      nextLiveStagePositions = {
+        ...nextLiveStagePositions,
+        [change.id]: nextPosition,
+      };
+      livePositionsChanged = true;
+    });
+
+    if (livePositionsChanged) {
+      const nextLivePositions = normalizeCanvasNodePositionsForComputedIdeation({
+        ...liveNodePositionsRef.current,
+        [stage]: nextLiveStagePositions,
+      });
+      liveNodePositionsRef.current = nextLivePositions;
+    }
+
     setNodePositions((prev) => {
       const stagePositions = { ...(prev[stage] || {}) };
       let changed = false;
@@ -12260,7 +12535,11 @@ export default function MeetingCanvasTab({
             position: getStableIdeationDragPosition(event, node),
           }
         : node;
+    localDraggingNodeIdsRef.current.delete(node.id);
     stableIdeationDragRef.current = null;
+    const clearNodeDragSession = () => {
+      delete dragIdByNodeIdRef.current[node.id];
+    };
     const activeIdeationDropPreview = ideationDropPreviewRef.current || ideationDropPreview;
     ideationDropPreviewRef.current = null;
     setIdeationDropPreview(null);
@@ -12273,8 +12552,13 @@ export default function MeetingCanvasTab({
         agendaDragPreviewRef.current = null;
         setAgendaDragPreview(null);
       }
+      clearNodeDragSession();
       return;
     }
+
+    scheduleNodePreview(dragNode.id, dragNode.position);
+    flushPendingNodePreviews();
+    clearNodeDragSession();
 
     const currentPosition = nodePositions[stage]?.[node.id];
     if (currentPosition && currentPosition.x === dragNode.position.x && currentPosition.y === dragNode.position.y) {
@@ -12850,6 +13134,7 @@ export default function MeetingCanvasTab({
     }
 
     nextPositionsSnapshot = normalizeCanvasNodePositionsForComputedIdeation(nextPositionsSnapshot);
+    liveNodePositionsRef.current = nextPositionsSnapshot;
     latestSharedWorkspaceRef.current = {
       ...latestSharedWorkspaceRef.current,
       stage,
@@ -13803,6 +14088,7 @@ export default function MeetingCanvasTab({
         ...node,
         position: stablePosition,
       };
+      scheduleNodePreview(node.id, stablePosition);
       setNodes((current) => {
         const targetNode = current.find((item) => item.id === node.id);
         if (!targetNode || positionsEqual(targetNode.position, stablePosition)) {
@@ -13847,6 +14133,9 @@ export default function MeetingCanvasTab({
   };
 
   const onNodeDragStart = (event: React.MouseEvent, node: Node) => {
+    localDraggingNodeIdsRef.current.add(node.id);
+    dragIdByNodeIdRef.current[node.id] =
+      `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     ideationDropPreviewRef.current = null;
     setIdeationDropPreview(null);
 

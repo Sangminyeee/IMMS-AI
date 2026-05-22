@@ -544,6 +544,7 @@ export interface CanvasPersonalNotesStateResponse {
 export interface CanvasRealtimeSyncPayload {
   sync_id: string;
   meeting_id: string;
+  sync_scope?: "full" | "node_positions";
   meeting_goal?: string;
   meeting_goal_context?: string;
   updated_by: string;
@@ -565,6 +566,18 @@ export interface CanvasRealtimeSyncPayload {
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;
+}
+
+export interface CanvasNodePreviewPayload {
+  meeting_id: string;
+  stage: "ideation" | "problem-definition" | "solution";
+  node_id: string;
+  x: number;
+  y: number;
+  updated_by: string;
+  updated_at: string;
+  drag_id: string;
+  client_seq: number;
 }
 
 export interface CanvasFinalSolutionSummaryItem {
