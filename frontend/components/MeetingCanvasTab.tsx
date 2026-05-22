@@ -6492,6 +6492,52 @@ export default function MeetingCanvasTab({
     remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
   }, []);
 
+  const broadcastNodePositionCommit = useCallback(
+    (nextNodePositions: CanvasNodePositionsByStage) => {
+      if (
+        !meetingId ||
+        !userId ||
+        !latestSharedSyncEnabledRef.current ||
+        !workspaceLoadedRef.current ||
+        workspaceHydratingRef.current ||
+        applyingRemoteSharedSyncRef.current
+      ) {
+        return;
+      }
+
+      const normalizedNodePositions = normalizeCanvasNodePositionsForComputedIdeation(nextNodePositions);
+      const workspace = latestSharedWorkspaceRef.current;
+      lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
+        meeting_goal: workspace.meetingGoal,
+        meeting_goal_context: workspace.meetingGoalContext,
+        stage: workspace.stage,
+        agenda_overrides: serializeAgendaOverrides(workspace.agendaOverrides),
+        canvas_items: serializeSharedCanvasItems(workspace.canvasItems),
+        custom_groups: serializeCustomGroups(workspace.customGroups),
+        problem_groups: serializeSharedProblemGroups(workspace.problemGroups),
+        problem_structure: workspace.problemStructure,
+        solution_topics: serializeSharedSolutionTopics(workspace.solutionTopics),
+        final_solution_summary: buildFinalSolutionSummaryPayload(
+          workspace.solutionTopics,
+          workspace.finalSolutionSummary,
+        ),
+        node_positions: normalizedNodePositions,
+        imported_state: workspace.importedState,
+      });
+
+      onSharedCanvasSync({
+        sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        meeting_id: meetingId,
+        sync_scope: "node_positions",
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+        stage: workspace.stage,
+        node_positions: normalizedNodePositions,
+      });
+    },
+    [meetingId, onSharedCanvasSync, userId],
+  );
+
   useEffect(() => {
     if (
       !incomingNodePreview ||
@@ -13173,11 +13219,15 @@ export default function MeetingCanvasTab({
           }),
         );
       }
-      forceBroadcastSharedCanvas({
-        nodePositions: nextPositionsSnapshot,
-        canvasItems: nextCanvasItemsSnapshot || undefined,
-        problemGroups: nextProblemGroupsSnapshot || undefined,
-      });
+      if (nextCanvasItemsSnapshot || nextProblemGroupsSnapshot) {
+        forceBroadcastSharedCanvas({
+          nodePositions: nextPositionsSnapshot,
+          canvasItems: nextCanvasItemsSnapshot || undefined,
+          problemGroups: nextProblemGroupsSnapshot || undefined,
+        });
+      } else {
+        broadcastNodePositionCommit(nextPositionsSnapshot);
+      }
       if (meetingId) {
         const savePromise = saveCanvasWorkspacePatch({
           meeting_id: meetingId,

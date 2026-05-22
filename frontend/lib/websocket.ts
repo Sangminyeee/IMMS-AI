@@ -136,12 +136,27 @@ export class WebSocketClient {
     }
   }
 
+  private isVolatileMessage(type: string, data: Record<string, unknown>) {
+    if (this.volatileMessageTypes.has(type)) {
+      return true
+    }
+
+    const workspace = data.workspace
+    return (
+      type === 'canvas_sync' &&
+      typeof workspace === 'object' &&
+      workspace !== null &&
+      'sync_scope' in workspace &&
+      (workspace as { sync_scope?: unknown }).sync_scope === 'node_positions'
+    )
+  }
+
   private queueMessage(type: string, data: Record<string, unknown>) {
     if (!this.shouldReconnect) {
       return
     }
 
-    if (this.volatileMessageTypes.has(type)) {
+    if (this.isVolatileMessage(type, data)) {
       return
     }
 
@@ -252,7 +267,7 @@ export class WebSocketClient {
 
   sendMessage(type: string, data: Record<string, unknown>) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      if (!this.volatileMessageTypes.has(type)) {
+      if (!this.isVolatileMessage(type, data)) {
         console.warn('⚠️ WebSocket not connected, cannot send message')
       }
       this.queueMessage(type, data)

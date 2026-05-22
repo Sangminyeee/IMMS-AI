@@ -558,13 +558,13 @@ export interface CanvasRealtimeSyncPayload {
       summaryBullets?: string[];
     }
   >;
-  canvas_items: CanvasWorkspaceItem[];
+  canvas_items?: CanvasWorkspaceItem[];
   custom_groups?: CanvasCustomGroup[];
-  problem_groups: CanvasWorkspaceProblemGroup[];
+  problem_groups?: CanvasWorkspaceProblemGroup[];
   problem_structure?: CanvasProblemStructureState;
-  solution_topics: CanvasSolutionTopicResponse[];
+  solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
-  node_positions: CanvasNodePositionsByStage;
+  node_positions?: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;
 }
 

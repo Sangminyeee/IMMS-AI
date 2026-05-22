@@ -951,6 +951,40 @@ async def websocket_endpoint(
                 if not isinstance(workspace, dict):
                     continue
 
+                sync_scope = str(workspace.get('sync_scope') or 'full').strip()
+                if sync_scope == 'node_positions':
+                    node_positions = copy.deepcopy(workspace.get('node_positions') or {})
+                    stage = str(workspace.get('stage') or 'ideation').strip()
+                    if stage not in {'ideation', 'problem-definition', 'solution'}:
+                        stage = 'ideation'
+
+                    current_workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+                    if not isinstance(current_workspace, dict):
+                        current_workspace = {'meeting_id': meeting_id}
+                    current_workspace = copy.deepcopy(current_workspace)
+                    current_workspace['meeting_id'] = meeting_id
+                    current_workspace['stage'] = stage
+                    current_workspace['node_positions'] = node_positions
+                    latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(current_workspace)
+
+                    sync_message = {
+                        'type': 'canvas_sync',
+                        'data': {
+                            'sync_id': str(workspace.get('sync_id') or f"node-positions-{int(datetime.utcnow().timestamp() * 1000)}"),
+                            'meeting_id': meeting_id,
+                            'sync_scope': 'node_positions',
+                            'updated_by': user_id,
+                            'updated_at': datetime.utcnow().isoformat(),
+                            'stage': stage,
+                            'node_positions': node_positions,
+                        },
+                        'meeting_id': meeting_id,
+                        'user_id': user_id,
+                        'timestamp': datetime.utcnow().isoformat(),
+                    }
+                    await broadcast_to_meeting(meeting_id, sync_message, exclude_user=user_id)
+                    continue
+
                 workspace['meeting_id'] = meeting_id
                 latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
                 sync_message = {
