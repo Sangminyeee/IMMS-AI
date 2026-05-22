@@ -5359,6 +5359,13 @@ export default function MeetingCanvasTab({
 
     return [...hydratedBaseModels, ...customAgendaModels];
   }, [effectiveState, agendas, transcripts, agendaOverrides, customGroups]);
+  const agendaById = useMemo(
+    () => new Map(agendaModels.map((agenda) => [agenda.id, agenda] as const)),
+  );
+  const agendaIndexById = useMemo(
+    () => new Map(agendaModels.map((agenda, index) => [agenda.id, index] as const)),
+    [agendaModels],
+  );
   const selectedAgendaForDrop = selectedAgendaId || agendaModels[0]?.id || "";
   const canvasItemById = useMemo(
     () => new Map(canvasItems.map((item) => [item.id, item] as const)),
@@ -5371,6 +5378,18 @@ export default function MeetingCanvasTab({
   const flowNodeById = useMemo(
     () => new Map(nodes.map((node) => [node.id, node] as const)),
     [nodes],
+  );
+  const problemGroupById = useMemo(
+    () => new Map(problemGroups.map((group) => [group.group_id, group] as const)),
+    [problemGroups],
+  );
+  const problemStructureNodeById = useMemo(
+    () => new Map(problemStructureNodes.map((node) => [node.id, node] as const)),
+    [problemStructureNodes],
+  );
+  const solutionTopicById = useMemo(
+    () => new Map(solutionTopics.map((topic) => [topic.group_id, topic] as const)),
+    [solutionTopics],
   );
   const activeMeetingGoal = meetingGoalDraft.trim();
   const meetingTopicForAi = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim() || "회의 주제";
@@ -5492,8 +5511,7 @@ export default function MeetingCanvasTab({
     const sourceTranscriptRows = normalizeTranscriptRows(
       (effectiveState?.transcript?.length ? effectiveState.transcript : transcripts) || [],
     );
-    const problemStructureNodeById = new Map(problemStructureNodes.map((node) => [node.id, node]));
-    const selectedCanvasNode = nodes.find((node) => node.id === selectedNodeId);
+    const selectedCanvasNode = flowNodeById.get(selectedNodeId) || null;
 
     return {
       current_stage: stageLabel(stage),
@@ -5557,16 +5575,16 @@ export default function MeetingCanvasTab({
     canvasItems,
     effectiveState,
     finalSummaryDocument.markdown,
+    flowNodeById,
     meetingGoalContextDraft,
     meetingGoalDraft,
     meetingTopicForAi,
-    nodes,
     problemDefinitionMode,
     problemDefinitionPhase,
     problemGroups,
     problemStructureGroups,
     problemStructureMethod,
-    problemStructureNodes,
+    problemStructureNodeById,
     selectedNodeId,
     solutionTopics,
     stage,
@@ -7156,7 +7174,7 @@ export default function MeetingCanvasTab({
 
   const handleAttachPersonalNoteToProblemGroup = useCallback((groupId: string, noteId: string) => {
     const note = personalNotes.find((entry) => entry.id === noteId);
-    const group = problemGroups.find((entry) => entry.group_id === groupId);
+    const group = problemGroupById.get(groupId);
     if (!note || !group) return;
 
     if (group.ideas.some((idea) => idea.id === noteId)) {
@@ -7188,7 +7206,7 @@ export default function MeetingCanvasTab({
     setDropProblemGroupId("");
     setDraggingPersonalNoteId("");
     void handleGenerateProblemGroupConclusion(nextGroup, "drop");
-  }, [handleGenerateProblemGroupConclusion, personalNotes, problemGroups]);
+  }, [handleGenerateProblemGroupConclusion, personalNotes, problemGroupById]);
 
   const getProblemIdeaDropPreviewFromPoint = useCallback(
     (clientX: number, clientY: number): ProblemIdeaDropPreviewState | null => {
@@ -7200,7 +7218,7 @@ export default function MeetingCanvasTab({
       const targetGroupId = groupElement?.dataset.problemGroupDropId || "";
       if (!targetGroupId || !groupElement) return null;
 
-      const targetGroup = problemGroups.find((group) => group.group_id === targetGroupId);
+      const targetGroup = problemGroupById.get(targetGroupId);
       if (!targetGroup) return null;
 
       const cardElement = elementAtPoint?.closest("[data-problem-card-source-node-id]") as HTMLElement | null;
@@ -7280,7 +7298,7 @@ export default function MeetingCanvasTab({
         insertIndex,
       };
     },
-    [problemGroups, problemIdeaDrag],
+    [problemGroupById, problemIdeaDrag],
   );
 
   const updateProblemIdeaDragPoint = useCallback((clientX: number, clientY: number) => {
@@ -7347,8 +7365,8 @@ export default function MeetingCanvasTab({
         effectiveDropPreview.cardKind === activeProblemIdeaDrag.cardKind
           ? effectiveDropPreview.insertIndex
           : undefined;
-      const sourceGroup = problemGroups.find((group) => group.group_id === activeProblemIdeaDrag.sourceGroupId);
-      const targetGroup = problemGroups.find((group) => group.group_id === targetGroupId);
+      const sourceGroup = problemGroupById.get(activeProblemIdeaDrag.sourceGroupId);
+      const targetGroup = problemGroupById.get(targetGroupId);
       if (!sourceGroup || !targetGroup) {
         handleProblemIdeaDragEnd();
         return;
@@ -7583,6 +7601,7 @@ export default function MeetingCanvasTab({
       meetingId,
       nodePositions,
       persistedSharedImportedState,
+      problemGroupById,
       problemGroups,
       problemStructureStatePayload,
       problemIdeaDrag,
@@ -8494,8 +8513,8 @@ export default function MeetingCanvasTab({
   const handleToggleTopicCollapsed = useCallback(
     (itemId: string) => {
       if (!itemId) return;
-      const targetTopic = canvasItems.find((item) => item.id === itemId && isTopicCanvasItem(item));
-      if (!targetTopic) return;
+      const targetTopic = canvasItemById.get(itemId);
+      if (!targetTopic || !isTopicCanvasItem(targetTopic)) return;
 
       setTopicCollapsedOverrides((current) => {
         const next = {
@@ -8506,12 +8525,12 @@ export default function MeetingCanvasTab({
         return next;
       });
     },
-    [canvasItems, meetingId, userId],
+    [canvasItemById, meetingId, userId],
   );
 
   const handleGenerateSolutionSuggestions = useCallback(
     async (topicId: string) => {
-      const targetTopic = solutionTopics.find((topic) => topic.group_id === topicId);
+      const targetTopic = solutionTopicById.get(topicId);
       if (!targetTopic || !meetingId) {
         setActivityMessage("AI 추천을 생성할 해결책 항목을 먼저 선택해 주세요.");
         return;
@@ -8589,7 +8608,7 @@ export default function MeetingCanvasTab({
         setSolutionSuggestionBusyTopicId("");
       }
     },
-    [meetingId, meetingTopicForAi, problemGroups, solutionTopics],
+    [meetingId, meetingTopicForAi, problemGroups, solutionTopicById],
   );
 
   const handlePruneSolutionSuggestions = useCallback(
@@ -9141,8 +9160,8 @@ export default function MeetingCanvasTab({
   const handleCreateProblemStructurePairGroup = useCallback(
     (sourceNodeId: string, targetNodeId: string) => {
       if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return;
-      const sourceNode = problemStructureNodes.find((node) => node.id === sourceNodeId);
-      const targetNode = problemStructureNodes.find((node) => node.id === targetNodeId);
+      const sourceNode = problemStructureNodeById.get(sourceNodeId);
+      const targetNode = problemStructureNodeById.get(targetNodeId);
       if (!sourceNode || !targetNode) return;
 
       setProblemStructureGroups((prev) => {
@@ -9161,7 +9180,7 @@ export default function MeetingCanvasTab({
       });
       setActivityMessage(`"${sourceNode.title}"와 "${targetNode.title}"로 새 구조화 그룹을 만들었습니다.`);
     },
-    [problemStructureNodes],
+    [problemStructureNodeById],
   );
 
   const getProblemStructureDraggedNodeId = useCallback(
@@ -9320,7 +9339,7 @@ export default function MeetingCanvasTab({
 
   const handleSaveProblemStructureNodeEdit = useCallback(
     (nodeId: string) => {
-      const targetNode = problemStructureNodes.find((node) => node.id === nodeId);
+      const targetNode = problemStructureNodeById.get(nodeId);
       if (!targetNode) {
         clearProblemStructureNodeEdit();
         return;
@@ -9333,7 +9352,7 @@ export default function MeetingCanvasTab({
       clearProblemStructureNodeEdit();
       setActivityMessage("구조화 노드 제목을 수정했습니다.");
     },
-    [clearProblemStructureNodeEdit, problemStructureNodeDraftTitle, problemStructureNodes],
+    [clearProblemStructureNodeEdit, problemStructureNodeById, problemStructureNodeDraftTitle],
   );
 
   const handleUpdateProblemStructureGroupStatus = useCallback((groupId: string, status: ProblemGroupStatus) => {
@@ -9345,7 +9364,7 @@ export default function MeetingCanvasTab({
 
   const problemExploreLayout = useMemo(() => {
     const activeGroup =
-      problemGroups.find((group) => group.group_id === selectedProblemGroupId) ||
+      problemGroupById.get(selectedProblemGroupId) ||
       problemGroups[0] ||
       null;
     const problemGroupHeightById = new Map(
@@ -9441,7 +9460,7 @@ export default function MeetingCanvasTab({
       problemGroupHeightById,
       problemNodeWidth,
     };
-  }, [collapsedProblemGroupIds, problemGroups, selectedProblemGroupId]);
+  }, [collapsedProblemGroupIds, problemGroupById, problemGroups, selectedProblemGroupId]);
 
   const ideationNodePositions = nodePositions.ideation;
   const ideationGraphLayout = useMemo(() => {
@@ -10103,7 +10122,7 @@ export default function MeetingCanvasTab({
         nextY += height + 18;
       });
       const activeSolutionTopic =
-        solutionTopics.find((topic) => topic.group_id === selectedSolutionTopicId) ||
+        solutionTopicById.get(selectedSolutionTopicId) ||
         solutionTopics[0] ||
         null;
       const adoptSolutionSuggestion = (topicId: string, suggestionId: string) => {
@@ -10887,7 +10906,7 @@ export default function MeetingCanvasTab({
           ? agendaModels
               .filter((agenda) => agenda.id === agendaDragPreview.agendaId)
               .map((agenda) => {
-                const agendaIndex = agendaModels.findIndex((candidate) => candidate.id === agenda.id);
+                const agendaIndex = agendaIndexById.get(agenda.id) ?? 0;
                 const agendaHeight = agendaHeights[Math.max(0, agendaIndex)] || 160;
                 return {
                   id: `agenda-drag-placeholder-${agenda.id}`,
@@ -11044,6 +11063,7 @@ export default function MeetingCanvasTab({
     ideationBubbleDebugGrowthById,
     ideationBubbleLayoutRevision,
     agendaModels,
+    agendaIndexById,
     agendaDragPreview,
     canvasItems,
     collapsedProblemGroupIds,
@@ -11115,6 +11135,7 @@ export default function MeetingCanvasTab({
     solutionNoteTextDraft,
     solutionRightPaneWidth,
     solutionSuggestionBusyTopicId,
+    solutionTopicById,
     solutionTopics,
     isDesktopLayout,
   ]);
@@ -11212,12 +11233,12 @@ export default function MeetingCanvasTab({
   }, []);
 
   const selectedAgenda = useMemo(
-    () => agendaModels.find((agenda) => agenda.id === selectedAgendaId) || agendaModels[0] || null,
-    [agendaModels, selectedAgendaId],
+    () => agendaById.get(selectedAgendaId) || agendaModels[0] || null,
+    [agendaById, agendaModels, selectedAgendaId],
   );
   const selectedCanvasItem = useMemo(
-    () => canvasItems.find((item) => item.id === selectedCanvasItemId) || null,
-    [canvasItems, selectedCanvasItemId],
+    () => canvasItemById.get(selectedCanvasItemId) || null,
+    [canvasItemById, selectedCanvasItemId],
   );
   const projectPersonalNotes = useMemo(
     () => personalNotes.filter((note) => !note.projectId || note.projectId === meetingId),
@@ -11263,8 +11284,8 @@ export default function MeetingCanvasTab({
     () =>
       problemDefinitionPhase === "structure"
         ? null
-        : problemGroups.find((group) => group.group_id === selectedProblemGroupId) || problemGroups[0] || null,
-    [problemDefinitionPhase, problemGroups, selectedProblemGroupId],
+        : problemGroupById.get(selectedProblemGroupId) || problemGroups[0] || null,
+    [problemDefinitionPhase, problemGroupById, problemGroups, selectedProblemGroupId],
   );
   const selectedProblemSourceCards = useMemo(
     () => (selectedProblemGroup ? buildProblemGroupDisplayCards(selectedProblemGroup).filter((card) => card.attachable) : []),
@@ -11284,8 +11305,8 @@ export default function MeetingCanvasTab({
     [selectedProblemGroup, selectedProblemSourceCard],
   );
   const selectedSolutionTopic = useMemo(
-    () => solutionTopics.find((topic) => topic.group_id === selectedSolutionTopicId) || solutionTopics[0] || null,
-    [selectedSolutionTopicId, solutionTopics],
+    () => solutionTopicById.get(selectedSolutionTopicId) || solutionTopics[0] || null,
+    [selectedSolutionTopicId, solutionTopicById, solutionTopics],
   );
   const finalSolutionSummary = finalSummaryDocument;
   const summaryDocumentSections = useMemo(
@@ -11556,7 +11577,7 @@ export default function MeetingCanvasTab({
     }
 
     const agendaFromNodeId = selectedNodeId ? extractAgendaIdFromNodeId(selectedNodeId) : "";
-    const resolvedAgenda = agendaModels.find((agenda) => agenda.id === agendaFromNodeId) || selectedAgenda;
+    const resolvedAgenda = agendaById.get(agendaFromNodeId) || selectedAgenda;
     if (!resolvedAgenda) return null;
 
     const summaryMatch = selectedNodeId.match(/^summary-(.+)-(\d+)$/);
@@ -11598,7 +11619,7 @@ export default function MeetingCanvasTab({
       ],
       organizeTitle: "맥락",
     };
-  }, [agendaModels, canvasItems, selectedAgenda, selectedCanvasItem, selectedNodeId, selectedProblemGroup, selectedProblemSourceCard, selectedProblemSourceCards, selectedProblemSourceOpinions, selectedSolutionTopic, stage]);
+  }, [agendaById, canvasItems, selectedAgenda, selectedCanvasItem, selectedNodeId, selectedProblemGroup, selectedProblemSourceCard, selectedProblemSourceCards, selectedProblemSourceOpinions, selectedSolutionTopic, stage]);
 
   const handleGenerateProblemDefinition = useCallback(async (options?: { force?: boolean; refreshChunkSummaries?: boolean }) => {
     const forceRegenerate = Boolean(options?.force);
@@ -12468,13 +12489,13 @@ export default function MeetingCanvasTab({
 
       const clickedCanvasItemId = extractCanvasItemIdFromNodeId(pointId || "");
       const clickedCanvasItem = clickedCanvasItemId
-        ? canvasItems.find((item) => item.id === clickedCanvasItemId) || null
+        ? canvasItemById.get(clickedCanvasItemId) || null
         : null;
       const selectedRootItemId = selectedCanvasItemId
         ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
         : "";
       const selectedRootItem = selectedRootItemId
-        ? canvasItems.find((item) => item.id === selectedRootItemId) || null
+        ? canvasItemById.get(selectedRootItemId) || null
         : null;
       const parentItemForPlacement =
         stage === "ideation" && tool !== "topic"
@@ -12627,6 +12648,7 @@ export default function MeetingCanvasTab({
     [
       agendaOverrides,
       agendaModels,
+      canvasItemById,
       canvasItems,
       customGroupDraftTitle,
       customGroups,
@@ -14224,7 +14246,7 @@ export default function MeetingCanvasTab({
       selectedCanvasItemId ||
       selectedCanvasItem?.id ||
       "";
-    const targetItem = canvasItems.find((item) => item.id === itemId);
+    const targetItem = canvasItemById.get(itemId);
     if (!targetItem) {
       setActivityMessage("키워드를 추출할 canvas 아이템을 먼저 선택해 주세요.");
       return;
@@ -14878,7 +14900,7 @@ export default function MeetingCanvasTab({
     ? problemGroupingRationaleById[problemGroupingRationaleOpenGroupId] || null
     : null;
   const activeProblemGroupingRationaleGroup = problemGroupingRationaleOpenGroupId
-    ? problemGroups.find((group) => group.group_id === problemGroupingRationaleOpenGroupId) || null
+    ? problemGroupById.get(problemGroupingRationaleOpenGroupId) || null
     : null;
   const rightDrawerShowsDetailPanel = false;
   const rightDrawerExpandedWidth = `clamp(17.5rem, ${(rightPanelRatio * 100).toFixed(2)}vw, 23.75rem)`;
@@ -14994,13 +15016,13 @@ export default function MeetingCanvasTab({
   const ideationDragGhostItem = useMemo(
     () =>
       ideationDragGhost
-        ? canvasItems.find((item) => item.id === ideationDragGhost.itemId) || null
+        ? canvasItemById.get(ideationDragGhost.itemId) || null
         : null,
-    [canvasItems, ideationDragGhost],
+    [canvasItemById, ideationDragGhost],
   );
 
   const focusCanvasItemInIdeation = (itemId: string, reason = "원문 위치로 이동했습니다.") => {
-    const item = canvasItems.find((candidate) => candidate.id === itemId) || null;
+    const item = canvasItemById.get(itemId) || null;
     if (!item) {
       setActivityMessage("연결된 원문 노드를 찾지 못했습니다.");
       return;
@@ -15071,8 +15093,8 @@ export default function MeetingCanvasTab({
       return true;
     }
 
-    const sourceGroup = problemGroups.find((group) => group.group_id === sourceGroupId);
-    const targetGroup = problemGroups.find((group) => group.group_id === targetGroupId);
+    const sourceGroup = problemGroupById.get(sourceGroupId);
+    const targetGroup = problemGroupById.get(targetGroupId);
     if (!sourceGroup || !targetGroup) {
       setPendingProblemGroupLinkId("");
       setActivityMessage("연결할 문제정의 그룹을 찾지 못했습니다.");
@@ -15160,7 +15182,7 @@ export default function MeetingCanvasTab({
     const agendaId = extractAgendaIdFromNodeId(node.id);
     if (node.id.startsWith("canvas-item-")) {
       const canvasItemId = node.id.slice("canvas-item-".length);
-      const canvasItem = canvasItems.find((item) => item.id === canvasItemId) || null;
+      const canvasItem = canvasItemById.get(canvasItemId) || null;
       if (canvasItem && linkPendingPersonalNoteToCanvasItem(canvasItem)) {
         return;
       }
@@ -16543,7 +16565,7 @@ export default function MeetingCanvasTab({
                             const remoteGroupEditPresence =
                               remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_group", group.id)] || null;
                             const groupNodes = group.nodeIds
-                              .map((nodeId) => problemStructureNodes.find((node) => node.id === nodeId))
+                              .map((nodeId) => problemStructureNodeById.get(nodeId))
                               .filter((node): node is ProblemStructureNodeViewModel => Boolean(node));
                             return (
                               <div key={`summary-source-${group.id}`} className="border border-black/10 bg-white p-4">
