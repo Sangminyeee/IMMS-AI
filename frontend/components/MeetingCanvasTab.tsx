@@ -65,6 +65,7 @@ import {
   type PendingIdeationDragFrame,
   type ProblemIdeaDropPreviewState,
 } from "@/components/canvas/useCanvasRuntimeState";
+import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
@@ -4959,11 +4960,6 @@ export default function MeetingCanvasTab({
   const [draggingPersonalNoteId, setDraggingPersonalNoteId] = useState("");
   const [dropProblemGroupId, setDropProblemGroupId] = useState("");
   const [, setLeftPanelTab] = useState<LeftPanelTab>("detail");
-  const [meetingGoalDraft, setMeetingGoalDraft] = useState(meetingGoal);
-  const [meetingGoalContextDraft, setMeetingGoalContextDraft] = useState(meetingGoalContext);
-  const [meetingGoalEditorDraft, setMeetingGoalEditorDraft] = useState(meetingGoal);
-  const [meetingGoalContextEditorDraft, setMeetingGoalContextEditorDraft] = useState(meetingGoalContext);
-  const [meetingGoalSaving, setMeetingGoalSaving] = useState(false);
   const [, setConclusionRefreshingGroupId] = useState("");
   const conclusionBatchBusy = false;
   const [problemDefinitionStagePending, setProblemDefinitionStagePending] = useState(false);
@@ -5008,8 +5004,6 @@ export default function MeetingCanvasTab({
     openRightDrawer,
     closeRightDrawer,
     toggleRightDrawer,
-    meetingGoalEditorOpen,
-    setMeetingGoalEditorOpen,
     rightPanelRatio,
     isDesktopLayout,
     startPanelResize,
@@ -5217,6 +5211,62 @@ export default function MeetingCanvasTab({
   });
   const latestSharedSyncEnabledRef = useRef(true);
   const latestPersonalNotesPayloadRef = useRef<ReturnType<typeof buildCanvasPersonalNotesPayload> | null>(null);
+
+  const persistMeetingGoalEdit = useCallback(
+    async (nextGoal: string, nextContext: string) => {
+      onMeetingGoalChange(nextGoal);
+      onMeetingGoalContextChange(nextContext);
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        meetingGoal: nextGoal,
+        meetingGoalContext: nextContext,
+      };
+
+      await saveCanvasWorkspacePatch({
+        meeting_id: meetingId,
+        meeting_goal: nextGoal,
+        meeting_goal_context: nextContext,
+      });
+
+      lastWorkspaceFieldSignaturesRef.current = {
+        ...lastWorkspaceFieldSignaturesRef.current,
+        meeting_goal: nextGoal,
+        meeting_goal_context: nextContext,
+      };
+      onMeetingGoalSync?.(nextGoal, nextContext);
+      setActivityMessage("회의 목표와 관련 맥락을 저장하고 참가자에게 반영했습니다.");
+    },
+    [meetingId, onMeetingGoalChange, onMeetingGoalContextChange, onMeetingGoalSync],
+  );
+
+  const handleMeetingGoalSaveError = useCallback((error: unknown) => {
+    console.error("Failed to save meeting goal:", error);
+    setActivityMessage("회의 목표 저장에 실패했습니다.");
+  }, []);
+
+  const {
+    meetingGoalDraft,
+    setMeetingGoalDraft,
+    meetingGoalContextDraft,
+    setMeetingGoalContextDraft,
+    meetingGoalEditorDraft,
+    setMeetingGoalEditorDraft,
+    meetingGoalContextEditorDraft,
+    setMeetingGoalContextEditorDraft,
+    meetingGoalEditorOpen,
+    meetingGoalSaving,
+    setMeetingGoalDrafts,
+    resetMeetingGoalState,
+    handleOpenMeetingGoalEditor,
+    handleCancelMeetingGoalEdit,
+    handleSaveMeetingGoalEdit,
+  } = useCanvasMeetingGoalEditor({
+    initialMeetingGoal: meetingGoal,
+    initialMeetingGoalContext: meetingGoalContext,
+    meetingId,
+    onSave: persistMeetingGoalEdit,
+    onSaveError: handleMeetingGoalSaveError,
+  });
 
   const analysisStateSignature = useMemo(
     () => buildMeetingStateSignature(analysisState),
@@ -5613,12 +5663,7 @@ export default function MeetingCanvasTab({
     setLatestHighlightedTopicId("");
     setIdeaCreateStack(0);
     setCustomGroups([]);
-    setMeetingGoalDraft("");
-    setMeetingGoalContextDraft("");
-    setMeetingGoalEditorDraft("");
-    setMeetingGoalContextEditorDraft("");
-    setMeetingGoalSaving(false);
-    setMeetingGoalEditorOpen(false);
+    resetMeetingGoalState();
     setEndMeetingConfirmOpen(false);
     setEndMeetingSaving(false);
     setEndMeetingPreview(null);
@@ -5708,8 +5753,8 @@ export default function MeetingCanvasTab({
     problemIdeaPointerDragRef,
     remoteNodePreviewFrameRef,
     remoteNodePreviewTargetsRef,
+    resetMeetingGoalState,
     setAgendaDragPreview,
-    setMeetingGoalEditorOpen,
     setPlacementFeedback,
     setProblemIdeaDrag,
     setProblemIdeaDragPoint,
@@ -6006,10 +6051,7 @@ export default function MeetingCanvasTab({
         setCanvasItems(nextCanvasItems);
         setCustomGroups(nextCustomGroups);
         setIdeaCreateStack(saved.idea_create_stack || 0);
-        setMeetingGoalDraft(nextMeetingGoal);
-        setMeetingGoalContextDraft(nextMeetingGoalContext);
-        setMeetingGoalEditorDraft(nextMeetingGoal);
-        setMeetingGoalContextEditorDraft(nextMeetingGoalContext);
+        setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
         onMeetingGoalChange(nextMeetingGoal);
         onMeetingGoalContextChange(nextMeetingGoalContext);
         setSharedSyncEnabled(nextSharedSyncEnabled);
@@ -6173,6 +6215,7 @@ export default function MeetingCanvasTab({
     meetingId,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
+    setMeetingGoalDrafts,
     setNodePositions,
     userId,
   ]);
@@ -6317,14 +6360,19 @@ export default function MeetingCanvasTab({
     if (!meetingGoalEditorOpen) {
       setMeetingGoalEditorDraft(meetingGoal);
     }
-  }, [meetingGoal, meetingGoalEditorOpen]);
+  }, [meetingGoal, meetingGoalEditorOpen, setMeetingGoalDraft, setMeetingGoalEditorDraft]);
 
   useEffect(() => {
     setMeetingGoalContextDraft(meetingGoalContext);
     if (!meetingGoalEditorOpen) {
       setMeetingGoalContextEditorDraft(meetingGoalContext);
     }
-  }, [meetingGoalContext, meetingGoalEditorOpen]);
+  }, [
+    meetingGoalContext,
+    meetingGoalEditorOpen,
+    setMeetingGoalContextDraft,
+    setMeetingGoalContextEditorDraft,
+  ]);
 
   const buildProblemConclusionPayload = useCallback(
     (group: ProblemGroupViewModel) => ({
@@ -6713,10 +6761,7 @@ export default function MeetingCanvasTab({
         typeof workspace.meeting_goal_context === "string" ? workspace.meeting_goal_context : meetingGoalContextDraft;
 
       setCanvasItems(nextCanvasItems);
-      setMeetingGoalDraft(nextMeetingGoal);
-      setMeetingGoalContextDraft(nextMeetingGoalContext);
-      setMeetingGoalEditorDraft(nextMeetingGoal);
-      setMeetingGoalContextEditorDraft(nextMeetingGoalContext);
+      setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
       onMeetingGoalChange(nextMeetingGoal);
       onMeetingGoalContextChange(nextMeetingGoalContext);
       setIdeaCreateStack(workspace.idea_create_stack || 0);
@@ -6768,6 +6813,7 @@ export default function MeetingCanvasTab({
       persistedSharedImportedState,
       problemGroups,
       problemStructureStatePayload,
+      setMeetingGoalDrafts,
       setNodePositions,
       sharedSyncEnabled,
       solutionTopics,
@@ -8236,10 +8282,7 @@ export default function MeetingCanvasTab({
     setSolutionTopics(nextSolutionTopics);
     setFinalSummaryDocument(nextFinalSummary);
     setSummaryDocumentEditMode(false);
-    setMeetingGoalDraft(incomingMeetingGoal);
-    setMeetingGoalContextDraft(incomingMeetingGoalContext);
-    setMeetingGoalEditorDraft(incomingMeetingGoal);
-    setMeetingGoalContextEditorDraft(incomingMeetingGoalContext);
+    setMeetingGoalDrafts(incomingMeetingGoal, incomingMeetingGoalContext);
     onMeetingGoalChange(incomingMeetingGoal);
     onMeetingGoalContextChange(incomingMeetingGoalContext);
     setAgendaOverrides(incomingSharedCanvasSync.agenda_overrides || {});
@@ -8283,6 +8326,7 @@ export default function MeetingCanvasTab({
     onMeetingGoalContextChange,
     problemGroups,
     remoteNodePreviewTargetsRef,
+    setMeetingGoalDrafts,
     setNodePositions,
     sharedSyncEnabled,
     solutionTopics,
@@ -14617,60 +14661,6 @@ export default function MeetingCanvasTab({
       return;
     }
     await handleSaveAndEndMeeting(finalSummarySnapshot);
-  };
-
-  const handleOpenMeetingGoalEditor = () => {
-    setMeetingGoalEditorDraft(meetingGoalDraft);
-    setMeetingGoalContextEditorDraft(meetingGoalContextDraft);
-    setMeetingGoalEditorOpen(true);
-  };
-
-  const handleCancelMeetingGoalEdit = () => {
-    setMeetingGoalEditorDraft(meetingGoalDraft);
-    setMeetingGoalContextEditorDraft(meetingGoalContextDraft);
-    setMeetingGoalEditorOpen(false);
-  };
-
-  const handleSaveMeetingGoalEdit = async () => {
-    if (!meetingId || meetingGoalSaving) {
-      return;
-    }
-
-    const nextGoal = meetingGoalEditorDraft.trim();
-    const nextContext = meetingGoalContextEditorDraft.trim();
-    setMeetingGoalSaving(true);
-
-    try {
-      setMeetingGoalDraft(nextGoal);
-      setMeetingGoalContextDraft(nextContext);
-      onMeetingGoalChange(nextGoal);
-      onMeetingGoalContextChange(nextContext);
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        meetingGoal: nextGoal,
-        meetingGoalContext: nextContext,
-      };
-
-      await saveCanvasWorkspacePatch({
-        meeting_id: meetingId,
-        meeting_goal: nextGoal,
-        meeting_goal_context: nextContext,
-      });
-
-      lastWorkspaceFieldSignaturesRef.current = {
-        ...lastWorkspaceFieldSignaturesRef.current,
-        meeting_goal: nextGoal,
-        meeting_goal_context: nextContext,
-      };
-      onMeetingGoalSync?.(nextGoal, nextContext);
-      setMeetingGoalEditorOpen(false);
-      setActivityMessage("회의 목표와 관련 맥락을 저장하고 참가자에게 반영했습니다.");
-    } catch (error) {
-      console.error("Failed to save meeting goal:", error);
-      setActivityMessage("회의 목표 저장에 실패했습니다.");
-    } finally {
-      setMeetingGoalSaving(false);
-    }
   };
 
   const onNodeDrag = (event: React.MouseEvent, node: Node) => {

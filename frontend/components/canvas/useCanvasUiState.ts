@@ -37,7 +37,6 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
   const [rightDrawerContentVisible, setRightDrawerContentVisible] = useState(false);
   const [rightDrawerDetailCollapsed, setRightDrawerDetailCollapsed] = useState(false);
   const [rightDrawerNotesCollapsed, setRightDrawerNotesCollapsed] = useState(false);
-  const [meetingGoalEditorOpen, setMeetingGoalEditorOpen] = useState(false);
   const [leftPanelRatio, setLeftPanelRatio] = useState(DEFAULT_LEFT_PANEL_RATIO);
   const [rightPanelRatio, setRightPanelRatio] = useState(DEFAULT_RIGHT_PANEL_RATIO);
   const [isDesktopLayout, setIsDesktopLayout] = useState(false);
@@ -162,8 +161,6 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
     openRightDrawer,
     closeRightDrawer,
     toggleRightDrawer,
-    meetingGoalEditorOpen,
-    setMeetingGoalEditorOpen,
     leftPanelRatio,
     rightPanelRatio,
     isDesktopLayout,
