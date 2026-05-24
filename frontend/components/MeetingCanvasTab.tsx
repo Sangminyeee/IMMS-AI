@@ -40,6 +40,33 @@ import {
   askCanvasQuickQuestion,
   extractCanvasIdeationKeywords,
 } from "@/lib/api";
+import {
+  CanvasPlacementPreviewOverlay,
+  CanvasStageEmptyOverlay,
+  CanvasStatusToast,
+  PlacementFeedbackOverlay,
+  ProblemDefinitionPreparingOverlay,
+  ProblemIdeaDragPreview,
+  SelectedEdgePopover,
+  SolutionStagePendingOverlay,
+} from "@/components/canvas/CanvasStatusOverlays";
+import {
+  ProblemCanvasToolbar,
+  ProblemStructureFloatingToolbar,
+  ProblemStructureSetupModal,
+} from "@/components/canvas/ProblemStructureControls";
+import { SolutionFinalDocumentPanel, SolutionSummarySourceList } from "@/components/canvas/SolutionPanels";
+import {
+  useCanvasDragRefs,
+  useCanvasFlowRefs,
+  useCanvasNodeSyncRefs,
+  useCanvasRuntimeState,
+  type IdeationDropTargetElement,
+  type IdeationDropPreviewState,
+  type PendingIdeationDragFrame,
+  type ProblemIdeaDropPreviewState,
+} from "@/components/canvas/useCanvasRuntimeState";
+import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
   AgendaActionItemDetail,
   AgendaDecisionDetail,
@@ -120,12 +147,6 @@ const DEFAULT_CANVAS_EDGE_OPTIONS = {
   style: { stroke: "#475569", strokeOpacity: 0.95, strokeWidth: 2 },
 } as const;
 const PROBLEM_STRUCTURE_NODE_DRAG_MIME = "application/x-imms-problem-structure-node";
-const DEFAULT_LEFT_PANEL_RATIO = 0.19;
-const DEFAULT_RIGHT_PANEL_RATIO = 0.2;
-const MIN_LEFT_PANEL_RATIO = 0.13;
-const MAX_LEFT_PANEL_RATIO = 0.28;
-const MIN_RIGHT_PANEL_RATIO = 0.14;
-const MAX_RIGHT_PANEL_RATIO = 0.3;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
 function clampNumber(value: number, min: number, max: number) {
@@ -236,21 +257,6 @@ type WorkspaceFieldSignatures = {
   final_solution_summary: string;
   node_positions: string;
   imported_state: string;
-};
-
-type IdeationDropPreviewState = {
-  draggedItemId: string;
-  targetId: string;
-  mode: "topic" | "merge" | "topic-merge" | "topic-idea-merge" | "detach";
-  agendaId: string;
-  position: { x: number; y: number };
-  label: string;
-  hint: string;
-};
-
-type StableIdeationDragState = {
-  nodeId: string;
-  anchor: { x: number; y: number };
 };
 
 function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
@@ -834,55 +840,6 @@ type IdeationKeywordBubbleClusterBox = {
     y: number;
     size: number;
   }>;
-};
-
-type AgendaDragPreviewState = {
-  agendaId: string;
-  originPosition: { x: number; y: number };
-};
-
-type IdeationDropTargetElement = {
-  element: HTMLElement;
-  nodeId: string;
-  itemId: string;
-};
-
-type PendingIdeationDragFrame = {
-  node: Node;
-  itemId: string;
-  clientX: number;
-  clientY: number;
-  position: { x: number; y: number };
-};
-
-type ProblemIdeaDragState = {
-  sourceGroupId: string;
-  sourceNodeId: string;
-  sourceNodeKind: "topic" | "idea" | "summary";
-  cardKind: "summary" | "idea";
-  sourceIndex: number;
-  title: string;
-  ideaId?: string;
-  summaryText?: string;
-};
-
-type ProblemIdeaDropPreviewState = {
-  targetGroupId: string;
-  cardKind: "summary" | "idea";
-  insertIndex: number;
-};
-
-type ProblemIdeaDragPointState = {
-  x: number;
-  y: number;
-};
-
-type ProblemIdeaPointerDragState = {
-  groupId: string;
-  card: ProblemGroupDisplayCard;
-  startX: number;
-  startY: number;
-  active: boolean;
 };
 
 type LocalEditPresenceTarget = {
@@ -1700,12 +1657,6 @@ function hydrateProblemStructureState(
     nodes: fallbackNodes,
     groups: pruneProblemStructureGroups(groups, fallbackNodes),
   };
-}
-
-function problemStructureStatusLabel(status: string) {
-  if (status === "final") return "확정";
-  if (status === "review") return "검토 중";
-  return "초안";
 }
 
 function getSummaryEligibleStructureGroups(groups: ProblemStructureGroupViewModel[]) {
@@ -4985,10 +4936,12 @@ export default function MeetingCanvasTab({
   );
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
-  const [quickAskOpen, setQuickAskOpen] = useState(false);
   const [quickAskDraft, setQuickAskDraft] = useState("");
   const [quickAskMessages, setQuickAskMessages] = useState<CanvasQuickAskMessage[]>([]);
   const [quickAskUnreadCount, setQuickAskUnreadCount] = useState(0);
+  const markQuickAskRead = useCallback(() => {
+    setQuickAskUnreadCount(0);
+  }, []);
   const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
   const [llmIdeationKeywordSignature, setLlmIdeationKeywordSignature] = useState("");
   const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
@@ -5036,28 +4989,61 @@ export default function MeetingCanvasTab({
   const [, setIdeaAssimilationStatus] = useState("");
   const [, setProblemDiscussionStatus] = useState("");
   const [, setIdeaCreateStack] = useState(0);
-  const [rightDrawerCollapsed, setRightDrawerCollapsed] = useState(true);
-  const [rightDrawerContentVisible, setRightDrawerContentVisible] = useState(false);
-  const [rightDrawerDetailCollapsed, setRightDrawerDetailCollapsed] = useState(false);
-  const [rightDrawerNotesCollapsed, setRightDrawerNotesCollapsed] = useState(false);
   const [sharedSyncEnabled, setSharedSyncEnabled] = useState(true);
   const [importOverrideActive, setImportOverrideActive] = useState(false);
-  const [nodePositions, setNodePositions] = useState<CanvasNodePositionsByStage>({});
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [, setEdges] = useState<Edge[]>([]);
-  const [selectedEdgeId, setSelectedEdgeId] = useState("");
-  const [agendaDragPreview, setAgendaDragPreview] = useState<AgendaDragPreviewState | null>(null);
-  const [ideationDropPreview, setIdeationDropPreview] = useState<IdeationDropPreviewState | null>(null);
-  const [, setIdeationNodeDragActive] = useState(false);
-  const [ideationDragGhost, setIdeationDragGhost] = useState<{
-    itemId: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const [problemIdeaDrag, setProblemIdeaDrag] = useState<ProblemIdeaDragState | null>(null);
-  const [problemIdeaDropPreview, setProblemIdeaDropPreview] = useState<ProblemIdeaDropPreviewState | null>(null);
-  const [problemIdeaDragPoint, setProblemIdeaDragPoint] = useState<ProblemIdeaDragPointState | null>(null);
-  const [meetingGoalEditorOpen, setMeetingGoalEditorOpen] = useState(false);
+  const {
+    nodePositions,
+    setNodePositions,
+    nodes,
+    setNodes,
+    setEdges,
+    selectedEdgeId,
+    setSelectedEdgeId,
+    agendaDragPreview,
+    setAgendaDragPreview,
+    ideationDropPreview,
+    setIdeationDropPreview,
+    setIdeationNodeDragActive,
+    ideationDragGhost,
+    setIdeationDragGhost,
+    problemIdeaDrag,
+    setProblemIdeaDrag,
+    problemIdeaDropPreview,
+    setProblemIdeaDropPreview,
+    problemIdeaDragPoint,
+    setProblemIdeaDragPoint,
+  } = useCanvasRuntimeState();
+  const {
+    quickAskOpen,
+    setQuickAskOpen,
+    quickAskOpenRef,
+    quickAskScrollRef,
+    rightDrawerCollapsed,
+    rightDrawerContentVisible,
+    rightDrawerDetailCollapsed,
+    setRightDrawerDetailCollapsed,
+    rightDrawerNotesCollapsed,
+    setRightDrawerNotesCollapsed,
+    openRightDrawer,
+    closeRightDrawer,
+    toggleRightDrawer,
+    meetingGoalEditorOpen,
+    setMeetingGoalEditorOpen,
+    rightPanelRatio,
+    isDesktopLayout,
+    startPanelResize,
+    solutionRightPaneRef,
+    solutionRightPaneWidth,
+    placementFeedback,
+    setPlacementFeedback,
+    placementFeedbackTimerRef,
+    canvasPlacementPreview,
+    setCanvasPlacementPreview,
+  } = useCanvasUiState({
+    quickAskMessageCount: quickAskMessages.length,
+    onQuickAskRead: markQuickAskRead,
+    solutionPaneMeasureKey: stage,
+  });
   const [endMeetingConfirmOpen, setEndMeetingConfirmOpen] = useState(false);
   const [endMeetingSaving, setEndMeetingSaving] = useState(false);
   const [endMeetingPreview, setEndMeetingPreview] = useState<{
@@ -5066,62 +5052,10 @@ export default function MeetingCanvasTab({
     solutionTopics: SolutionTopicViewModel[];
   } | null>(null);
   const [endMeetingSummaryPreviewMarkdown, setEndMeetingSummaryPreviewMarkdown] = useState("");
-  const [leftPanelRatio, setLeftPanelRatio] = useState(DEFAULT_LEFT_PANEL_RATIO);
-  const [rightPanelRatio, setRightPanelRatio] = useState(DEFAULT_RIGHT_PANEL_RATIO);
-  const [isDesktopLayout, setIsDesktopLayout] = useState(false);
-  const [solutionRightPaneWidth, setSolutionRightPaneWidth] = useState(0);
-  const [placementFeedback, setPlacementFeedback] = useState<{
-    id: string;
-    x: number;
-    y: number;
-    label: string;
-  } | null>(null);
-  const [canvasPlacementPreview, setCanvasPlacementPreview] = useState<{
-    x: number;
-    y: number;
-    label: string;
-    hint: string;
-    tone: string;
-  } | null>(null);
-
-  useEffect(() => {
-    if (rightDrawerCollapsed) {
-      setRightDrawerContentVisible(false);
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setRightDrawerContentVisible(true);
-    }, 120);
-
-    return () => window.clearTimeout(timer);
-  }, [rightDrawerCollapsed]);
-  const openRightDrawer = () => {
-    setRightDrawerCollapsed(false);
-  };
-  const closeRightDrawer = () => {
-    setRightDrawerContentVisible(false);
-    setRightDrawerCollapsed(true);
-  };
-  const toggleRightDrawer = () => {
-    setRightDrawerCollapsed((prev) => {
-      if (!prev) {
-        setRightDrawerContentVisible(false);
-      }
-      return !prev;
-    });
-  };
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
-  const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
-  const ideationLeftFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
-  const ideationRightFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  const { canvasSurfaceRef, flowRef, ideationLeftFlowRef, ideationRightFlowRef } = useCanvasFlowRefs();
   const ideationLeftPaneRef = useRef<HTMLDivElement | null>(null);
   const ideationRightPaneRef = useRef<HTMLDivElement | null>(null);
-  const solutionRightPaneRef = useRef<HTMLDivElement | null>(null);
-  const quickAskOpenRef = useRef(quickAskOpen);
-  const quickAskScrollRef = useRef<HTMLDivElement | null>(null);
-  const resizeStateRef = useRef<{ side: "left" | "right"; startX: number; startRatio: number } | null>(null);
   const autoProblemDefinitionRef = useRef(false);
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
@@ -5130,46 +5064,31 @@ export default function MeetingCanvasTab({
   const lastWorkspaceFieldSignaturesRef = useRef<WorkspaceFieldSignatures>(createWorkspaceFieldSignatures());
   const personalNotesSaveTimerRef = useRef<number | null>(null);
   const sharedSyncTimerRef = useRef<number | null>(null);
-  const nodePreviewFlushTimerRef = useRef<number | null>(null);
-  const liveNodePositionsRef = useRef<CanvasNodePositionsByStage>({});
-  const pendingNodePreviewsRef = useRef<Record<string, CanvasNodePreviewPayload>>({});
-  const lastNodePreviewFlushAtRef = useRef(0);
-  const nodePreviewSeqRef = useRef(0);
-  const lastNodePositionUpdateMsByKeyRef = useRef<Record<string, number>>({});
-  const localDraggingNodeIdsRef = useRef<Set<string>>(new Set());
-  const dragIdByNodeIdRef = useRef<Record<string, string>>({});
-  const lastRemoteNodePreviewSeqRef = useRef<Record<string, number>>({});
-  const remoteNodePreviewTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const remoteNodePreviewFrameRef = useRef<number | null>(null);
-  const pendingIdeationDragFrameRef = useRef<PendingIdeationDragFrame | null>(null);
-  const ideationDragFrameRef = useRef<number | null>(null);
+  const {
+    nodePreviewFlushTimerRef,
+    liveNodePositionsRef,
+    pendingNodePreviewsRef,
+    lastNodePreviewFlushAtRef,
+    nodePreviewSeqRef,
+    lastNodePositionUpdateMsByKeyRef,
+    localDraggingNodeIdsRef,
+    dragIdByNodeIdRef,
+    lastRemoteNodePreviewSeqRef,
+    remoteNodePreviewTargetsRef,
+    remoteNodePreviewFrameRef,
+    pendingIdeationDragFrameRef,
+    ideationDragFrameRef,
+    pendingNodePlacementsRef,
+    hoveredProblemDropTargetElementRef,
+    ideationDropTargetElementsRef,
+    ideationBubbleUpdateTickRef,
+  } = useCanvasNodeSyncRefs();
   const remoteEditPresenceTimersRef = useRef<Record<string, number>>({});
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
   const lastSharedSyncSignatureRef = useRef("");
   const localNodeOverridesRef = useRef(createLocalNodeOverrideMap());
   const previousCanvasItemSignaturesRef = useRef<Record<string, string>>({});
-  const pendingNodePlacementsRef = useRef<Record<string, { x: number; y: number }>>({});
-  const hoveredProblemDropTargetElementRef = useRef<HTMLElement | null>(null);
-  const ideationDropTargetElementsRef = useRef<IdeationDropTargetElement[]>([]);
-  const ideationBubbleUpdateTickRef = useRef(0);
-
-  useEffect(() => {
-    quickAskOpenRef.current = quickAskOpen;
-    if (quickAskOpen) {
-      setQuickAskUnreadCount(0);
-    }
-  }, [quickAskOpen]);
-
-  useEffect(() => {
-    if (!quickAskOpen) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (quickAskScrollRef.current) {
-        quickAskScrollRef.current.scrollTop = quickAskScrollRef.current.scrollHeight;
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [quickAskMessages.length, quickAskOpen]);
 
   useEffect(() => {
     if (!localEditPresenceTarget || !meetingId || !userId) return;
@@ -5275,13 +5194,14 @@ export default function MeetingCanvasTab({
     },
     [],
   );
-  const agendaDragPreviewRef = useRef<AgendaDragPreviewState | null>(null);
-  const ideationDropPreviewRef = useRef<IdeationDropPreviewState | null>(null);
-  const stableIdeationDragRef = useRef<StableIdeationDragState | null>(null);
-  const problemIdeaDragRef = useRef<ProblemIdeaDragState | null>(null);
-  const problemIdeaPointerDragRef = useRef<ProblemIdeaPointerDragState | null>(null);
+  const {
+    agendaDragPreviewRef,
+    ideationDropPreviewRef,
+    stableIdeationDragRef,
+    problemIdeaDragRef,
+    problemIdeaPointerDragRef,
+  } = useCanvasDragRefs<ProblemGroupDisplayCard>();
   const analysisSignatureAtImportRef = useRef("");
-  const placementFeedbackTimerRef = useRef<number | null>(null);
   const initialLayoutLogDoneRef = useRef(false);
   const processedProblemUtteranceIdsRef = useRef<Set<string>>(new Set());
   const failedProblemDiscussionRef = useRef<{ signature: string; failedAt: number; detail: string } | null>(null);
@@ -5361,6 +5281,7 @@ export default function MeetingCanvasTab({
   }, [effectiveState, agendas, transcripts, agendaOverrides, customGroups]);
   const agendaById = useMemo(
     () => new Map(agendaModels.map((agenda) => [agenda.id, agenda] as const)),
+    [agendaModels],
   );
   const agendaIndexById = useMemo(
     () => new Map(agendaModels.map((agenda, index) => [agenda.id, index] as const)),
@@ -5429,7 +5350,7 @@ export default function MeetingCanvasTab({
     ideationBubbleUpdateTickRef.current = 0;
     setIdeationBubbleVisuals([]);
     setIdeationBubbleDebugGrowthById({});
-  }, [meetingId]);
+  }, [ideationBubbleUpdateTickRef, meetingId]);
   useEffect(() => {
     if (activeIdeationKeywordBubbles.length === 0) return;
     const tick = ideationBubbleUpdateTickRef.current + 1;
@@ -5442,7 +5363,7 @@ export default function MeetingCanvasTab({
         tick,
       ),
     );
-  }, [activeIdeationKeywordBubbles, ideationBubbleDebugGrowthById]);
+  }, [activeIdeationKeywordBubbles, ideationBubbleDebugGrowthById, ideationBubbleUpdateTickRef]);
   useEffect(() => {
     const activeIds = new Set(ideationBubbleVisuals.map((bubble) => bubble.id));
     setIdeationBubbleDebugGrowthById((current) => {
@@ -5594,11 +5515,11 @@ export default function MeetingCanvasTab({
     setQuickAskOpen((prev) => {
       const next = !prev;
       if (next) {
-        setQuickAskUnreadCount(0);
+        markQuickAskRead();
       }
       return next;
     });
-  }, []);
+  }, [markQuickAskRead, setQuickAskOpen]);
   const handleSubmitQuickAsk = useCallback(
     (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
@@ -5670,7 +5591,7 @@ export default function MeetingCanvasTab({
           }
         });
     },
-    [buildQuickAskContext, meetingId, meetingTopicForAi, quickAskDraft, stage],
+    [buildQuickAskContext, meetingId, meetingTopicForAi, quickAskDraft, quickAskOpenRef, stage],
   );
   useEffect(() => {
     if (stage !== "ideation") return;
@@ -5857,7 +5778,33 @@ export default function MeetingCanvasTab({
       window.clearTimeout(problemDiscussionFlushTimerRef.current);
       problemDiscussionFlushTimerRef.current = null;
     }
-  }, [meetingId, onMeetingGoalChange, onMeetingGoalContextChange]);
+  }, [
+    agendaDragPreviewRef,
+    dragIdByNodeIdRef,
+    ideationDragFrameRef,
+    lastNodePreviewFlushAtRef,
+    lastRemoteNodePreviewSeqRef,
+    liveNodePositionsRef,
+    localDraggingNodeIdsRef,
+    meetingId,
+    nodePreviewFlushTimerRef,
+    nodePreviewSeqRef,
+    onMeetingGoalChange,
+    onMeetingGoalContextChange,
+    pendingIdeationDragFrameRef,
+    pendingNodePreviewsRef,
+    placementFeedbackTimerRef,
+    problemIdeaDragRef,
+    problemIdeaPointerDragRef,
+    remoteNodePreviewFrameRef,
+    remoteNodePreviewTargetsRef,
+    setAgendaDragPreview,
+    setMeetingGoalEditorOpen,
+    setPlacementFeedback,
+    setProblemIdeaDrag,
+    setProblemIdeaDragPoint,
+    setProblemIdeaDropPreview,
+  ]);
 
   useEffect(() => {
     setTopicCollapsedOverrides(readTopicCollapseOverrides(meetingId, userId));
@@ -5897,7 +5844,7 @@ export default function MeetingCanvasTab({
 
   useEffect(() => {
     liveNodePositionsRef.current = normalizeCanvasNodePositionsForComputedIdeation(nodePositions);
-  }, [nodePositions]);
+  }, [liveNodePositionsRef, nodePositions]);
 
   useEffect(() => {
     remoteNodePreviewTargetsRef.current.clear();
@@ -5911,7 +5858,14 @@ export default function MeetingCanvasTab({
       ideationDragFrameRef.current = null;
     }
     pendingIdeationDragFrameRef.current = null;
-  }, [stage]);
+  }, [
+    ideationDragFrameRef,
+    lastRemoteNodePreviewSeqRef,
+    pendingIdeationDragFrameRef,
+    remoteNodePreviewFrameRef,
+    remoteNodePreviewTargetsRef,
+    stage,
+  ]);
 
   useEffect(() => {
     const nextSignatures = Object.fromEntries(
@@ -6309,6 +6263,7 @@ export default function MeetingCanvasTab({
     meetingId,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
+    setNodePositions,
     userId,
   ]);
 
@@ -6347,7 +6302,7 @@ export default function MeetingCanvasTab({
     setEditingPersonalNoteId("");
     setLeftPanelTab("detail");
     setActivityMessage("새 오디오 전사를 기준으로 canvas를 초기화했습니다.");
-  }, [audioImportRevision]);
+  }, [audioImportRevision, setNodePositions]);
 
   useEffect(() => {
     if (problemGroups.length === 0) {
@@ -6460,31 +6415,6 @@ export default function MeetingCanvasTab({
       setMeetingGoalContextEditorDraft(meetingGoalContext);
     }
   }, [meetingGoalContext, meetingGoalEditorOpen]);
-
-  useEffect(() => {
-    const syncViewportMode = () => {
-      setIsDesktopLayout(window.innerWidth >= 1280);
-    };
-
-    syncViewportMode();
-    window.addEventListener("resize", syncViewportMode);
-    return () => window.removeEventListener("resize", syncViewportMode);
-  }, []);
-
-  useEffect(() => {
-    const element = solutionRightPaneRef.current;
-    if (!element) return;
-
-    const syncWidth = () => {
-      const nextWidth = Math.round(element.getBoundingClientRect().width);
-      setSolutionRightPaneWidth((current) => (Math.abs(current - nextWidth) > 4 ? nextWidth : current));
-    };
-
-    syncWidth();
-    const observer = new ResizeObserver(syncWidth);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [stage]);
 
   const buildProblemConclusionPayload = useCallback(
     (group: ProblemGroupViewModel) => ({
@@ -6613,8 +6543,11 @@ export default function MeetingCanvasTab({
       meetingId,
       onSharedCanvasSync,
       persistedSharedImportedState,
+      lastNodePreviewFlushAtRef,
       problemGroups,
       problemStructureStatePayload,
+      nodePreviewFlushTimerRef,
+      pendingNodePreviewsRef,
       solutionTopics,
       stage,
       userId,
@@ -6648,7 +6581,14 @@ export default function MeetingCanvasTab({
     pendingPreviews.forEach((preview) => {
       onNodePreviewSync(preview);
     });
-  }, [meetingId, onNodePreviewSync, userId]);
+  }, [
+    lastNodePreviewFlushAtRef,
+    meetingId,
+    nodePreviewFlushTimerRef,
+    onNodePreviewSync,
+    pendingNodePreviewsRef,
+    userId,
+  ]);
 
   const scheduleNodePreview = useCallback(
     (nodeId: string, position: { x: number; y: number }) => {
@@ -6692,7 +6632,17 @@ export default function MeetingCanvasTab({
         nodePreviewFlushTimerRef.current = window.setTimeout(flushPendingNodePreviews, delay);
       }
     },
-    [flushPendingNodePreviews, meetingId, stage, userId],
+    [
+      dragIdByNodeIdRef,
+      flushPendingNodePreviews,
+      lastNodePreviewFlushAtRef,
+      meetingId,
+      nodePreviewFlushTimerRef,
+      nodePreviewSeqRef,
+      pendingNodePreviewsRef,
+      stage,
+      userId,
+    ],
   );
 
   const ensureRemoteNodePreviewAnimation = useCallback(() => {
@@ -6756,7 +6706,7 @@ export default function MeetingCanvasTab({
     };
 
     remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
-  }, []);
+  }, [localDraggingNodeIdsRef, remoteNodePreviewFrameRef, remoteNodePreviewTargetsRef, setNodes]);
 
   const broadcastNodePositionCommit = useCallback(
     (stageKey: CanvasStage, nodeId: string, nextNodePositions: CanvasNodePositionsByStage) => {
@@ -6799,7 +6749,7 @@ export default function MeetingCanvasTab({
         },
       });
     },
-    [meetingId, onSharedCanvasSync, userId],
+    [lastNodePositionUpdateMsByKeyRef, meetingId, onSharedCanvasSync, userId],
   );
 
   useEffect(() => {
@@ -6831,7 +6781,16 @@ export default function MeetingCanvasTab({
       y: incomingNodePreview.y,
     });
     ensureRemoteNodePreviewAnimation();
-  }, [ensureRemoteNodePreviewAnimation, incomingNodePreview, meetingId, stage, userId]);
+  }, [
+    ensureRemoteNodePreviewAnimation,
+    incomingNodePreview,
+    lastRemoteNodePreviewSeqRef,
+    localDraggingNodeIdsRef,
+    meetingId,
+    remoteNodePreviewTargetsRef,
+    stage,
+    userId,
+  ]);
 
   const applyServerIdeaWorkspace = useCallback(
     (workspace: CanvasWorkspaceStateResponse | undefined | null) => {
@@ -6899,6 +6858,7 @@ export default function MeetingCanvasTab({
       persistedSharedImportedState,
       problemGroups,
       problemStructureStatePayload,
+      setNodePositions,
       sharedSyncEnabled,
       solutionTopics,
       stage,
@@ -6975,6 +6935,7 @@ export default function MeetingCanvasTab({
       persistedSharedImportedState,
       problemGroups,
       problemStructureStatePayload,
+      setNodePositions,
       sharedSyncEnabled,
       solutionTopics,
       stage,
@@ -7298,7 +7259,7 @@ export default function MeetingCanvasTab({
         insertIndex,
       };
     },
-    [problemGroupById, problemIdeaDrag],
+    [problemGroupById, problemIdeaDrag, problemIdeaDragRef],
   );
 
   const updateProblemIdeaDragPoint = useCallback((clientX: number, clientY: number) => {
@@ -7311,7 +7272,7 @@ export default function MeetingCanvasTab({
             y: clientY,
           },
     );
-  }, []);
+  }, [setProblemIdeaDragPoint]);
 
   const beginProblemCardDrag = useCallback(
     (groupId: string, card: ProblemGroupDisplayCard, clientX: number, clientY: number) => {
@@ -7334,7 +7295,7 @@ export default function MeetingCanvasTab({
       });
       updateProblemIdeaDragPoint(clientX, clientY);
     },
-    [updateProblemIdeaDragPoint],
+    [problemIdeaDragRef, setProblemIdeaDrag, setProblemIdeaDropPreview, updateProblemIdeaDragPoint],
   );
 
   const handleProblemIdeaDragEnd = useCallback(() => {
@@ -7342,7 +7303,7 @@ export default function MeetingCanvasTab({
     setProblemIdeaDrag(null);
     setProblemIdeaDropPreview(null);
     setProblemIdeaDragPoint(null);
-  }, []);
+  }, [problemIdeaPointerDragRef, setProblemIdeaDrag, setProblemIdeaDragPoint, setProblemIdeaDropPreview]);
 
   const handleProblemIdeaDrop = useCallback(
     (
@@ -7605,6 +7566,7 @@ export default function MeetingCanvasTab({
       problemGroups,
       problemStructureStatePayload,
       problemIdeaDrag,
+      problemIdeaDragRef,
       problemIdeaDropPreview,
       sharedSyncEnabled,
       solutionTopics,
@@ -8081,6 +8043,11 @@ export default function MeetingCanvasTab({
     beginProblemCardDrag,
     getProblemIdeaDropPreviewFromPoint,
     handleProblemIdeaDrop,
+    problemIdeaDragRef,
+    problemIdeaPointerDragRef,
+    setProblemIdeaDrag,
+    setProblemIdeaDragPoint,
+    setProblemIdeaDropPreview,
     updateProblemIdeaDragPoint,
   ]);
 
@@ -8111,7 +8078,14 @@ export default function MeetingCanvasTab({
       window.removeEventListener("dragover", handleWindowDragOver);
       window.removeEventListener("drop", handleWindowDrop);
     };
-  }, [problemIdeaDrag, updateProblemIdeaDragPoint]);
+  }, [
+    problemIdeaDrag,
+    problemIdeaDragRef,
+    setProblemIdeaDrag,
+    setProblemIdeaDragPoint,
+    setProblemIdeaDropPreview,
+    updateProblemIdeaDragPoint,
+  ]);
 
   useEffect(() => {
     if (stage !== "problem-definition" || problemGroups.length === 0) {
@@ -8390,11 +8364,16 @@ export default function MeetingCanvasTab({
     }, 0);
   }, [
     incomingSharedCanvasSync,
+    lastNodePositionUpdateMsByKeyRef,
+    liveNodePositionsRef,
+    localDraggingNodeIdsRef,
     meetingId,
     nodePositions,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
     problemGroups,
+    remoteNodePreviewTargetsRef,
+    setNodePositions,
     sharedSyncEnabled,
     solutionTopics,
     userId,
@@ -9091,6 +9070,7 @@ export default function MeetingCanvasTab({
     problemStructureDraftMethod,
     problemStructureDraftMode,
     runProblemStructureGrouping,
+    setCanvasPlacementPreview,
     syncProblemStructureNodesFromDefinition,
   ]);
 
@@ -11165,7 +11145,7 @@ export default function MeetingCanvasTab({
         [stageKey]: Object.fromEntries(nextStageEntries),
       });
     });
-  }, [graphBlueprint.layoutSignature, graphBlueprint.nodeDescriptors, problemGroups, stage]);
+  }, [graphBlueprint.layoutSignature, graphBlueprint.nodeDescriptors, problemGroups, setNodePositions, stage]);
 
   useEffect(() => {
     CANVAS_STAGES.forEach((stageKey) => {
@@ -11173,7 +11153,7 @@ export default function MeetingCanvasTab({
         delete pendingNodePlacementsRef.current[nodeId];
       });
     });
-  }, [nodePositions]);
+  }, [nodePositions, pendingNodePlacementsRef]);
 
   useEffect(() => {
     const activeDragNodeId = stableIdeationDragRef.current?.nodeId || "";
@@ -11194,43 +11174,7 @@ export default function MeetingCanvasTab({
       );
       return nextEdges.length === current.length ? current : nextEdges;
     });
-  }, [graphBlueprint]);
-
-  useEffect(() => {
-    const handlePointerMove = (event: MouseEvent) => {
-      if (!resizeStateRef.current) return;
-
-      const viewportWidth = Math.max(window.innerWidth, 1);
-      const deltaRatio = (event.clientX - resizeStateRef.current.startX) / viewportWidth;
-      if (resizeStateRef.current.side === "left") {
-        const nextRatio = clampNumber(
-          resizeStateRef.current.startRatio + deltaRatio,
-          MIN_LEFT_PANEL_RATIO,
-          MAX_LEFT_PANEL_RATIO,
-        );
-        setLeftPanelRatio(nextRatio);
-        return;
-      }
-
-      const nextRatio = clampNumber(
-        resizeStateRef.current.startRatio - deltaRatio,
-        MIN_RIGHT_PANEL_RATIO,
-        MAX_RIGHT_PANEL_RATIO,
-      );
-      setRightPanelRatio(nextRatio);
-    };
-
-    const handlePointerUp = () => {
-      resizeStateRef.current = null;
-    };
-
-    window.addEventListener("mousemove", handlePointerMove);
-    window.addEventListener("mouseup", handlePointerUp);
-    return () => {
-      window.removeEventListener("mousemove", handlePointerMove);
-      window.removeEventListener("mouseup", handlePointerUp);
-    };
-  }, []);
+  }, [graphBlueprint, localDraggingNodeIdsRef, remoteNodePreviewTargetsRef, setEdges, setNodes, stableIdeationDragRef]);
 
   const selectedAgenda = useMemo(
     () => agendaById.get(selectedAgendaId) || agendaModels[0] || null,
@@ -11279,7 +11223,7 @@ export default function MeetingCanvasTab({
     if (!displayEdges.some((edge) => edge.id === selectedEdgeId)) {
       setSelectedEdgeId("");
     }
-  }, [displayEdges, selectedEdgeId]);
+  }, [displayEdges, selectedEdgeId, setSelectedEdgeId]);
   const selectedProblemGroup = useMemo(
     () =>
       problemDefinitionPhase === "structure"
@@ -11766,6 +11710,7 @@ export default function MeetingCanvasTab({
     persistedSharedImportedState,
     problemGroups,
     selectedProblemGroupId,
+    setNodePositions,
     sharedSyncEnabled,
     transcripts,
   ]);
@@ -12066,7 +12011,7 @@ export default function MeetingCanvasTab({
       setArmedCanvasTool(null);
       setCanvasPlacementPreview(null);
     }
-  }, [armedCanvasTool, canUseCanvasToolbar, visibleCanvasTools]);
+  }, [armedCanvasTool, canUseCanvasToolbar, setCanvasPlacementPreview, visibleCanvasTools]);
 
   useEffect(() => {
     if (stage !== "problem-definition") {
@@ -12095,12 +12040,12 @@ export default function MeetingCanvasTab({
         tone: toolPreviewTone(armedCanvasTool, stage),
       });
     },
-    [armedCanvasTool, canUseCanvasToolbar, stage, visibleCanvasTools],
+    [armedCanvasTool, canvasSurfaceRef, canUseCanvasToolbar, setCanvasPlacementPreview, stage, visibleCanvasTools],
   );
 
   const clearCanvasPlacementPreview = useCallback(() => {
     setCanvasPlacementPreview(null);
-  }, []);
+  }, [setCanvasPlacementPreview]);
 
   const handleCanvasPlacementStart = useCallback(
     async (tool: CanvasTool, clientX: number, clientY: number, agendaId?: string, pointId?: string) => {
@@ -12658,11 +12603,18 @@ export default function MeetingCanvasTab({
       meetingId,
       nodePositions,
       persistedSharedImportedState,
+      placementFeedbackTimerRef,
+      canvasSurfaceRef,
       problemGroups,
       problemStructureStatePayload,
       selectedAgendaId,
       selectedCanvasItemId,
       selectedProblemGroupId,
+      flowRef,
+      pendingNodePlacementsRef,
+      setCanvasPlacementPreview,
+      setNodePositions,
+      setPlacementFeedback,
       sharedSyncEnabled,
       solutionTopics,
       stage,
@@ -12781,7 +12733,7 @@ export default function MeetingCanvasTab({
         y: pointerPosition.y - dragState.anchor.y,
       };
     },
-    [],
+    [flowRef, stableIdeationDragRef],
   );
 
   const getIdeationDropPlaceholderPosition = useCallback(
@@ -12797,7 +12749,7 @@ export default function MeetingCanvasTab({
         y: flowPosition.y - 64,
       };
     },
-    [],
+    [ideationLeftFlowRef, ideationRightFlowRef],
   );
 
   const collectIdeationDropTargetElements = useCallback((draggedNodeId: string): IdeationDropTargetElement[] => {
@@ -12891,7 +12843,15 @@ export default function MeetingCanvasTab({
 
       return bestTarget;
     },
-    [canvasItemById, canvasItems, collectIdeationDropTargetElements, flowNodeById, selectedAgendaForDrop, stage],
+    [
+      canvasItemById,
+      canvasItems,
+      collectIdeationDropTargetElements,
+      flowNodeById,
+      ideationDropTargetElementsRef,
+      selectedAgendaForDrop,
+      stage,
+    ],
   );
 
   const resolveIdeationDropPreview = useCallback(
@@ -13176,6 +13136,7 @@ export default function MeetingCanvasTab({
       findIdeationLeftGroupDropTarget,
       flowNodeById,
       getIdeationDropPlaceholderPosition,
+      ideationDropTargetElementsRef,
       selectedAgendaForDrop,
       selectedCanvasItemId,
       stage,
@@ -14039,6 +14000,8 @@ export default function MeetingCanvasTab({
     persistedSharedImportedState,
     selectedEdge,
     selectedEdgeId,
+    setEdges,
+    setSelectedEdgeId,
     sharedSyncEnabled,
   ]);
 
@@ -14625,15 +14588,6 @@ export default function MeetingCanvasTab({
       };
       return nextSolutionTopics;
     });
-  };
-
-  const startPanelResize = (side: "left" | "right") => (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (!isDesktopLayout) return;
-    resizeStateRef.current = {
-      side,
-      startX: event.clientX,
-      startRatio: side === "left" ? leftPanelRatio : rightPanelRatio,
-    };
   };
 
   useEffect(() => {
@@ -16548,172 +16502,26 @@ export default function MeetingCanvasTab({
                 </ReactFlow>
               ) : stage === "solution" ? (
                 <div className="grid h-full min-h-0 grid-cols-1 bg-[#f5f6f8] xl:grid-cols-[minmax(18rem,32%)_minmax(0,1fr)]">
-                  <aside className="flex min-h-[280px] flex-col overflow-hidden border-b border-black/10 bg-white xl:border-b-0 xl:border-r">
-                    <div className="border-b border-black/10 px-5 py-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Summary Source</p>
-                      <h4 className="mt-1 text-lg font-semibold text-black">구조화 결과</h4>
-                      <p className="mt-1 text-sm leading-6 text-[#4d4d4d]">
-                        검토 중/확정 그룹 {summaryEligibleStructureGroups.length}개가 요약 문서에 포함됩니다.
-                      </p>
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                      {summaryEligibleStructureGroups.length > 0 ? (
-                        <div className="space-y-3">
-                          {summaryEligibleStructureGroups.map((group, index) => {
-                            const section = summaryDocumentSectionByGroupId.get(group.id);
-                            const evidenceOpen = summaryEvidenceOpenGroupIds.has(group.id);
-                            const remoteGroupEditPresence =
-                              remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_group", group.id)] || null;
-                            const groupNodes = group.nodeIds
-                              .map((nodeId) => problemStructureNodeById.get(nodeId))
-                              .filter((node): node is ProblemStructureNodeViewModel => Boolean(node));
-                            return (
-                              <div key={`summary-source-${group.id}`} className="border border-black/10 bg-white p-4">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-semibold text-[#777]">#{index + 1}</p>
-                                    <h5 className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-black">
-                                      {group.title}
-                                    </h5>
-                                  </div>
-                                  <div className="flex shrink-0 flex-col items-end gap-1.5">
-                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                                      group.status === "final" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
-                                    }`}>
-                                      {problemStructureStatusLabel(group.status)}
-                                    </span>
-                                    {remoteGroupEditPresence ? renderEditPresenceBadge() : null}
-                                  </div>
-                                </div>
-                                {groupNodes.length > 0 ? (
-                                  <div className="mt-3 space-y-1.5">
-                                    {groupNodes.slice(0, 4).map((node) => {
-                                      const remoteNodeEditPresence =
-                                        remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)] || null;
-                                      return (
-                                        <div key={`summary-node-${group.id}-${node.id}`} className="bg-[#f5f6f8] px-3 py-2">
-                                          <p className="line-clamp-2 text-xs leading-5 text-[#4d4d4d]">
-                                            {node.title}
-                                          </p>
-                                          {remoteNodeEditPresence ? (
-                                            <div className="mt-1">{renderEditPresenceBadge()}</div>
-                                          ) : null}
-                                        </div>
-                                      );
-                                    })}
-                                    {groupNodes.length > 4 ? (
-                                      <p className="px-1 text-[11px] font-medium text-[#777]">+ {groupNodes.length - 4}개 더 있음</p>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                                {section && section.evidence.length > 0 ? (
-                                  <div className="mt-3 border-t border-black/10 pt-3">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleSummaryEvidence(group.id)}
-                                      className="text-xs font-semibold text-[#a13ab8] transition hover:text-[#8d2fa3]"
-                                    >
-                                      근거 발언 {evidenceOpen ? "접기" : "보기"} ({section.evidence.length})
-                                    </button>
-                                    {evidenceOpen ? (
-                                      <div className="mt-2 space-y-2">
-                                        {section.evidence.map((item, evidenceIndex) => (
-                                          <p key={`summary-evidence-${group.id}-${item.utterance_id || evidenceIndex}`} className="bg-[#f7ecfb] px-3 py-2 text-xs leading-5 text-[#334155]">
-                                            <span className="font-semibold text-[#a13ab8]">{item.speaker}</span>
-                                            {item.timestamp ? <span className="ml-2 text-[#777]">{item.timestamp}</span> : null}
-                                            <span className="mt-1 block">{item.text}</span>
-                                          </p>
-                                        ))}
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="border border-dashed border-black/10 bg-[#fafafa] px-4 py-5 text-sm leading-6 text-[#777]">
-                          정의 2단계에서 그룹을 검토 중 또는 확정 상태로 바꾸면 요약 문서에 포함됩니다.
-                        </div>
-                      )}
-                    </div>
-                  </aside>
-
-                  <section ref={solutionRightPaneRef} className="flex min-h-[420px] flex-col overflow-hidden bg-white">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 px-5 py-4">
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Final Document</p>
-                        <h4 className="mt-1 text-lg font-semibold text-black">최종 정리 문서</h4>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {finalSummaryDocument.used_llm ? (
-                          <span className="rounded-full bg-[#f7ecfb] px-3 py-1 text-xs font-semibold text-[#a13ab8]">AI 초안</span>
-                        ) : null}
-                        {finalSummaryDocument.document_status === "edited" ? (
-                          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">사용자 수정됨</span>
-                        ) : null}
-                        <div className="flex overflow-hidden rounded-[8px] border border-black/10 bg-[#f5f6f8]">
-                          <button
-                            type="button"
-                            onClick={() => setSummaryDocumentEditMode(false)}
-                            disabled={!finalSummaryDocument.markdown.trim()}
-                            className={`px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                              !summaryDocumentEditMode ? "bg-white text-[#a13ab8]" : "text-[#4d4d4d] hover:bg-white/70"
-                            }`}
-                          >
-                            보기
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSummaryDocumentEditMode(true)}
-                            className={`border-l border-black/10 px-3 py-1.5 text-xs font-semibold transition ${
-                              summaryDocumentEditMode ? "bg-white text-[#a13ab8]" : "text-[#4d4d4d] hover:bg-white/70"
-                            }`}
-                          >
-                            편집
-                          </button>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleRegenerateSummaryDocument()}
-                          disabled={solutionStagePending || summaryEligibleStructureGroups.length === 0}
-                          className="rounded-[8px] border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          다시 생성
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleCopyFinalSolutionMarkdown()}
-                          disabled={!finalSummaryDocument.markdown.trim()}
-                          className="rounded-[8px] border border-[#ead0f2] bg-[#f4e8fb] px-3 py-1.5 text-xs font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          복사
-                        </button>
-                      </div>
-                    </div>
-                    {finalSummaryDocument.warning ? (
-                      <div className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-xs leading-5 text-amber-700">
-                        {finalSummaryDocument.warning}
-                      </div>
-                    ) : null}
-                    <div className="min-h-0 flex-1 overflow-hidden bg-[#f5f6f8] p-5">
-                      {summaryDocumentEditMode || !finalSummaryDocument.markdown.trim() ? (
-                        <textarea
-                          value={finalSummaryDocument.markdown}
-                          onChange={(event) => handleSummaryDocumentMarkdownChange(event.target.value)}
-                          placeholder={
-                            solutionStagePending
-                              ? "AI가 요약 문서를 생성하는 중입니다."
-                              : "요약 단계로 들어오면 구조화 그룹을 기준으로 문서 초안이 자동 생성됩니다."
-                          }
-                          className="h-full min-h-[360px] w-full resize-none border border-black/10 bg-white px-6 py-5 font-mono text-sm leading-7 text-[#1f2937] outline-none transition placeholder:font-sans placeholder:text-[#999] focus:border-[#a13ab8]/30 focus:ring-2 focus:ring-[#a13ab8]/10"
-                        />
-                      ) : (
-                        renderSummaryMarkdownPreview(finalSummaryDocument.markdown, () => setSummaryDocumentEditMode(true))
-                      )}
-                    </div>
-                  </section>
+                  <SolutionSummarySourceList
+                    groups={summaryEligibleStructureGroups}
+                    sectionByGroupId={summaryDocumentSectionByGroupId}
+                    nodeById={problemStructureNodeById}
+                    evidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
+                    remoteEditPresenceByKey={remoteEditPresenceByKey}
+                    onToggleEvidence={handleToggleSummaryEvidence}
+                  />
+                  <SolutionFinalDocumentPanel
+                    paneRef={solutionRightPaneRef}
+                    document={finalSummaryDocument}
+                    editMode={summaryDocumentEditMode}
+                    pending={solutionStagePending}
+                    eligibleGroupCount={summaryEligibleStructureGroups.length}
+                    onSetEditMode={setSummaryDocumentEditMode}
+                    onRegenerate={handleRegenerateSummaryDocument}
+                    onCopy={handleCopyFinalSolutionMarkdown}
+                    onMarkdownChange={handleSummaryDocumentMarkdownChange}
+                    renderPreview={renderSummaryMarkdownPreview}
+                  />
                 </div>
               ) : (
                 <ReactFlow
@@ -16747,80 +16555,19 @@ export default function MeetingCanvasTab({
               )}
             </div>
 
-            {selectedEdge ? (
-              <div className="absolute right-4 top-4 z-[9] w-[260px] rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_18px_46px_rgba(15,23,42,0.16)] backdrop-blur">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Connection</p>
-                  <p className="mt-1 truncate text-sm font-semibold text-slate-800">
-                    {selectedEdge.source} → {selectedEdge.target}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleDeleteSelectedEdge}
-                  className="mt-3 w-full rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700"
-                >
-                  연결 삭제
-                </button>
-                <p className="mt-2 text-xs leading-5 text-slate-500">연결선을 클릭해 선택한 뒤 Delete 또는 Backspace로도 삭제할 수 있습니다.</p>
-              </div>
-            ) : null}
+            {selectedEdge ? <SelectedEdgePopover edge={selectedEdge} onDelete={handleDeleteSelectedEdge} /> : null}
 
-            {placementFeedback ? (
-              <div
-                className="pointer-events-none absolute z-[9] -translate-x-1/2 -translate-y-1/2"
-                style={{ left: placementFeedback.x, top: placementFeedback.y }}
-              >
-                <div className="rounded-full bg-[#10243f] px-3 py-1.5 text-xs font-semibold text-white shadow-lg shadow-slate-300/80">
-                  {placementFeedback.label} 생성됨
-                </div>
-              </div>
-            ) : null}
+            {placementFeedback ? <PlacementFeedbackOverlay feedback={placementFeedback} /> : null}
 
-            {canvasPlacementPreview ? (
-              <div
-                className="pointer-events-none absolute z-[9]"
-                style={{ left: canvasPlacementPreview.x, top: canvasPlacementPreview.y }}
-              >
-                <div className={`w-[232px] rounded-[24px] border px-4 py-3 shadow-lg backdrop-blur ${canvasPlacementPreview.tone}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold">
-                      {canvasPlacementPreview.label}
-                    </span>
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">
-                      Preview
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm font-semibold">
-                    {canvasPlacementPreview.hint}
-                  </p>
-                  <p className="mt-1 text-xs leading-5 opacity-75">
-                    클릭하면 이 위치에 공용 아이템이 생성됩니다.
-                  </p>
-                </div>
-              </div>
-            ) : null}
+            {canvasPlacementPreview ? <CanvasPlacementPreviewOverlay preview={canvasPlacementPreview} /> : null}
 
             {problemIdeaDrag && problemIdeaDragPoint ? (
-              <div
-                className="pointer-events-none fixed z-[80] w-[260px] -translate-x-1/2 -translate-y-1/2 rounded-[16px] border border-violet-200 bg-white/95 px-4 py-3 shadow-[0_18px_42px_rgba(15,23,42,0.20)] backdrop-blur"
-                style={{
-                  left: problemIdeaDragPoint.x,
-                  top: problemIdeaDragPoint.y,
-                }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700">
-                    {problemIdeaDrag.cardKind === "summary" ? "요약/토픽" : "아이디어"}
-                  </span>
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                    이동 중
-                  </span>
-                </div>
-                <p className="mt-2 line-clamp-2 text-sm font-semibold leading-5 text-slate-900">
-                  {problemIdeaDrag.title || "이동 중인 카드"}
-                </p>
-              </div>
+              <ProblemIdeaDragPreview
+                x={problemIdeaDragPoint.x}
+                y={problemIdeaDragPoint.y}
+                cardKind={problemIdeaDrag.cardKind}
+                title={problemIdeaDrag.title}
+              />
             ) : null}
 
             {ideationDragGhost && ideationDragGhostItem ? (
@@ -16843,212 +16590,58 @@ export default function MeetingCanvasTab({
             ) : null}
 
             {stage === "problem-definition" && problemGroups.length === 0 ? (
-              <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
-                <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-center shadow-lg shadow-slate-200/70">
-                  <p className="text-sm font-semibold uppercase tracking-[0.16em] text-violet-600">Problem Definition</p>
-                  <p className="mt-2 text-base text-slate-700">
-                    {busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
-                  </p>
-                </div>
-              </div>
+              <CanvasStageEmptyOverlay
+                eyebrow="Problem Definition"
+                message={busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
+                tone="problem"
+              />
             ) : null}
 
             {stage === "solution" && !finalSummaryDocument.markdown.trim() && !solutionStagePending ? (
-              <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
-                <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-center shadow-lg shadow-slate-200/70">
-                  <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Summary Stage</p>
-                  <p className="mt-2 text-base text-slate-700">
-                    {summaryEligibleStructureGroups.length > 0
-                      ? "요약 문서를 준비하는 중입니다."
-                      : "검토 중 또는 확정된 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."}
-                  </p>
-                </div>
-              </div>
+              <CanvasStageEmptyOverlay
+                eyebrow="Summary Stage"
+                message={
+                  summaryEligibleStructureGroups.length > 0
+                    ? "요약 문서를 준비하는 중입니다."
+                    : "검토 중 또는 확정된 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
+                }
+                tone="summary"
+              />
             ) : null}
 
-            {problemDefinitionStagePending ? (
-              <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
-                <div className="w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]">
-                  <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-violet-100 text-4xl">
-                    ⏳
-                  </div>
-                  <p className="mt-5 text-sm font-semibold uppercase tracking-[0.18em] text-violet-700">
-                    Problem Definition
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-slate-900">
-                    문제정의 단계를 준비하고 있습니다
-                  </h3>
-                  <p className="mt-3 text-base leading-7 text-slate-500">
-                    아이디어 단계의 STT 발화를 바탕으로 큰 분류를 만드는 중입니다.
-                  </p>
-                </div>
-              </div>
-            ) : null}
+            {problemDefinitionStagePending ? <ProblemDefinitionPreparingOverlay /> : null}
 
             {stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen ? (
-              <div className="absolute inset-0 z-[7] flex items-center justify-center bg-white/82 px-4 backdrop-blur-[2px]">
-                <div className="w-[min(820px,94%)] rounded-[20px] border border-black/10 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.14)]">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Problem Structure</p>
-                      <h3 className="mt-2 text-2xl font-semibold text-black">정의 2단계 시작 설정</h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setProblemStructureSetupOpen(false)}
-                      className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-3 py-2 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
-                    >
-                      닫기
-                    </button>
-                  </div>
-
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    <div>
-                      <p className="text-sm font-semibold text-black">구조화 방식</p>
-                      <div className="mt-3 grid gap-3">
-                        {(["affinity", "card-sorting"] as ProblemStructureMethod[]).map((method) => {
-                          const active = problemStructureDraftMethod === method;
-                          return (
-                            <button
-                              key={method}
-                              type="button"
-                              onClick={() => setProblemStructureDraftMethod(method)}
-                              className={`rounded-[14px] border px-5 py-4 text-left transition ${
-                                active
-                                  ? "border-[#a13ab8]/30 bg-[#f7ecfb] text-[#a13ab8]"
-                                  : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#a13ab8]/30 hover:bg-[#f7ecfb]"
-                              }`}
-                            >
-                              <span className="text-base font-semibold">{problemStructureMethodLabel(method)}</span>
-                              <span className="mt-1 block text-sm leading-6 text-[#4d4d4d]">
-                                {method === "affinity"
-                                  ? "비슷한 의미의 노드를 자유로운 그룹으로 묶습니다."
-                                  : "그룹 컬럼 위에 설명 카드를 두고 노드를 분류합니다."}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-sm font-semibold text-black">시작 방식</p>
-                      <div className="mt-3 grid gap-3">
-                        {(["ai", "manual"] as Exclude<ProblemDefinitionMode, "">[]).map((mode) => {
-                          const active = problemStructureDraftMode === mode;
-                          return (
-                            <button
-                              key={mode}
-                              type="button"
-                              onClick={() => setProblemStructureDraftMode(mode)}
-                              className={`rounded-[14px] border px-5 py-4 text-left transition ${
-                                active
-                                  ? "border-[#a13ab8]/30 bg-[#f7ecfb] text-[#a13ab8]"
-                                  : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#a13ab8]/30 hover:bg-[#f7ecfb]"
-                              }`}
-                            >
-                              <span className="text-base font-semibold">
-                                {mode === "ai" ? "AI가 초안을 만들기" : "직접 구성하기"}
-                              </span>
-                              <span className="mt-1 block text-sm leading-6 text-[#4d4d4d]">
-                                {mode === "ai"
-                                  ? "AI가 현재 노드들을 먼저 묶고, 사용자가 이후에 수정합니다."
-                                  : "사용자가 그룹을 만들고 노드를 옮기며 구조화합니다."}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-black/10 pt-4">
-                    <p className="text-sm leading-6 text-[#4d4d4d]">
-                      정의 1단계 캔버스의 현재 노드 {problemGroups.length}개를 모두 가져옵니다.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleStartProblemStructure}
-                      disabled={problemStructurePending}
-                      className="rounded-[10px] border border-[#ead0f2] bg-[#f4e8fb] px-5 py-2.5 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {problemStructurePending ? "AI 묶는 중" : "정의 2단계로 이동"}
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <ProblemStructureSetupModal
+                draftMethod={problemStructureDraftMethod}
+                draftMode={problemStructureDraftMode}
+                problemGroupsCount={problemGroups.length}
+                pending={problemStructurePending}
+                onClose={() => setProblemStructureSetupOpen(false)}
+                onDraftMethodChange={setProblemStructureDraftMethod}
+                onDraftModeChange={setProblemStructureDraftMode}
+                onStart={handleStartProblemStructure}
+              />
             ) : null}
 
             {stage === "problem-definition" && problemDefinitionPhase === "structure" && !problemDefinitionStagePending ? (
-              <div className="pointer-events-none absolute left-4 top-4 z-[8] w-[min(38rem,calc(100%-2rem))]">
-                <div className="pointer-events-auto rounded-[16px] border border-black/10 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.12)] backdrop-blur">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="min-w-[12rem] flex-1">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">
-                        정의 2단계
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-black">
-                        {problemStructureMethodLabel(problemStructureMethod)} · {problemDefinitionModeLabel(problemDefinitionMode)}
-                      </p>
-                      {problemStructurePending ? (
-                        <p className="mt-1 text-xs font-medium text-[#a13ab8]">AI가 구조화 그룹을 생성하는 중입니다.</p>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(["affinity", "card-sorting"] as ProblemStructureMethod[]).map((method) => {
-                        const active = problemStructureMethod === method;
-                        return (
-                          <button
-                            key={`structure-method-${method}`}
-                            type="button"
-                            disabled={problemStructurePending}
-                            onClick={() => {
-                              setProblemStructureMethod(method);
-                              setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
-                            }}
-                            className={`rounded-[9px] px-3 py-1.5 text-xs font-semibold transition ${
-                              active
-                                ? "border border-[#ead0f2] bg-[#f4e8fb] text-[#6f2b7d]"
-                                : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
-                            } disabled:cursor-not-allowed disabled:opacity-50`}
-                          >
-                            {problemStructureMethodLabel(method)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(["ai", "manual"] as Exclude<ProblemDefinitionMode, "">[]).map((mode) => {
-                        const active = problemDefinitionMode === mode;
-                        return (
-                          <button
-                            key={`structure-mode-${mode}`}
-                            type="button"
-                            disabled={problemStructurePending}
-                            onClick={() => {
-                              setProblemDefinitionMode(mode);
-                              if (mode === "ai") {
-                                void runProblemStructureGrouping();
-                                return;
-                              }
-                              setActivityMessage(
-                                "직접 구성 모드로 표시했습니다.",
-                              );
-                            }}
-                            className={`rounded-[9px] px-3 py-1.5 text-xs font-semibold transition ${
-                              active
-                                ? "border border-black/10 bg-white text-black shadow-[0_1px_0_rgba(0,0,0,0.04)]"
-                                : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-black/5 hover:text-black"
-                            } disabled:cursor-not-allowed disabled:opacity-50`}
-                          >
-                            {problemDefinitionModeLabel(mode)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <ProblemStructureFloatingToolbar
+                method={problemStructureMethod}
+                mode={problemDefinitionMode}
+                pending={problemStructurePending}
+                onMethodChange={(method) => {
+                  setProblemStructureMethod(method);
+                  setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
+                }}
+                onModeChange={(mode) => {
+                  setProblemDefinitionMode(mode);
+                  if (mode === "ai") {
+                    void runProblemStructureGrouping();
+                    return;
+                  }
+                  setActivityMessage("직접 구성 모드로 표시했습니다.");
+                }}
+              />
             ) : null}
 
             {stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale && activeProblemGroupingRationaleGroup ? (
@@ -17093,82 +16686,28 @@ export default function MeetingCanvasTab({
               </div>
             ) : null}
 
-            {solutionStagePending ? (
-              <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
-                <div className="w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]">
-                  <div className="mx-auto flex w-full max-w-[320px] items-center justify-center gap-5">
-                    <div className="grid grid-cols-2 gap-3">
-                      {[0, 1, 2, 3].map((item) => (
-                        <div
-                          key={`loading-problem-${item}`}
-                          className="h-16 w-16 animate-pulse rounded-2xl bg-violet-100 shadow-sm"
-                        />
-                      ))}
-                    </div>
-                    <div className="flex flex-col items-center gap-2 text-slate-400">
-                      <span className="h-10 w-10 animate-spin rounded-full border-[3px] border-slate-200 border-t-slate-700" />
-                      <span className="text-xs font-semibold uppercase tracking-[0.18em]">AI</span>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="h-8 w-28 animate-pulse rounded-2xl bg-emerald-100" />
-                      <div className="h-16 w-28 animate-pulse rounded-2xl bg-emerald-50" />
-                    </div>
-                  </div>
-                  <p className="mt-6 text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">
-                    Summary Stage
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-slate-900">
-                    요약 문서를 생성하고 있습니다
-                  </h3>
-                  <p className="mt-3 text-base leading-7 text-slate-500">
-                    구조화 단계의 검토 중/확정 그룹과 회의 흐름을 바탕으로 문서 초안을 작성하는 중입니다.
-                  </p>
-                </div>
-              </div>
-            ) : null}
+            {solutionStagePending ? <SolutionStagePendingOverlay /> : null}
 
-            {canvasStatusMessage ? (
-              <div className="pointer-events-none absolute inset-x-0 bottom-[clamp(84px,12vh,112px)] z-10 flex justify-center px-4">
-                <div className="max-w-[min(640px,calc(100%-32px))] rounded-full border border-black/10 bg-white/95 px-4 py-2 text-center text-xs leading-5 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] backdrop-blur-sm">
-                  {canvasStatusMessage}
-                </div>
-              </div>
-            ) : null}
+            {canvasStatusMessage ? <CanvasStatusToast message={canvasStatusMessage} /> : null}
 
             {stage === "problem-definition" ? (
-              <div className="pointer-events-none absolute inset-x-0 bottom-[clamp(16px,3vh,32px)] z-10 flex justify-center px-3">
-                <div className="pointer-events-auto flex min-h-[clamp(48px,6.4vh,56px)] w-auto max-w-[min(860px,calc(100vw-24px))] flex-wrap items-center justify-center gap-2 rounded-[16px] border border-black/10 bg-white px-[clamp(10px,1.2vw,12px)] py-2 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)]">
-                  {problemCanvasToolbarActions.map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => handleProblemToolbarAction(item)}
-                      disabled={
-                        !canUseCanvasToolbar ||
-                        problemDefinitionStagePending ||
-                        ((item === "debug-regenerate" || item === "debug-refresh-chunks") && busy) ||
-                        (item === "structure-start" && problemGroups.length === 0) ||
-                        (item === "structure-ai-group" &&
-                          (problemStructurePending || (problemStructureNodes.length === 0 && problemGroups.length === 0))) ||
-                        ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure") ||
-                        (item === "problem-link" && !selectedProblemGroup && !pendingProblemGroupLinkId)
-                      }
-                      className={`flex h-[clamp(34px,4vh,38px)] min-w-[clamp(110px,10vw,150px)] shrink-0 items-center justify-center rounded-[12px] px-[clamp(10px,1vw,14px)] text-[clamp(12px,0.92vw,14px)] font-medium transition-all duration-150 ease-out ${
-                        isProblemToolbarActionActive(item)
-                          ? "bg-[#a13ab8]/10 text-[#a13ab8]"
-                          : "text-[#4d4d4d] hover:bg-black/5"
-                      } disabled:cursor-not-allowed disabled:opacity-45`}
-                    >
-                      <span>{problemToolbarActionLabel(item)}</span>
-                    </button>
-                  ))}
-                  {armedCanvasTool || pendingProblemGroupLinkId ? (
-                    <span className="hidden shrink-0 rounded-full bg-[#eff0f6] px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] sm:inline-flex">
-                      클릭 대기
-                    </span>
-                  ) : null}
-                </div>
-              </div>
+              <ProblemCanvasToolbar
+                actions={problemCanvasToolbarActions}
+                showClickWaiting={Boolean(armedCanvasTool || pendingProblemGroupLinkId)}
+                getActionLabel={problemToolbarActionLabel}
+                isActionActive={isProblemToolbarActionActive}
+                isActionDisabled={(item) =>
+                  !canUseCanvasToolbar ||
+                  problemDefinitionStagePending ||
+                  ((item === "debug-regenerate" || item === "debug-refresh-chunks") && busy) ||
+                  (item === "structure-start" && problemGroups.length === 0) ||
+                  (item === "structure-ai-group" &&
+                    (problemStructurePending || (problemStructureNodes.length === 0 && problemGroups.length === 0))) ||
+                  ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure") ||
+                  (item === "problem-link" && !selectedProblemGroup && !pendingProblemGroupLinkId)
+                }
+                onAction={handleProblemToolbarAction}
+              />
             ) : null}
           </section>
 
