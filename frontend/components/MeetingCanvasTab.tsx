@@ -2,12 +2,8 @@
 
 import "@xyflow/react/dist/style.css";
 import {
-  Background,
-  BackgroundVariant,
-  MiniMap,
   MarkerType,
   Position,
-  ReactFlow,
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
@@ -39,26 +35,12 @@ import {
   startCanvasTopicSummaryWorkspace,
   extractCanvasIdeationKeywords,
 } from "@/lib/api";
-import {
-  CanvasPlacementPreviewOverlay,
-  CanvasStageEmptyOverlay,
-  CanvasStatusToast,
-  PlacementFeedbackOverlay,
-  ProblemDefinitionPreparingOverlay,
-  ProblemIdeaDragPreview,
-  SelectedEdgePopover,
-  SolutionStagePendingOverlay,
-} from "@/components/canvas/CanvasStatusOverlays";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
+import { CanvasDetailPanelContent } from "@/components/canvas/CanvasDetailPanelContent";
 import { CanvasHeader } from "@/components/canvas/CanvasHeader";
 import { CanvasQuickAskPanel } from "@/components/canvas/CanvasQuickAskPanel";
 import { CanvasRightDrawer } from "@/components/canvas/CanvasRightDrawer";
-import {
-  ProblemCanvasToolbar,
-  ProblemStructureFloatingToolbar,
-  ProblemStructureSetupModal,
-} from "@/components/canvas/ProblemStructureControls";
-import { SolutionFinalDocumentPanel, SolutionSummarySourceList } from "@/components/canvas/SolutionPanels";
+import { CanvasSurface } from "@/components/canvas/CanvasSurface";
 import {
   useCanvasDragRefs,
   useCanvasFlowRefs,
@@ -142,16 +124,6 @@ const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const NODE_PREVIEW_SYNC_THROTTLE_MS = 64;
 const NODE_PREVIEW_ANIMATION_LERP = 0.38;
 const NODE_PREVIEW_SETTLE_DISTANCE = 0.75;
-const EMPTY_EDGES: Edge[] = [];
-const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
-const CANVAS_CONNECTION_LINE_STYLE = { stroke: "#0f172a", strokeOpacity: 0.9, strokeWidth: 2 } as const;
-const DEFAULT_CANVAS_EDGE_OPTIONS = {
-  type: "smoothstep",
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#475569" },
-  interactionWidth: 28,
-  zIndex: 10,
-  style: { stroke: "#475569", strokeOpacity: 0.95, strokeWidth: 2 },
-} as const;
 const PROBLEM_STRUCTURE_NODE_DRAG_MIME = "application/x-imms-problem-structure-node";
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
@@ -14544,8 +14516,6 @@ export default function MeetingCanvasTab({
       right: [] as Edge[],
     };
   }, [collapsedProblemGroupIds, problemDefinitionPhase, problemGroups, stage]);
-  const canvasFloatingStatusInactiveClassName =
-    "border-black/10 bg-[#eff0f6] text-[#4d4d4d] hover:bg-[#e3e5ee]";
   const ideationDragGhostItem = useMemo(
     () =>
       ideationDragGhost
@@ -14945,882 +14915,6 @@ export default function MeetingCanvasTab({
     armCanvasTool(action);
   };
 
-  const renderCanvasFloatingStatusControls = () => {
-    const buttonClassName = (active: boolean, activeTone: string) =>
-      `rounded-[8px] border px-3 py-1.5 text-xs font-semibold leading-none transition ${
-        active ? activeTone : canvasFloatingStatusInactiveClassName
-      }`;
-    const positionClassName = stage === "solution" ? "left-1/2 xl:left-[68%]" : "left-1/2 xl:left-[69%]";
-
-    if (stage === "ideation") return null;
-
-    if (stage === "problem-definition" && selectedProblemGroup) {
-      return (
-        <div className={`pointer-events-none absolute top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 ${positionClassName}`}>
-          <div className="pointer-events-auto flex items-center justify-center gap-1 rounded-[12px] border border-black/10 bg-white/95 p-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)] backdrop-blur">
-            {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => {
-              const active = selectedProblemGroup.status === status;
-              return (
-                <button
-                  key={`canvas-floating-problem-status-${status}`}
-                  type="button"
-                  onClick={() => handleSetProblemGroupStatus(status)}
-                  className={buttonClassName(active, problemGroupStatusTone(status))}
-                >
-                  {problemGroupStatusLabel(status)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
-
-    if (stage === "solution" && selectedSolutionTopic) {
-      return (
-        <div className={`pointer-events-none absolute top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 ${positionClassName}`}>
-          <div className="pointer-events-auto flex items-center justify-center gap-1 rounded-[12px] border border-black/10 bg-white/95 p-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)] backdrop-blur">
-            {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => {
-              const active = selectedSolutionTopic.status === status;
-              return (
-                <button
-                  key={`canvas-floating-solution-status-${status}`}
-                  type="button"
-                  onClick={() => handleSetSolutionTopicStatus(status)}
-                  className={buttonClassName(active, problemGroupStatusTone(status))}
-                >
-                  {problemGroupStatusLabel(status)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
-
-    return null;
-  };
-
-  const renderDetailHeaderSection = () => {
-    if (!leftPanelDetail) return null;
-
-    return (
-      <section className="border-b border-slate-200/80 pb-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Detail</p>
-            {isEditingSelectedAgenda || isEditingSelectedCanvasItem || isEditingSelectedProblemGroup || isEditingSelectedSolutionTopic ? (
-              <input
-                value={
-                  isEditingSelectedAgenda
-                    ? agendaDraftTitle
-                    : isEditingSelectedCanvasItem
-                    ? canvasItemDraftTitle
-                    : isEditingSelectedProblemGroup
-                    ? problemGroupDraftTopic
-                    : solutionTopicDraftTitle
-                }
-                onChange={(event) => {
-                  if (isEditingSelectedAgenda) {
-                    setAgendaDraftTitle(event.target.value);
-                    return;
-                  }
-                  if (isEditingSelectedCanvasItem) {
-                    setCanvasItemDraftTitle(event.target.value);
-                    return;
-                  }
-                  if (isEditingSelectedProblemGroup) {
-                    setProblemGroupDraftTopic(event.target.value);
-                    return;
-                  }
-                  setSolutionTopicDraftTitle(event.target.value);
-                }}
-                className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-lg font-semibold text-slate-900"
-              />
-            ) : (
-              <h4 className="mt-3 text-xl font-semibold text-slate-900">{leftPanelDetail.title}</h4>
-            )}
-            <p className="mt-2 text-base text-slate-500">{leftPanelDetail.subtitle}</p>
-          </div>
-          {stage === "ideation" && selectedCanvasItem ? (
-            <div className="flex shrink-0 gap-2">
-              {isEditingSelectedCanvasItem ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleCancelCanvasItemEdit}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveCanvasItemEdit}
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    저장
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleStartCanvasItemEdit}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    수정
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteCanvasItem}
-                    className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50"
-                  >
-                    삭제
-                  </button>
-                </>
-              )}
-            </div>
-          ) : stage === "ideation" && selectedAgenda ? (
-            <div className="flex shrink-0 gap-2">
-              {isEditingSelectedAgenda ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleCancelAgendaEdit}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveAgendaEdit}
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    저장
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleStartAgendaEdit}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  수정
-                </button>
-              )}
-            </div>
-          ) : stage === "problem-definition" && selectedProblemGroup ? (
-            <div className="flex shrink-0 gap-2">
-              {isEditingSelectedProblemGroup ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleCancelProblemGroupEdit}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveProblemGroupEdit}
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    저장
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleStartProblemGroupEdit}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  수정
-                </button>
-              )}
-            </div>
-          ) : stage === "solution" && selectedSolutionTopic ? (
-            <div className="flex shrink-0 gap-2">
-              {isEditingSelectedSolutionTopic ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleCancelSolutionTopicEdit}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveSolutionTopicEdit}
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    저장
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleStartSolutionTopicEdit}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  수정
-                </button>
-              )}
-            </div>
-          ) : null}
-        </div>
-        {leftPanelDetail.badges.length > 0 ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {leftPanelDetail.badges.map((badge) => (
-              <span key={`${leftPanelDetail.title}-${badge}`} className="rounded-full bg-white px-3 py-1 text-sm text-slate-600">
-                {badge}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {stage === "problem-definition" && selectedProblemGroup ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => handleSetProblemGroupStatus(status)}
-                className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                  selectedProblemGroup.status === status
-                    ? "bg-slate-900 text-white"
-                    : "bg-white text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                {problemGroupStatusLabel(status)}
-              </button>
-            ))}
-          </div>
-        ) : stage === "solution" && selectedSolutionTopic ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => handleSetSolutionTopicStatus(status)}
-                className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
-                  selectedSolutionTopic.status === status
-                    ? "bg-slate-900 text-white"
-                    : "bg-white text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                {problemGroupStatusLabel(status)}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {selectedRemoteEditPresence ? (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
-            다른 참가자가 이 항목을 수정 중입니다. 저장 전에 내용이 바뀔 수 있으니 확인 후 저장해 주세요.
-          </div>
-        ) : null}
-      </section>
-    );
-  };
-
-  const renderDetailKeywordSection = () => {
-    if (!leftPanelDetail) return null;
-
-    return (
-      <section className="border-b border-slate-200/80 py-6">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="text-lg font-semibold text-slate-900">키워드</h4>
-          {stage === "ideation" && selectedCanvasItem ? (
-            <button
-              type="button"
-              onClick={() => handleExtractCanvasItemKeywords(selectedCanvasItem.id)}
-              disabled={isEditingSelectedCanvasItem}
-              title={isEditingSelectedCanvasItem ? "편집을 저장한 뒤 키워드를 추출할 수 있습니다." : "제목과 내용에서 키워드를 추출합니다."}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              키워드 추출
-            </button>
-          ) : null}
-        </div>
-        {isEditingSelectedAgenda ? (
-          <>
-            <input
-              value={agendaDraftKeywords}
-              onChange={(event) => setAgendaDraftKeywords(event.target.value)}
-              placeholder="쉼표로 구분해 키워드를 입력합니다."
-              className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base text-slate-700"
-            />
-            <p className="mt-3 text-sm leading-6 text-slate-500">예: 고객 경험, 협업 흐름, 실행 우선순위</p>
-          </>
-        ) : leftPanelDetail.keywords.length > 0 ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {leftPanelDetail.keywords.map((keyword) => (
-              <span key={`${leftPanelDetail.title}-${keyword}`} className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
-                #{keyword}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="mt-4 text-base leading-7 text-slate-500">아직 정리된 키워드가 없습니다.</p>
-        )}
-      </section>
-    );
-  };
-
-  const renderProblemInsightSection = () => {
-    if (stage !== "problem-definition" || !selectedProblemGroup) return null;
-
-    return (
-      <section className="border-b border-slate-200/80 py-6">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="text-lg font-semibold text-slate-900">Insight</h4>
-          {selectedProblemGroup.insight_user_edited ? (
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              수동 수정됨
-            </span>
-          ) : null}
-        </div>
-        {isEditingSelectedProblemGroup ? (
-          <>
-            <textarea
-              value={problemGroupDraftInsight}
-              onChange={(event) => setProblemGroupDraftInsight(event.target.value)}
-              className="mt-4 min-h-[110px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-              placeholder="이 그룹의 인사이트를 직접 정리할 수 있습니다."
-            />
-            <p className="mt-3 text-sm leading-6 text-slate-500">
-              저장하면 이 Insight는 이후 AI 재생성으로 덮어쓰지 않습니다.
-            </p>
-          </>
-        ) : (
-          <p className="mt-4 text-base leading-7 text-slate-500">
-            Insight는 노드 내부에서 확인하고, 수정 모드에서 직접 편집할 수 있습니다.
-          </p>
-        )}
-      </section>
-    );
-  };
-
-  const renderDetailSummarySection = () => {
-    if (!leftPanelDetail || stage === "solution") return null;
-
-    return (
-      <section className="border-b border-slate-200/80 py-6">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="text-lg font-semibold text-slate-900">
-            {stage === "ideation"
-              ? selectedCanvasItem
-                ? "내용"
-                : "요약"
-              : "결론"}
-          </h4>
-          {stage === "problem-definition" && selectedProblemGroup?.conclusion_user_edited ? (
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              수동 수정됨
-            </span>
-          ) : null}
-        </div>
-        {stage === "ideation" && isEditingSelectedAgenda ? (
-          <>
-            <textarea
-              value={agendaDraftSummary}
-              onChange={(event) => setAgendaDraftSummary(event.target.value)}
-              className="mt-4 min-h-[180px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-              placeholder="한 줄에 하나씩 요약 또는 맥락을 입력합니다."
-            />
-            <p className="mt-3 text-sm leading-6 text-slate-500">
-              줄 단위로 저장되며, ideation 안건 노드와 상세 맥락에 함께 반영됩니다.
-            </p>
-          </>
-        ) : stage === "ideation" && isEditingSelectedCanvasItem ? (
-          <>
-            <textarea
-              value={canvasItemDraftBody}
-              onChange={(event) => setCanvasItemDraftBody(event.target.value)}
-              className="mt-4 min-h-[180px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-              placeholder="공용 canvas 아이템 내용을 입력합니다."
-            />
-            <p className="mt-3 text-sm leading-6 text-slate-500">
-              저장하면 선택한 공용 canvas 노드 본문이 바로 갱신됩니다.
-            </p>
-          </>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {leftPanelDetail.summaryItems.map((item, index) => (
-              <div key={`${leftPanelDetail.title}-summary-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
-                <p className="text-sm font-semibold text-slate-500">{item.label}</p>
-                {stage === "problem-definition" && index === 0 && isEditingSelectedProblemGroup ? (
-                  <textarea
-                    value={problemGroupDraftConclusion}
-                    onChange={(event) => setProblemGroupDraftConclusion(event.target.value)}
-                    className="mt-2 min-h-[120px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-                  />
-                ) : (
-                  <p className="mt-1 text-base leading-7 text-slate-700">{item.value}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {stage === "problem-definition" && isEditingSelectedProblemGroup ? (
-          <p className="mt-3 text-sm leading-6 text-slate-500">
-            저장하면 이 결론은 이후 AI 재생성으로 덮어쓰지 않습니다.
-          </p>
-        ) : null}
-      </section>
-    );
-  };
-
-  const renderGeneralOrganizeSection = () => {
-    if (!leftPanelDetail || stage === "solution" || leftPanelDetail.organizeItems.length === 0) return null;
-
-    return (
-      <section className="pt-6">
-        <h4 className="text-lg font-semibold text-slate-900">{leftPanelDetail.organizeTitle || "안건 정리"}</h4>
-        <div className="mt-4 space-y-3">
-          {leftPanelDetail.organizeItems.map((item, index) => (
-            <div key={`${leftPanelDetail.title}-organize-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-sm font-semibold text-slate-500">{item.label}</p>
-              <p className="mt-1 text-base leading-7 text-slate-700">{stripLeadingTimestamp(item.value)}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-    );
-  };
-
-  const renderSolutionDetailSections = () => {
-    if (stage !== "solution" || !selectedSolutionTopic) return null;
-
-    return (
-      <>
-        <section className="border-b border-slate-200/80 py-6">
-          <h4 className="text-lg font-semibold text-slate-900">해결 방향</h4>
-          {isEditingSelectedSolutionTopic ? (
-            <textarea
-              value={solutionTopicDraftConclusion}
-              onChange={(event) => setSolutionTopicDraftConclusion(event.target.value)}
-              className="mt-4 min-h-[120px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-            />
-          ) : (
-            <div className="mt-4 rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-base leading-7 text-slate-700">
-                {selectedSolutionTopic.conclusion || "아직 정리된 해결 방향이 없습니다."}
-              </p>
-            </div>
-          )}
-        </section>
-
-        <section className="border-b border-slate-200/80 py-6">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-lg font-semibold text-slate-900">AI 초안</h4>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-              {selectedSolutionTopic.ai_suggestions.length}개
-            </span>
-          </div>
-          {isEditingSelectedSolutionTopic ? (
-            <>
-              <textarea
-                value={solutionTopicDraftIdeas}
-                onChange={(event) => setSolutionTopicDraftIdeas(event.target.value)}
-                className="mt-4 min-h-[180px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-                placeholder="한 줄에 하나씩 아이디어를 입력합니다."
-              />
-              <p className="mt-3 text-sm leading-6 text-slate-500">각 줄이 하나의 실행 아이디어로 저장됩니다.</p>
-            </>
-          ) : (
-            <div className="mt-4 space-y-3">
-              {selectedSolutionTopic.ai_suggestions.length > 0 ? (
-                selectedSolutionTopic.ai_suggestions.map((idea, index) => (
-                  <div key={idea.id} className="rounded-xl bg-[#fafafa] px-4 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-500">AI 제안 {index + 1}</p>
-                        <p className={`mt-1 text-base leading-7 ${idea.status === "selected" ? "text-fuchsia-700" : "text-slate-700"}`}>
-                          {idea.text}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleAdoptAiSuggestion(selectedSolutionTopic.group_id, idea.id)}
-                        disabled={idea.status === "selected"}
-                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        {idea.status === "selected" ? "채택됨" : "채택"}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-base leading-7 text-slate-500">아직 제안된 AI 초안이 없습니다.</p>
-              )}
-            </div>
-          )}
-        </section>
-
-        <section className="border-b border-slate-200/80 py-6">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-lg font-semibold text-slate-900">채택 메모</h4>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-              {selectedSolutionTopic.notes.length}개
-            </span>
-          </div>
-          <div className="mt-4 space-y-3">
-            {selectedSolutionTopic.notes.length > 0 ? (
-              selectedSolutionTopic.notes.map((note, index) => {
-                const noteEditKey = makeSolutionNoteEditKey(selectedSolutionTopic.group_id, note.id);
-                const noteEditing = editingSolutionNoteKey === noteEditKey;
-                const remoteNoteEditPresence =
-                  remoteEditPresenceByKey[makeEditPresenceKey("solution_note", selectedSolutionTopic.group_id, note.id)] || null;
-                return (
-                  <div key={note.id} className="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-amber-700">
-                            {note.source === "ai" ? `채택 메모 ${index + 1}` : `사용자 메모 ${index + 1}`}
-                          </p>
-                          {remoteNoteEditPresence ? renderEditPresenceBadge() : null}
-                        </div>
-                        {noteEditing ? (
-                          <textarea
-                            value={solutionNoteTextDraft}
-                            onChange={(event) => setSolutionNoteTextDraft(event.target.value)}
-                            placeholder="해결책 카드 내용을 입력합니다."
-                            className="mt-2 min-h-[92px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-                          />
-                        ) : (
-                          <p className="mt-2 text-base leading-7 text-slate-700">{note.text}</p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleFinalSolutionNote(selectedSolutionTopic.group_id, note.id)}
-                          className={`rounded-xl px-3 py-2 text-sm font-medium ${
-                            note.is_final_candidate
-                              ? "bg-slate-900 text-white"
-                              : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {note.is_final_candidate ? "최종 결론" : "결론 후보"}
-                        </button>
-                        {noteEditing ? (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleCancelSolutionNoteEdit}
-                              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                            >
-                              취소
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleSaveSolutionNoteEdit()}
-                              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                              저장
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleStartSolutionNoteEdit(
-                                selectedSolutionTopic.group_id,
-                                makeSolutionNote(note, note.id),
-                              )
-                            }
-                            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                          >
-                            편집
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {note.is_final_candidate && noteEditing ? (
-                      <textarea
-                        value={solutionNoteFinalCommentDraft}
-                        onChange={(event) => setSolutionNoteFinalCommentDraft(event.target.value)}
-                        placeholder="추가 설명을 입력할 수 있습니다."
-                        className="mt-3 min-h-[84px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm leading-6 text-slate-700"
-                      />
-                    ) : note.is_final_candidate ? (
-                      <p className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm leading-6 text-slate-500">
-                        {note.final_comment || "최종 결론 설명은 편집을 눌러 추가할 수 있습니다."}
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-base leading-7 text-slate-500">아직 채택된 메모가 없습니다. AI 초안이나 사용자 메모를 추가해 보세요.</p>
-            )}
-          </div>
-
-          <div className="mt-5 rounded-xl bg-[#fafafa] px-4 py-4">
-            <p className="text-sm font-semibold text-slate-600">사용자 메모 추가</p>
-            <textarea
-              value={solutionNoteDraft}
-              onChange={(event) => setSolutionNoteDraft(event.target.value)}
-              placeholder="직접 해결책 메모를 추가합니다."
-              className="mt-3 min-h-[110px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
-            />
-            <button
-              type="button"
-              onClick={handleAddSolutionUserNote}
-              className="mt-3 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-            >
-              메모 추가
-            </button>
-          </div>
-        </section>
-
-        <section className="border-b border-slate-200/80 py-6">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-lg font-semibold text-slate-900">최종 결론 모음</h4>
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                회의 종료 시 이 내용이 결과 요약으로 저장됩니다.
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void handleCopyFinalSolutionMarkdown()}
-                disabled={finalSolutionSummary.final_count === 0}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                마크다운 복사
-              </button>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                {finalSolutionSummary.final_count}개
-              </span>
-            </div>
-          </div>
-          <div className="mt-4 space-y-3">
-            {allSolutionFinalNotes.length > 0 ? (
-              allSolutionFinalNotes.map((note) => (
-                <button
-                  key={note.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedSolutionTopicId(note.topicId);
-                    setSelectedNodeId(`solution-${note.topicId}`);
-                  }}
-                  className={`w-full rounded-xl border px-4 py-3 text-left ${
-                    note.topicId === selectedSolutionTopic.group_id
-                      ? "border-slate-300 bg-white"
-                      : "border-slate-200 bg-[#fafafa]"
-                  }`}
-                >
-                  <p className="text-sm font-semibold text-slate-700">{note.topicTitle}</p>
-                  <p className="mt-1 text-base leading-7 text-slate-700">{note.text}</p>
-                  {note.final_comment ? (
-                    <p className="mt-2 text-sm leading-6 text-slate-500">{note.final_comment}</p>
-                  ) : null}
-                </button>
-              ))
-            ) : (
-              <p className="text-base leading-7 text-slate-500">최종 결론으로 표시된 메모가 아직 없습니다.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="pt-6">
-          <h4 className="text-lg font-semibold text-slate-900">연결 문제정의</h4>
-          <div className="mt-4 space-y-3">
-            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-sm font-semibold text-slate-500">문제 정의 주제</p>
-              <p className="mt-1 text-base leading-7 text-slate-700">
-                {selectedSolutionTopic.problem_topic || "연결된 문제정의가 아직 없습니다."}
-              </p>
-            </div>
-            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-sm font-semibold text-slate-500">소결론</p>
-              <p className="mt-1 text-base leading-7 text-slate-700">
-                {selectedSolutionTopic.problem_insight || "연결된 소결론이 아직 없습니다."}
-              </p>
-            </div>
-            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-sm font-semibold text-slate-500">문제 정의 결론</p>
-              <p className="mt-1 text-base leading-7 text-slate-700">
-                {selectedSolutionTopic.problem_conclusion || "연결된 결론이 아직 없습니다."}
-              </p>
-            </div>
-            <div className="rounded-xl bg-[#fafafa] px-4 py-3">
-              <p className="text-sm font-semibold text-slate-500">연결 안건</p>
-              <p className="mt-1 text-base leading-7 text-slate-700">
-                {selectedSolutionTopic.agenda_titles.length > 0
-                  ? selectedSolutionTopic.agenda_titles.join(", ")
-                  : "연결된 안건이 아직 없습니다."}
-              </p>
-            </div>
-          </div>
-        </section>
-      </>
-    );
-  };
-
-  const renderIdeationRelatedSections = () => {
-    if (!leftPanelDetail || stage !== "ideation" || !selectedCanvasItem) return null;
-
-    return (
-      <>
-        {leftPanelDetail.mergedItems?.length ? (
-          <section className="pt-6">
-            <div className="flex items-center justify-between gap-3">
-              <h4 className="text-lg font-semibold text-slate-900">포함된 하위 아이디어</h4>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                {leftPanelDetail.mergedItems.length}개 묶음
-              </span>
-            </div>
-            <div className="mt-4 space-y-3">
-              {leftPanelDetail.mergedItems.map((item) => (
-                <div key={`${leftPanelDetail.title}-merged-${item.id}`} className="rounded-xl border border-slate-200 bg-[#fafafa] px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-700">{item.label}</p>
-                      <p className="mt-1 whitespace-pre-wrap text-base leading-7 text-slate-700">
-                        {stripLeadingTimestamp(item.value)}
-                      </p>
-                    </div>
-                    {item.sourceCount > 1 ? (
-                      <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
-                        {item.sourceCount}개
-                      </span>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => focusCanvasItemInIdeation(item.id, "하위 아이디어 위치로 이동했습니다.")}
-                      className="shrink-0 rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] hover:bg-[#eff0f6]"
-                    >
-                      원문 이동
-                    </button>
-                  </div>
-                  {item.keywords.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {item.keywords.slice(0, 4).map((keyword) => (
-                        <span key={`${item.id}-${keyword}`} className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
-                          #{keyword}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {leftPanelDetail.refinedItems?.length ? (
-          <section className="pt-6">
-            <h4 className="text-lg font-semibold text-slate-900">정리된 발화</h4>
-            <div className="mt-4 space-y-3">
-              {leftPanelDetail.refinedItems.map((item, index) => (
-                <div key={`${leftPanelDetail.title}-refined-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-500">{item.label}</p>
-                    <button
-                      type="button"
-                      onClick={() => focusCanvasItemInIdeation(item.sourceItemId, "정리된 발화의 원문 노드로 이동했습니다.")}
-                      className="shrink-0 rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] hover:bg-[#eff0f6]"
-                    >
-                      원문 이동
-                    </button>
-                  </div>
-                  <p className="mt-1 whitespace-pre-wrap text-base leading-7 text-slate-700">{stripLeadingTimestamp(item.value)}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        <section className="pt-6">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-lg font-semibold text-slate-900">댓글</h4>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-              {leftPanelDetail.commentItems?.length || 0}개
-            </span>
-          </div>
-          <div className="mt-4 space-y-3">
-            {leftPanelDetail.commentItems?.length ? (
-              leftPanelDetail.commentItems.map((item) => (
-                <div key={`${leftPanelDetail.title}-comment-${item.id}`} className="rounded-xl border border-sky-100 bg-sky-50/60 px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-700">{item.label}</p>
-                      <p className="mt-1 whitespace-pre-wrap text-base leading-7 text-slate-700">
-                        {stripLeadingTimestamp(item.value)}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => focusCanvasItemInIdeation(item.id, "댓글 위치로 이동했습니다.")}
-                      className="shrink-0 rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] hover:bg-[#eff0f6]"
-                    >
-                      원문 이동
-                    </button>
-                  </div>
-                  {item.keywords.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {item.keywords.slice(0, 4).map((keyword) => (
-                        <span key={`${item.id}-comment-keyword-${keyword}`} className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
-                          #{keyword}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <p className="rounded-xl border border-dashed border-slate-200 bg-[#fafafa] px-4 py-4 text-sm leading-6 text-slate-500">
-                아직 이 내용에 연결된 댓글이 없습니다.
-              </p>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  };
-
-  const renderProblemRelatedSections = () => {
-    if (!leftPanelDetail || stage !== "problem-definition") return null;
-
-    return (
-      <>
-        {leftPanelDetail.evidenceItems?.length ? (
-          <section className="pt-6">
-            <h4 className="text-lg font-semibold text-slate-900">근거 요약</h4>
-            <div className="mt-4 space-y-3">
-              {leftPanelDetail.evidenceItems.map((item, index) => (
-                <div key={`${leftPanelDetail.title}-evidence-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
-                  <p className="text-sm font-semibold text-slate-500">{item.label}</p>
-                  <p className="mt-1 text-base leading-7 text-slate-700">{item.value}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        <section className="pt-6">
-          <h4 className="text-lg font-semibold text-slate-900">연결 메모</h4>
-          <div className="mt-4 space-y-3">
-            {leftPanelDetail.noteItems?.length ? (
-              leftPanelDetail.noteItems.map((item, index) => (
-                <div key={`${leftPanelDetail.title}-note-${item.id}-${index}`} className="rounded-xl bg-[#fafafa] px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-700">{item.label}</p>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">{toolLabel((item.kind as ComposerTool) || "note")}</span>
-                  </div>
-                  <p className="mt-2 text-base leading-7 text-slate-600">{item.value || "메모 내용이 없습니다."}</p>
-                </div>
-              ))
-            ) : (
-              <p className="text-base leading-7 text-slate-500">아직 연결된 메모가 없습니다. 오른쪽 개인 메모를 그룹 카드로 드래그하면 여기에 표시됩니다.</p>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  };
-
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
       <section className="flex h-full min-h-0 flex-col bg-[#f9f9f9]">
@@ -15867,267 +14961,107 @@ export default function MeetingCanvasTab({
           className="imms-workspace-grid grid flex-1 min-h-0 grid-cols-1 overflow-y-auto bg-black/10 xl:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:overflow-hidden xl:gap-[clamp(0.25rem,0.45vw,0.5rem)] xl:border-x xl:border-b xl:border-black/10"
           style={isDesktopLayout ? { gridTemplateColumns: workspaceGridColumns } : undefined}
         >
-          <section ref={canvasSurfaceRef} className="relative order-1 flex min-h-[min(72vh,720px)] flex-col overflow-hidden border-b border-black/10 bg-[#f9f9f9] shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:h-full xl:min-h-0 xl:border-b-0">
-            <div
-              className="relative min-h-0 w-full flex-1"
-              onMouseMove={(event) => {
-                if (!armedCanvasTool) {
-                  return;
-                }
-                updateCanvasPlacementPreview(event.clientX, event.clientY);
-              }}
-              onMouseLeave={() => {
-                clearCanvasPlacementPreview();
-              }}
-            >
-              {renderCanvasFloatingStatusControls()}
-              {stage === "ideation" || stage === "problem-definition" ? (
-                <ReactFlow<Node, Edge>
-                  nodes={nodes}
-                  edges={stage === "problem-definition" ? problemSplitEdges.left : EMPTY_EDGES}
-                  onInit={handleFlowInitStable}
-                  onNodeClick={handleCanvasNodeClickStable}
-                  onPaneClick={handleCanvasPaneClickStable}
-                  onNodesChange={handleNodesChangeStable}
-                  onNodeDragStart={handleNodeDragStartStable}
-                  onNodeDrag={handleNodeDragStable}
-                  onNodeDragStop={handleNodeDragStopStable}
-                  nodesConnectable={false}
-                  panOnDrag={!problemIdeaDrag}
-                  autoPanOnNodeDrag={false}
-                  noPanClassName="nopan"
-                  nodesDraggable={stage === "problem-definition"}
-                  minZoom={0.45}
-                  maxZoom={1.6}
-                  proOptions={REACT_FLOW_PRO_OPTIONS}
-                >
-                  {stage === "problem-definition" ? (
-                    <Background
-                      id="problem-definition-grid"
-                      bgColor="#f5f6f8"
-                      color="#d7dce5"
-                      gap={28}
-                      size={1}
-                      variant={BackgroundVariant.Dots}
-                    />
-                  ) : null}
-                  <MiniMap
-                    zoomable
-                    pannable
-                    maskColor="rgba(15, 23, 42, 0.08)"
-                    nodeColor={stage === "problem-definition" ? "#a13ab8" : "#0f766e"}
-                  />
-                </ReactFlow>
-              ) : stage === "solution" ? (
-                <div className="grid h-full min-h-0 grid-cols-1 bg-[#f5f6f8] xl:grid-cols-[minmax(18rem,32%)_minmax(0,1fr)]">
-                  <SolutionSummarySourceList
-                    groups={summaryEligibleStructureGroups}
-                    sectionByGroupId={summaryDocumentSectionByGroupId}
-                    nodeById={problemStructureNodeById}
-                    evidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
-                    remoteEditPresenceByKey={remoteEditPresenceByKey}
-                    onToggleEvidence={handleToggleSummaryEvidence}
-                  />
-                  <SolutionFinalDocumentPanel
-                    paneRef={solutionRightPaneRef}
-                    document={finalSummaryDocument}
-                    editMode={summaryDocumentEditMode}
-                    pending={solutionStagePending}
-                    eligibleGroupCount={summaryEligibleStructureGroups.length}
-                    onSetEditMode={setSummaryDocumentEditMode}
-                    onRegenerate={handleRegenerateSummaryDocument}
-                    onCopy={handleCopyFinalSolutionMarkdown}
-                    onMarkdownChange={handleSummaryDocumentMarkdownChange}
-                    renderPreview={renderSummaryMarkdownPreview}
-                  />
-                </div>
-              ) : (
-                <ReactFlow
-                  nodes={nodes}
-                  edges={renderedEdges}
-                  onInit={handleFlowInitStable}
-                  onNodeClick={handleCanvasNodeClickStable}
-                  onEdgeClick={handleCanvasEdgeClickStable}
-                  onPaneClick={handleCanvasPaneClickStable}
-                  onNodesChange={handleNodesChangeStable}
-                  onNodeDragStart={handleNodeDragStartStable}
-                  onNodeDrag={handleNodeDragStable}
-                  onNodeDragStop={handleNodeDragStopStable}
-                  onEdgesChange={handleEdgesChangeStable}
-                  onConnect={handleConnectStable}
-                  nodesConnectable={false}
-                  elevateEdgesOnSelect
-                  connectionLineStyle={CANVAS_CONNECTION_LINE_STYLE}
-                  minZoom={0.45}
-                  maxZoom={1.6}
-                  defaultEdgeOptions={DEFAULT_CANVAS_EDGE_OPTIONS}
-                  proOptions={REACT_FLOW_PRO_OPTIONS}
-                >
-                  <MiniMap
-                    zoomable
-                    pannable
-                    maskColor="rgba(15, 23, 42, 0.08)"
-                    nodeColor="#0f766e"
-                  />
-                </ReactFlow>
-              )}
-            </div>
-
-            {selectedEdge ? <SelectedEdgePopover edge={selectedEdge} onDelete={handleDeleteSelectedEdge} /> : null}
-
-            {placementFeedback ? <PlacementFeedbackOverlay feedback={placementFeedback} /> : null}
-
-            {canvasPlacementPreview ? <CanvasPlacementPreviewOverlay preview={canvasPlacementPreview} /> : null}
-
-            {problemIdeaDrag && problemIdeaDragPoint ? (
-              <ProblemIdeaDragPreview
-                x={problemIdeaDragPoint.x}
-                y={problemIdeaDragPoint.y}
-                cardKind={problemIdeaDrag.cardKind}
-                title={problemIdeaDrag.title}
-              />
-            ) : null}
-
-            {ideationDragGhost && ideationDragGhostItem ? (
-              <div
-                className="pointer-events-none fixed z-[85] w-[min(17.5rem,72vw)] -translate-x-1/2 -translate-y-[18%] opacity-95"
-                style={{
-                  left: ideationDragGhost.x,
-                  top: ideationDragGhost.y,
-                }}
-              >
-                {makeIdeationDragGhostLabel(
-                  ideationDragGhostItem,
-                  ideationDropPreview?.mode === "detach"
-                    ? "왼쪽에 추가"
-                    : ideationDropPreview?.mode === "topic"
-                    ? "토픽으로 이동"
-                    : "이동 중",
-                )}
-              </div>
-            ) : null}
-
-            {stage === "problem-definition" && problemGroups.length === 0 ? (
-              <CanvasStageEmptyOverlay
-                eyebrow="Problem Definition"
-                message={busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
-                tone="problem"
-              />
-            ) : null}
-
-            {stage === "solution" && !finalSummaryDocument.markdown.trim() && !solutionStagePending ? (
-              <CanvasStageEmptyOverlay
-                eyebrow="Summary Stage"
-                message={
-                  summaryEligibleStructureGroups.length > 0
-                    ? "요약 문서를 준비하는 중입니다."
-                    : "검토 중 또는 확정된 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
-                }
-                tone="summary"
-              />
-            ) : null}
-
-            {problemDefinitionStagePending ? <ProblemDefinitionPreparingOverlay /> : null}
-
-            {stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen ? (
-              <ProblemStructureSetupModal
-                draftMethod={problemStructureDraftMethod}
-                draftMode={problemStructureDraftMode}
-                problemGroupsCount={problemGroups.length}
-                pending={problemStructurePending}
-                onClose={() => setProblemStructureSetupOpen(false)}
-                onDraftMethodChange={setProblemStructureDraftMethod}
-                onDraftModeChange={setProblemStructureDraftMode}
-                onStart={handleStartProblemStructure}
-              />
-            ) : null}
-
-            {stage === "problem-definition" && problemDefinitionPhase === "structure" && !problemDefinitionStagePending ? (
-              <ProblemStructureFloatingToolbar
-                method={problemStructureMethod}
-                mode={problemDefinitionMode}
-                pending={problemStructurePending}
-                onMethodChange={(method) => {
-                  setProblemStructureMethod(method);
-                  setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
-                }}
-                onModeChange={(mode) => {
-                  setProblemDefinitionMode(mode);
-                  if (mode === "ai") {
-                    void runProblemStructureGrouping();
-                    return;
-                  }
-                  setActivityMessage("직접 구성 모드로 표시했습니다.");
-                }}
-              />
-            ) : null}
-
-            {stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale && activeProblemGroupingRationaleGroup ? (
-              <div className="absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Grouping Rationale</p>
-                    <h4 className="mt-1 line-clamp-2 text-[17px] font-semibold leading-6 text-black">
-                      {activeProblemGroupingRationaleGroup.topic || "문제정의 그룹"}
-                    </h4>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setProblemGroupingRationaleOpenGroupId("")}
-                    className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
-                  >
-                    닫기
-                  </button>
-                </div>
-                <p className="mt-3 text-sm leading-6 text-[#333]">
-                  {activeProblemGroupingRationale.rationale}
-                </p>
-                {activeProblemGroupingRationale.basisItems.length > 0 ? (
-                  <div className="mt-4 space-y-2">
-                    {activeProblemGroupingRationale.basisItems.map((item, index) => (
-                      <p key={`${activeProblemGroupingRationale.groupId}-basis-${index}`} className="rounded-[10px] bg-[#f5f6f8] px-3 py-2 text-xs leading-5 text-[#4d4d4d]">
-                        {item}
-                      </p>
-                    ))}
-                  </div>
-                ) : null}
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-medium text-[#777]">
-                  <span className="rounded-full bg-[#f7ecfb] px-2.5 py-1 text-[#a13ab8]">
-                    {activeProblemGroupingRationale.usedLlm ? "AI 추정" : "로컬 추정"}
-                  </span>
-                  {activeProblemGroupingRationale.warning ? (
-                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">
-                      {activeProblemGroupingRationale.warning}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            {solutionStagePending ? <SolutionStagePendingOverlay /> : null}
-
-            {canvasStatusMessage ? <CanvasStatusToast message={canvasStatusMessage} /> : null}
-
-            {stage === "problem-definition" ? (
-              <ProblemCanvasToolbar
-                actions={problemCanvasToolbarActions}
-                showClickWaiting={Boolean(armedCanvasTool || pendingProblemGroupLinkId)}
-                getActionLabel={problemToolbarActionLabel}
-                isActionActive={isProblemToolbarActionActive}
-                isActionDisabled={(item) =>
-                  !canUseCanvasToolbar ||
-                  problemDefinitionStagePending ||
-                  ((item === "debug-regenerate" || item === "debug-refresh-chunks") && busy) ||
-                  (item === "structure-start" && problemGroups.length === 0) ||
-                  (item === "structure-ai-group" &&
-                    (problemStructurePending || (problemStructureNodes.length === 0 && problemGroups.length === 0))) ||
-                  ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure") ||
-                  (item === "problem-link" && !selectedProblemGroup && !pendingProblemGroupLinkId)
-                }
-                onAction={handleProblemToolbarAction}
-              />
-            ) : null}
-          </section>
+          <CanvasSurface
+            canvasSurfaceRef={canvasSurfaceRef}
+            stage={stage}
+            nodes={nodes}
+            renderedEdges={renderedEdges}
+            problemSplitLeftEdges={problemSplitEdges.left}
+            selectedEdge={selectedEdge}
+            busy={busy}
+            problemGroupsCount={problemGroups.length}
+            problemStructureNodesCount={problemStructureNodes.length}
+            finalSummaryDocument={finalSummaryDocument}
+            summaryEligibleStructureGroups={summaryEligibleStructureGroups}
+            summaryDocumentSectionByGroupId={summaryDocumentSectionByGroupId}
+            problemStructureNodeById={problemStructureNodeById}
+            summaryEvidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
+            remoteEditPresenceByKey={remoteEditPresenceByKey}
+            summaryDocumentEditMode={summaryDocumentEditMode}
+            solutionStagePending={solutionStagePending}
+            solutionRightPaneRef={solutionRightPaneRef}
+            problemDefinitionStagePending={problemDefinitionStagePending}
+            problemStructureSetupOpen={problemStructureSetupOpen}
+            problemStructureDraftMethod={problemStructureDraftMethod}
+            problemStructureDraftMode={problemStructureDraftMode}
+            problemStructurePending={problemStructurePending}
+            problemDefinitionPhase={problemDefinitionPhase}
+            problemStructureMethod={problemStructureMethod}
+            problemDefinitionMode={problemDefinitionMode}
+            activeProblemGroupingRationale={activeProblemGroupingRationale}
+            activeProblemGroupingRationaleTitle={activeProblemGroupingRationaleGroup?.topic || ""}
+            canvasStatusMessage={canvasStatusMessage}
+            problemCanvasToolbarActions={problemCanvasToolbarActions}
+            canUseCanvasToolbar={canUseCanvasToolbar}
+            showClickWaiting={Boolean(armedCanvasTool || pendingProblemGroupLinkId)}
+            hasSelectedProblemGroup={Boolean(selectedProblemGroup)}
+            pendingProblemGroupLinkId={pendingProblemGroupLinkId}
+            selectedProblemStatus={selectedProblemGroup?.status || ""}
+            selectedSolutionStatus={selectedSolutionTopic?.status || ""}
+            placementFeedback={placementFeedback}
+            canvasPlacementPreview={canvasPlacementPreview}
+            problemIdeaDrag={problemIdeaDrag}
+            problemIdeaDragPoint={problemIdeaDragPoint}
+            ideationDragGhost={ideationDragGhost}
+            ideationDragGhostContent={
+              ideationDragGhost && ideationDragGhostItem
+                ? makeIdeationDragGhostLabel(
+                    ideationDragGhostItem,
+                    ideationDropPreview?.mode === "detach"
+                      ? "왼쪽에 추가"
+                      : ideationDropPreview?.mode === "topic"
+                        ? "토픽으로 이동"
+                        : "이동 중",
+                  )
+                : null
+            }
+            onCanvasMouseMove={(event) => {
+              if (!armedCanvasTool) {
+                return;
+              }
+              updateCanvasPlacementPreview(event.clientX, event.clientY);
+            }}
+            onCanvasMouseLeave={clearCanvasPlacementPreview}
+            onFlowInit={handleFlowInitStable}
+            onNodeClick={handleCanvasNodeClickStable}
+            onEdgeClick={handleCanvasEdgeClickStable}
+            onPaneClick={handleCanvasPaneClickStable}
+            onNodesChange={handleNodesChangeStable}
+            onNodeDragStart={handleNodeDragStartStable}
+            onNodeDrag={handleNodeDragStable}
+            onNodeDragStop={handleNodeDragStopStable}
+            onEdgesChange={handleEdgesChangeStable}
+            onConnect={handleConnectStable}
+            onDeleteSelectedEdge={handleDeleteSelectedEdge}
+            onToggleSummaryEvidence={handleToggleSummaryEvidence}
+            onSetSummaryDocumentEditMode={setSummaryDocumentEditMode}
+            onRegenerateSummaryDocument={handleRegenerateSummaryDocument}
+            onCopyFinalSolutionMarkdown={handleCopyFinalSolutionMarkdown}
+            onSummaryDocumentMarkdownChange={handleSummaryDocumentMarkdownChange}
+            renderSummaryMarkdownPreview={renderSummaryMarkdownPreview}
+            onCloseProblemStructureSetup={() => setProblemStructureSetupOpen(false)}
+            onProblemStructureDraftMethodChange={setProblemStructureDraftMethod}
+            onProblemStructureDraftModeChange={setProblemStructureDraftMode}
+            onStartProblemStructure={handleStartProblemStructure}
+            onProblemStructureMethodChange={(method) => {
+              setProblemStructureMethod(method);
+              setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
+            }}
+            onProblemDefinitionModeChange={(mode) => {
+              setProblemDefinitionMode(mode);
+              if (mode === "ai") {
+                void runProblemStructureGrouping();
+                return;
+              }
+              setActivityMessage("직접 구성 모드로 표시했습니다.");
+            }}
+            onCloseProblemGroupingRationale={() => setProblemGroupingRationaleOpenGroupId("")}
+            getProblemToolbarActionLabel={problemToolbarActionLabel}
+            isProblemToolbarActionActive={isProblemToolbarActionActive}
+            onProblemToolbarAction={handleProblemToolbarAction}
+            onSetProblemGroupStatus={handleSetProblemGroupStatus}
+            onSetSolutionTopicStatus={handleSetSolutionTopicStatus}
+          />
 
           <CanvasRightDrawer
             collapsed={rightDrawerCollapsed}
@@ -16139,16 +15073,85 @@ export default function MeetingCanvasTab({
             isDesktopLayout={isDesktopLayout}
             detailContent={
               leftPanelDetail ? (
-                <>
-                  {renderDetailHeaderSection()}
-                  {renderDetailKeywordSection()}
-                  {renderProblemInsightSection()}
-                  {renderDetailSummarySection()}
-                  {renderSolutionDetailSections()}
-                  {renderGeneralOrganizeSection()}
-                  {renderIdeationRelatedSections()}
-                  {renderProblemRelatedSections()}
-                </>
+                <CanvasDetailPanelContent
+                  detail={leftPanelDetail}
+                  stage={stage}
+                  hasSelectedCanvasItem={Boolean(selectedCanvasItem)}
+                  selectedCanvasItemId={selectedCanvasItem?.id || ""}
+                  hasSelectedAgenda={Boolean(selectedAgenda)}
+                  hasSelectedProblemGroup={Boolean(selectedProblemGroup)}
+                  selectedProblemStatus={selectedProblemGroup?.status || ""}
+                  selectedProblemInsightUserEdited={Boolean(selectedProblemGroup?.insight_user_edited)}
+                  selectedProblemConclusionUserEdited={Boolean(selectedProblemGroup?.conclusion_user_edited)}
+                  selectedSolutionTopic={selectedSolutionTopic}
+                  selectedRemoteEditPresence={Boolean(selectedRemoteEditPresence)}
+                  isEditingSelectedAgenda={isEditingSelectedAgenda}
+                  isEditingSelectedCanvasItem={isEditingSelectedCanvasItem}
+                  isEditingSelectedProblemGroup={isEditingSelectedProblemGroup}
+                  isEditingSelectedSolutionTopic={isEditingSelectedSolutionTopic}
+                  agendaDraftTitle={agendaDraftTitle}
+                  agendaDraftKeywords={agendaDraftKeywords}
+                  agendaDraftSummary={agendaDraftSummary}
+                  canvasItemDraftTitle={canvasItemDraftTitle}
+                  canvasItemDraftBody={canvasItemDraftBody}
+                  problemGroupDraftTopic={problemGroupDraftTopic}
+                  problemGroupDraftInsight={problemGroupDraftInsight}
+                  problemGroupDraftConclusion={problemGroupDraftConclusion}
+                  solutionTopicDraftTitle={solutionTopicDraftTitle}
+                  solutionTopicDraftConclusion={solutionTopicDraftConclusion}
+                  solutionTopicDraftIdeas={solutionTopicDraftIdeas}
+                  solutionNoteDraft={solutionNoteDraft}
+                  editingSolutionNoteKey={editingSolutionNoteKey}
+                  solutionNoteTextDraft={solutionNoteTextDraft}
+                  solutionNoteFinalCommentDraft={solutionNoteFinalCommentDraft}
+                  finalSolutionCount={finalSolutionSummary.final_count}
+                  allSolutionFinalNotes={allSolutionFinalNotes}
+                  remoteEditPresenceByKey={remoteEditPresenceByKey}
+                  onAgendaDraftTitleChange={setAgendaDraftTitle}
+                  onAgendaDraftKeywordsChange={setAgendaDraftKeywords}
+                  onAgendaDraftSummaryChange={setAgendaDraftSummary}
+                  onCanvasItemDraftTitleChange={setCanvasItemDraftTitle}
+                  onCanvasItemDraftBodyChange={setCanvasItemDraftBody}
+                  onProblemGroupDraftTopicChange={setProblemGroupDraftTopic}
+                  onProblemGroupDraftInsightChange={setProblemGroupDraftInsight}
+                  onProblemGroupDraftConclusionChange={setProblemGroupDraftConclusion}
+                  onSolutionTopicDraftTitleChange={setSolutionTopicDraftTitle}
+                  onSolutionTopicDraftConclusionChange={setSolutionTopicDraftConclusion}
+                  onSolutionTopicDraftIdeasChange={setSolutionTopicDraftIdeas}
+                  onSolutionNoteDraftChange={setSolutionNoteDraft}
+                  onSolutionNoteTextDraftChange={setSolutionNoteTextDraft}
+                  onSolutionNoteFinalCommentDraftChange={setSolutionNoteFinalCommentDraft}
+                  onStartAgendaEdit={handleStartAgendaEdit}
+                  onCancelAgendaEdit={handleCancelAgendaEdit}
+                  onSaveAgendaEdit={handleSaveAgendaEdit}
+                  onStartCanvasItemEdit={handleStartCanvasItemEdit}
+                  onCancelCanvasItemEdit={handleCancelCanvasItemEdit}
+                  onSaveCanvasItemEdit={handleSaveCanvasItemEdit}
+                  onDeleteCanvasItem={handleDeleteCanvasItem}
+                  onExtractCanvasItemKeywords={handleExtractCanvasItemKeywords}
+                  onStartProblemGroupEdit={handleStartProblemGroupEdit}
+                  onCancelProblemGroupEdit={handleCancelProblemGroupEdit}
+                  onSaveProblemGroupEdit={handleSaveProblemGroupEdit}
+                  onSetProblemGroupStatus={handleSetProblemGroupStatus}
+                  onStartSolutionTopicEdit={handleStartSolutionTopicEdit}
+                  onCancelSolutionTopicEdit={handleCancelSolutionTopicEdit}
+                  onSaveSolutionTopicEdit={handleSaveSolutionTopicEdit}
+                  onSetSolutionTopicStatus={handleSetSolutionTopicStatus}
+                  onAdoptAiSuggestion={handleAdoptAiSuggestion}
+                  onToggleFinalSolutionNote={handleToggleFinalSolutionNote}
+                  onCancelSolutionNoteEdit={handleCancelSolutionNoteEdit}
+                  onSaveSolutionNoteEdit={handleSaveSolutionNoteEdit}
+                  onStartSolutionNoteEdit={(topicId, note) => handleStartSolutionNoteEdit(topicId, makeSolutionNote(note, note.id))}
+                  onAddSolutionUserNote={handleAddSolutionUserNote}
+                  onCopyFinalSolutionMarkdown={handleCopyFinalSolutionMarkdown}
+                  onSelectFinalSolutionNote={(topicId) => {
+                    setSelectedSolutionTopicId(topicId);
+                    setSelectedNodeId(`solution-${topicId}`);
+                  }}
+                  onFocusCanvasItemInIdeation={focusCanvasItemInIdeation}
+                  stripLeadingTimestamp={stripLeadingTimestamp}
+                  getToolLabel={(tool) => toolLabel(tool)}
+                />
               ) : null
             }
             composerTitle={composerTitle}
