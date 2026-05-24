@@ -71,8 +71,6 @@ export type ProblemIdeaPointerDragState<TCard> = {
 export function useCanvasRuntimeState() {
   const [nodePositions, setNodePositions] = useState<CanvasNodePositionsByStage>({});
   const [nodes, setNodes] = useState<Node[]>([]);
-  const [, setEdges] = useState<Edge[]>([]);
-  const [selectedEdgeId, setSelectedEdgeId] = useState("");
   const [agendaDragPreview, setAgendaDragPreview] = useState<AgendaDragPreviewState | null>(null);
   const [ideationDropPreview, setIdeationDropPreview] = useState<IdeationDropPreviewState | null>(null);
   const [, setIdeationNodeDragActive] = useState(false);
@@ -90,9 +88,6 @@ export function useCanvasRuntimeState() {
     setNodePositions,
     nodes,
     setNodes,
-    setEdges,
-    selectedEdgeId,
-    setSelectedEdgeId,
     agendaDragPreview,
     setAgendaDragPreview,
     ideationDropPreview,

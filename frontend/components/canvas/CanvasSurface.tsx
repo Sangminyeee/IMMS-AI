@@ -3,12 +3,9 @@
 import {
   Background,
   BackgroundVariant,
-  MarkerType,
   MiniMap,
   ReactFlow,
-  type Connection,
   type Edge,
-  type EdgeChange,
   type Node,
   type NodeChange,
   type ReactFlowInstance,
@@ -22,7 +19,6 @@ import {
   PlacementFeedbackOverlay,
   ProblemDefinitionPreparingOverlay,
   ProblemIdeaDragPreview,
-  SelectedEdgePopover,
   SolutionStagePendingOverlay,
 } from "@/components/canvas/CanvasStatusOverlays";
 import {
@@ -87,9 +83,7 @@ type CanvasSurfaceProps = {
   canvasSurfaceRef: RefObject<HTMLDivElement | null>;
   stage: CanvasStage;
   nodes: Node[];
-  renderedEdges: Edge[];
   problemSplitLeftEdges: Edge[];
-  selectedEdge: Edge | null;
   busy: boolean;
   problemGroupsCount: number;
   problemStructureNodesCount: number;
@@ -119,7 +113,6 @@ type CanvasSurfaceProps = {
   hasSelectedProblemGroup: boolean;
   pendingProblemGroupLinkId: string;
   selectedProblemStatus: ProblemGroupStatus | "";
-  selectedSolutionStatus: ProblemGroupStatus | "";
   placementFeedback: PlacementFeedback | null;
   canvasPlacementPreview: CanvasPlacementPreview | null;
   problemIdeaDrag: ProblemIdeaDrag | null;
@@ -130,15 +123,11 @@ type CanvasSurfaceProps = {
   onCanvasMouseLeave: () => void;
   onFlowInit: (instance: ReactFlowInstance<Node, Edge>) => void;
   onNodeClick: (event: React.MouseEvent, node: Node) => void;
-  onEdgeClick: (event: React.MouseEvent, edge: Edge) => void;
   onPaneClick: (event: React.MouseEvent) => void;
   onNodesChange: (changes: NodeChange[]) => void;
   onNodeDragStart: (event: React.MouseEvent, node: Node) => void;
   onNodeDrag: (event: React.MouseEvent, node: Node) => void;
   onNodeDragStop: (event: React.MouseEvent, node: Node) => void;
-  onEdgesChange: (changes: EdgeChange[]) => void;
-  onConnect: (connection: Connection) => void;
-  onDeleteSelectedEdge: () => void;
   onToggleSummaryEvidence: (groupId: string) => void;
   onSetSummaryDocumentEditMode: (editMode: boolean) => void;
   onRegenerateSummaryDocument: () => void | Promise<void>;
@@ -156,19 +145,10 @@ type CanvasSurfaceProps = {
   isProblemToolbarActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
   onProblemToolbarAction: (action: ProblemCanvasToolbarActionId) => void;
   onSetProblemGroupStatus: (status: ProblemGroupStatus) => void;
-  onSetSolutionTopicStatus: (status: ProblemGroupStatus) => void;
 };
 
 const EMPTY_EDGES: Edge[] = [];
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
-const CANVAS_CONNECTION_LINE_STYLE = { stroke: "#0f172a", strokeOpacity: 0.9, strokeWidth: 2 } as const;
-const DEFAULT_CANVAS_EDGE_OPTIONS = {
-  type: "smoothstep",
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#475569" },
-  interactionWidth: 28,
-  zIndex: 10,
-  style: { stroke: "#475569", strokeOpacity: 0.95, strokeWidth: 2 },
-} as const;
 const CANVAS_FLOATING_STATUS_INACTIVE_CLASS_NAME =
   "border-black/10 bg-[#eff0f6] text-[#4d4d4d] hover:bg-[#e3e5ee]";
 const PROBLEM_STATUSES: ProblemGroupStatus[] = ["draft", "review", "final"];
@@ -188,24 +168,20 @@ function problemGroupStatusTone(status: ProblemGroupStatus) {
 function CanvasFloatingStatusControls({
   stage,
   selectedProblemStatus,
-  selectedSolutionStatus,
   onSetProblemGroupStatus,
-  onSetSolutionTopicStatus,
 }: Pick<
   CanvasSurfaceProps,
-  "stage" | "selectedProblemStatus" | "selectedSolutionStatus" | "onSetProblemGroupStatus" | "onSetSolutionTopicStatus"
+  "stage" | "selectedProblemStatus" | "onSetProblemGroupStatus"
 >) {
   const buttonClassName = (active: boolean, activeTone: string) =>
     `rounded-[8px] border px-3 py-1.5 text-xs font-semibold leading-none transition ${
       active ? activeTone : CANVAS_FLOATING_STATUS_INACTIVE_CLASS_NAME
     }`;
-  const positionClassName = stage === "solution" ? "left-1/2 xl:left-[68%]" : "left-1/2 xl:left-[69%]";
-
   if (stage === "ideation") return null;
 
   if (stage === "problem-definition" && selectedProblemStatus) {
     return (
-      <div className={`pointer-events-none absolute top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 ${positionClassName}`}>
+      <div className="pointer-events-none absolute left-1/2 top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 xl:left-[69%]">
         <div className="pointer-events-auto flex items-center justify-center gap-1 rounded-[12px] border border-black/10 bg-white/95 p-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)] backdrop-blur">
           {PROBLEM_STATUSES.map((status) => {
             const active = selectedProblemStatus === status;
@@ -214,28 +190,6 @@ function CanvasFloatingStatusControls({
                 key={`canvas-floating-problem-status-${status}`}
                 type="button"
                 onClick={() => onSetProblemGroupStatus(status)}
-                className={buttonClassName(active, problemGroupStatusTone(status))}
-              >
-                {problemGroupStatusLabel(status)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (stage === "solution" && selectedSolutionStatus) {
-    return (
-      <div className={`pointer-events-none absolute top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 ${positionClassName}`}>
-        <div className="pointer-events-auto flex items-center justify-center gap-1 rounded-[12px] border border-black/10 bg-white/95 p-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)] backdrop-blur">
-          {PROBLEM_STATUSES.map((status) => {
-            const active = selectedSolutionStatus === status;
-            return (
-              <button
-                key={`canvas-floating-solution-status-${status}`}
-                type="button"
-                onClick={() => onSetSolutionTopicStatus(status)}
                 className={buttonClassName(active, problemGroupStatusTone(status))}
               >
                 {problemGroupStatusLabel(status)}
@@ -306,9 +260,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   canvasSurfaceRef,
   stage,
   nodes,
-  renderedEdges,
   problemSplitLeftEdges,
-  selectedEdge,
   busy,
   problemGroupsCount,
   problemStructureNodesCount,
@@ -338,7 +290,6 @@ export const CanvasSurface = memo(function CanvasSurface({
   hasSelectedProblemGroup,
   pendingProblemGroupLinkId,
   selectedProblemStatus,
-  selectedSolutionStatus,
   placementFeedback,
   canvasPlacementPreview,
   problemIdeaDrag,
@@ -349,15 +300,11 @@ export const CanvasSurface = memo(function CanvasSurface({
   onCanvasMouseLeave,
   onFlowInit,
   onNodeClick,
-  onEdgeClick,
   onPaneClick,
   onNodesChange,
   onNodeDragStart,
   onNodeDrag,
   onNodeDragStop,
-  onEdgesChange,
-  onConnect,
-  onDeleteSelectedEdge,
   onToggleSummaryEvidence,
   onSetSummaryDocumentEditMode,
   onRegenerateSummaryDocument,
@@ -375,7 +322,6 @@ export const CanvasSurface = memo(function CanvasSurface({
   isProblemToolbarActionActive,
   onProblemToolbarAction,
   onSetProblemGroupStatus,
-  onSetSolutionTopicStatus,
 }: CanvasSurfaceProps) {
   return (
     <section ref={canvasSurfaceRef} className="relative order-1 flex min-h-[min(72vh,720px)] flex-col overflow-hidden border-b border-black/10 bg-[#f9f9f9] shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:h-full xl:min-h-0 xl:border-b-0">
@@ -387,9 +333,7 @@ export const CanvasSurface = memo(function CanvasSurface({
         <CanvasFloatingStatusControls
           stage={stage}
           selectedProblemStatus={selectedProblemStatus}
-          selectedSolutionStatus={selectedSolutionStatus}
           onSetProblemGroupStatus={onSetProblemGroupStatus}
-          onSetSolutionTopicStatus={onSetSolutionTopicStatus}
         />
         {stage === "ideation" || stage === "problem-definition" ? (
           <ReactFlow<Node, Edge>
@@ -428,7 +372,7 @@ export const CanvasSurface = memo(function CanvasSurface({
               nodeColor={stage === "problem-definition" ? "#a13ab8" : "#0f766e"}
             />
           </ReactFlow>
-        ) : stage === "solution" ? (
+        ) : (
           <SolutionCanvasView
             groups={summaryEligibleStructureGroups}
             sectionByGroupId={summaryDocumentSectionByGroupId}
@@ -446,39 +390,8 @@ export const CanvasSurface = memo(function CanvasSurface({
             onMarkdownChange={onSummaryDocumentMarkdownChange}
             renderPreview={renderSummaryMarkdownPreview}
           />
-        ) : (
-          <ReactFlow
-            nodes={nodes}
-            edges={renderedEdges}
-            onInit={onFlowInit}
-            onNodeClick={onNodeClick}
-            onEdgeClick={onEdgeClick}
-            onPaneClick={onPaneClick}
-            onNodesChange={onNodesChange}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDrag={onNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodesConnectable={false}
-            elevateEdgesOnSelect
-            connectionLineStyle={CANVAS_CONNECTION_LINE_STYLE}
-            minZoom={0.45}
-            maxZoom={1.6}
-            defaultEdgeOptions={DEFAULT_CANVAS_EDGE_OPTIONS}
-            proOptions={REACT_FLOW_PRO_OPTIONS}
-          >
-            <MiniMap
-              zoomable
-              pannable
-              maskColor="rgba(15, 23, 42, 0.08)"
-              nodeColor="#0f766e"
-            />
-          </ReactFlow>
         )}
       </div>
-
-      {selectedEdge ? <SelectedEdgePopover edge={selectedEdge} onDelete={onDeleteSelectedEdge} /> : null}
 
       {placementFeedback ? <PlacementFeedbackOverlay feedback={placementFeedback} /> : null}
 

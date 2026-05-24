@@ -75,64 +75,6 @@ function RightDrawerSectionHeader({
   );
 }
 
-function RightDetailPanelContent({
-  collapsed,
-  children,
-}: {
-  collapsed: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className={`imms-left-panel-detail mt-[clamp(0.875rem,1.5vw,1rem)] ${collapsed ? "hidden" : ""}`}>
-      {children}
-    </div>
-  );
-}
-
-function RightDetailPanelShell({
-  collapsed,
-  onToggleCollapsed,
-  children,
-}: {
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <>
-      <div className="border-b border-black/10 pb-[clamp(0.875rem,1.4vw,1rem)]">
-        <RightDrawerSectionHeader
-          eyebrow="선택 정보"
-          title="내용 상세보기"
-          action={
-            <button
-              type="button"
-              onClick={onToggleCollapsed}
-              className="shrink-0 rounded-full border border-black/10 bg-[#eff0f6] px-3 py-1 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#e3e5ee]"
-            >
-              {collapsed ? "열기" : "접기"}
-            </button>
-          }
-        />
-      </div>
-      <RightDetailPanelContent collapsed={collapsed}>
-        {children}
-      </RightDetailPanelContent>
-    </>
-  );
-}
-
-function RightDetailEmptyState() {
-  return (
-    <div className="rounded-2xl border border-dashed border-black/10 bg-[#fafafa] px-4 py-5">
-      <p className="text-base font-semibold text-slate-900">선택된 내용이 없습니다</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500">
-        왼쪽 캔버스에서 그룹을 선택하거나 오른쪽 캔버스에서 아이디어/댓글을 선택하면 상세 정보가 표시됩니다.
-      </p>
-    </div>
-  );
-}
-
 function RightDrawerNotesPanel({
   collapsed,
   noteCount,
@@ -306,12 +248,9 @@ function PersonalNoteList({
 type CanvasRightDrawerProps = {
   collapsed: boolean;
   contentVisible: boolean;
-  detailCollapsed: boolean;
   notesCollapsed: boolean;
-  showDetailPanel: boolean;
   expandedWidth: string;
   isDesktopLayout: boolean;
-  detailContent: ReactNode;
   composerTitle: string;
   composerBody: string;
   composerBodyRef: RefObject<HTMLTextAreaElement | null>;
@@ -324,7 +263,6 @@ type CanvasRightDrawerProps = {
   quickAskSlot: ReactNode;
   onToggleDrawer: () => void;
   onStartResize: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onToggleDetailCollapsed: () => void;
   onToggleNotesCollapsed: () => void;
   onComposerTitleChange: (value: string) => void;
   onComposerBodyChange: (value: string) => void;
@@ -342,12 +280,9 @@ type CanvasRightDrawerProps = {
 export function CanvasRightDrawer({
   collapsed,
   contentVisible,
-  detailCollapsed,
   notesCollapsed,
-  showDetailPanel,
   expandedWidth,
   isDesktopLayout,
-  detailContent,
   composerTitle,
   composerBody,
   composerBodyRef,
@@ -360,7 +295,6 @@ export function CanvasRightDrawer({
   quickAskSlot,
   onToggleDrawer,
   onStartResize,
-  onToggleDetailCollapsed,
   onToggleNotesCollapsed,
   onComposerTitleChange,
   onComposerBodyChange,
@@ -375,24 +309,19 @@ export function CanvasRightDrawer({
   onDeletePersonalNote,
 }: CanvasRightDrawerProps) {
   const bodyClassName = contentVisible
-    ? `imms-drawer-body imms-overlay-scroll box-border h-full translate-x-0 overflow-y-auto px-[clamp(1rem,1.6vw,1.35rem)] py-[clamp(1rem,2vh,1.5rem)] opacity-100 xl:overflow-y-auto ${
-        showDetailPanel ? "max-h-[min(48vh,500px)] xl:max-h-none" : "max-h-none"
-      }`
+    ? "imms-drawer-body imms-overlay-scroll box-border h-full max-h-none translate-x-0 overflow-y-auto px-[clamp(1rem,1.6vw,1.35rem)] py-[clamp(1rem,2vh,1.5rem)] opacity-100 xl:overflow-y-auto"
     : `imms-drawer-body ${collapsed ? "hidden " : ""}pointer-events-none translate-x-8 opacity-0`;
   const bodyStyle = isDesktopLayout && !collapsed ? { width: expandedWidth } : undefined;
   const wrapperClassName = `imms-drawer-pane imms-side-panel relative order-2 flex min-h-[min(34vh,420px)] flex-col overflow-visible border-b border-black/10 shadow-[inset_1px_0_0_rgba(0,0,0,0.04)] xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:min-h-0 xl:border-b-0 ${collapsed ? "border border-black/10 bg-[#f7f8fb]" : "bg-white"}`;
-  const topPanelClassName = "imms-drawer-pane imms-side-panel imms-left-panel relative min-h-[min(34vh,420px)] flex-1 overflow-hidden bg-transparent";
   const toggleClassName = `pointer-events-auto absolute top-1/2 z-50 flex h-[clamp(2.25rem,3vw,2.75rem)] w-[clamp(2.25rem,3vw,2.75rem)] items-center justify-center rounded-full border border-black/10 bg-white text-[#4d4d4d] shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition-all duration-300 hover:bg-[#f5f6f8] ${
     collapsed ? "left-1/2 -translate-x-1/2 -translate-y-1/2" : "left-0 -translate-x-1/2 -translate-y-1/2"
   }`;
   const toggleIconClassName = `h-5 w-5 transition-transform duration-200 ${collapsed ? "" : "rotate-180"}`;
   const resizeHandleClassName = "absolute left-[-7px] top-0 hidden h-full w-4 cursor-ew-resize xl:block";
-  const bottomPanelClassName = `imms-drawer-pane imms-side-panel imms-right-panel relative flex-1 overflow-hidden bg-transparent ${
-    showDetailPanel ? "min-h-[min(34vh,420px)] max-h-[min(48vh,500px)] xl:min-h-0 xl:max-h-none" : "min-h-0 max-h-none"
-  } ${
+  const bottomPanelClassName = `imms-drawer-pane imms-side-panel imms-right-panel relative flex-1 overflow-hidden bg-transparent min-h-0 max-h-none ${
     collapsed && !contentVisible
       ? "hidden pointer-events-none -translate-x-8 px-0 py-0 opacity-0"
-      : `${showDetailPanel ? "border-t-4 border-[#d5d5d5]" : ""} translate-x-0 opacity-100`
+      : "translate-x-0 opacity-100"
   }`;
 
   return (
@@ -414,21 +343,6 @@ export function CanvasRightDrawer({
         <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-black/10" />
       </button>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {showDetailPanel ? (
-          <RightDrawerPanel
-            className={topPanelClassName}
-            bodyClassName={bodyClassName}
-            bodyStyle={bodyStyle}
-          >
-            <RightDetailPanelShell
-              collapsed={detailCollapsed}
-              onToggleCollapsed={onToggleDetailCollapsed}
-            >
-              {detailContent || <RightDetailEmptyState />}
-            </RightDetailPanelShell>
-          </RightDrawerPanel>
-        ) : null}
-
         <RightDrawerPanel
           className={bottomPanelClassName}
           bodyClassName={bodyClassName}

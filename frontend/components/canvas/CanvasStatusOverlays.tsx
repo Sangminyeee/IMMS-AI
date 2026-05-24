@@ -1,7 +1,6 @@
 "use client";
 
 import { memo } from "react";
-import type { Edge } from "@xyflow/react";
 
 type PlacementFeedback = {
   x: number;
@@ -23,38 +22,12 @@ type CanvasStageEmptyOverlayProps = {
   tone: "problem" | "summary";
 };
 
-type SelectedEdgePopoverProps = {
-  edge: Edge;
-  onDelete: () => void;
-};
-
 type ProblemIdeaDragPreviewProps = {
   x: number;
   y: number;
   cardKind: "summary" | string;
   title: string;
 };
-
-export const SelectedEdgePopover = memo(function SelectedEdgePopover({ edge, onDelete }: SelectedEdgePopoverProps) {
-  return (
-    <div className="absolute right-4 top-4 z-[9] w-[260px] rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_18px_46px_rgba(15,23,42,0.16)] backdrop-blur">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Connection</p>
-        <p className="mt-1 truncate text-sm font-semibold text-slate-800">
-          {edge.source} → {edge.target}
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onDelete}
-        className="mt-3 w-full rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700"
-      >
-        연결 삭제
-      </button>
-      <p className="mt-2 text-xs leading-5 text-slate-500">연결선을 클릭해 선택한 뒤 Delete 또는 Backspace로도 삭제할 수 있습니다.</p>
-    </div>
-  );
-});
 
 export const PlacementFeedbackOverlay = memo(function PlacementFeedbackOverlay({ feedback }: { feedback: PlacementFeedback }) {
   return (

@@ -6,12 +6,6 @@ export type CanvasNodeData = {
   contentSignature: string;
 };
 
-export type CanvasEdgeData = {
-  kind?: "canvasItemLink";
-  canvasItemId?: string;
-  linkField?: "agenda_id" | "point_id";
-};
-
 export type CanvasNodeDescriptor = {
   id: string;
   position: { x: number; y: number };

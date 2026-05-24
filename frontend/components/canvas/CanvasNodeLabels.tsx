@@ -6,7 +6,6 @@ type ComposerTool = "note" | "comment" | "topic";
 type CanvasTool = ComposerTool | "group" | "problem-idea";
 type ProblemGroupStatus = "draft" | "review" | "final";
 type CanvasItemStatus = "discussion" | "confirmed" | "closed";
-type SolutionAiSuggestionStatus = "draft" | "selected" | "dismissed";
 type SolutionNoteSource = "ai" | "user";
 
 type CanvasItemViewModel = {
@@ -38,12 +37,6 @@ type ProblemGroupViewModel = {
   status: ProblemGroupStatus;
 };
 
-type SolutionAiSuggestionViewModel = {
-  id: string;
-  text: string;
-  status: SolutionAiSuggestionStatus;
-};
-
 type SolutionNoteViewModel = {
   id: string;
   text: string;
@@ -57,13 +50,10 @@ type SolutionTopicViewModel = {
   group_id: string;
   topic_no: number;
   topic: string;
-  status: ProblemGroupStatus;
   conclusion: string;
   problem_topic: string;
-  problem_insight: string;
   problem_conclusion: string;
   agenda_titles: string[];
-  ai_suggestions: SolutionAiSuggestionViewModel[];
   notes: SolutionNoteViewModel[];
 };
 
@@ -634,344 +624,8 @@ export function makeIdeationDragGhostLabel(item: CanvasItemViewModel, dropLabel 
   );
 }
 
-export function solutionTopicSelectedSuggestions(topic: SolutionTopicViewModel) {
-  return (topic.ai_suggestions || []).filter((item) => item.status === "selected");
-}
-
 export function solutionTopicFinalNotes(topic: SolutionTopicViewModel) {
   return (topic.notes || []).filter((note) => note.is_final_candidate);
-}
-
-export function makeSolutionNodeLabel(
-  topic: SolutionTopicViewModel,
-  selected: boolean,
-  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  remoteEditing = false,
-) {
-  const selectedAiCount = solutionTopicSelectedSuggestions(topic).length;
-  const finalCount = solutionTopicFinalNotes(topic).length;
-  return (
-    <div
-      className={`nopan box-border flex h-full w-full min-w-0 cursor-pointer flex-col justify-start border bg-white px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] transition ${
-        selected
-          ? "border-black shadow-[0_14px_30px_rgba(15,23,42,0.16)]"
-          : "border-black/10 shadow-[0_1px_0_rgba(0,0,0,0.04)] hover:border-emerald-300"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
-            Insight {topic.topic_no || 0}
-          </p>
-          <strong className="mt-2 block line-clamp-2 text-[17px] font-semibold leading-6 text-slate-950">
-            {topic.topic}
-          </strong>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${problemGroupStatusTone(topic.status)}`}>
-            {problemGroupStatusLabel(topic.status)}
-          </span>
-          {remoteEditing ? renderEditPresenceBadge() : null}
-          {onEdit ? (
-            <button
-              type="button"
-              onClick={onEdit}
-              onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan rounded-full border border-black/10 bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-            >
-              수정
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <p className="mt-3 line-clamp-3 text-sm leading-6 text-[#4d4d4d]">
-        {topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다."}
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-semibold">
-        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
-          AI {topic.ai_suggestions.length}
-        </span>
-        <span className="rounded-full bg-fuchsia-50 px-2.5 py-1 text-fuchsia-700">
-          채택 {selectedAiCount}
-        </span>
-        <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">
-          결론 {finalCount}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-export function makeSolutionOverviewNodeLabel(
-  topic: SolutionTopicViewModel,
-  onEdit?: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  remoteEditing = false,
-) {
-  return (
-    <div className="nopan box-border flex h-full w-full flex-col justify-start border border-black/10 bg-white px-5 py-5 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">해결 방향</p>
-          <h4 className="mt-2 text-xl font-semibold leading-8 text-slate-950">{topic.topic}</h4>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${problemGroupStatusTone(topic.status)}`}>
-            {problemGroupStatusLabel(topic.status)}
-          </span>
-          {remoteEditing ? renderEditPresenceBadge() : null}
-          {onEdit ? (
-            <button
-              type="button"
-              onClick={onEdit}
-              onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-            >
-              수정
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <p className="mt-4 line-clamp-4 text-base leading-7 text-[#4d4d4d]">
-        {topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다."}
-      </p>
-      <div className="mt-4 grid gap-3 text-sm leading-6 text-[#4d4d4d] md:grid-cols-3">
-        <div className="border border-black/10 bg-[#fafafa] px-3 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#777]">문제정의</p>
-          <p className="mt-1 line-clamp-2">{topic.problem_topic || "연결된 문제정의 없음"}</p>
-        </div>
-        <div className="border border-black/10 bg-[#fafafa] px-3 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#777]">인사이트</p>
-          <p className="mt-1 line-clamp-2">{topic.problem_insight || "인사이트 없음"}</p>
-        </div>
-        <div className="border border-black/10 bg-[#fafafa] px-3 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#777]">출처</p>
-          <p className="mt-1 line-clamp-2">{topic.agenda_titles.length > 0 ? topic.agenda_titles.join(", ") : "연결 안건 없음"}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function makeSolutionAiSuggestionNodeLabel(
-  suggestion: SolutionAiSuggestionViewModel,
-  index: number,
-  onAdopt: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  busy = false,
-) {
-  const selected = suggestion.status === "selected";
-  if (busy) {
-    return (
-      <article className="nopan box-border flex h-full w-full flex-col justify-center border border-emerald-100 bg-white px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-        <div className="flex items-center gap-3">
-          <span className="h-3 w-3 animate-ping rounded-full bg-emerald-500" />
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
-              AI 추천 생성 중
-            </p>
-            <p className="mt-1 text-sm leading-6 text-[#4d4d4d]">
-              선택한 인사이트 기준으로 해결책 아이디어를 다시 정리하고 있습니다.
-            </p>
-          </div>
-        </div>
-      </article>
-    );
-  }
-
-  return (
-    <article className={`nopan box-border flex h-full w-full flex-col justify-start border px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] ${
-      selected ? "border-fuchsia-100 bg-slate-50/90 opacity-80" : "border-black/10 bg-white"
-    } shadow-[0_1px_0_rgba(0,0,0,0.04)]`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#777]">AI 제안 {index + 1}</p>
-          <p className={`mt-2 line-clamp-5 text-sm leading-6 ${selected ? "text-slate-500" : "text-[#4d4d4d]"}`}>
-            {suggestion.text}
-          </p>
-          {selected ? (
-            <p className="mt-2 text-xs font-semibold text-fuchsia-700">채택 카드로 이동됨</p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={onAdopt}
-          disabled={selected}
-          className="nodrag shrink-0 rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {selected ? "채택됨" : "채택"}
-        </button>
-      </div>
-    </article>
-  );
-}
-
-export function makeSolutionNoteNodeLabel(
-  note: SolutionNoteViewModel,
-  index: number,
-  onToggleFinal: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  editing: boolean,
-  textDraft: string,
-  finalCommentDraft: string,
-  onStartEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  onTextDraftChange: (value: string) => void,
-  onFinalCommentDraftChange: (value: string) => void,
-  onSaveEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  onCancelEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
-  remoteEditing = false,
-) {
-  const sourceLabel = note.source === "ai" ? `AI 채택 카드 ${index + 1}` : `사용자 카드 ${index + 1}`;
-  const shellClass = note.is_final_candidate
-    ? "border-slate-900 bg-white"
-    : note.source === "ai"
-      ? "border-fuchsia-100 bg-fuchsia-50/70"
-      : "border-amber-100 bg-amber-50/80";
-  const labelClass = note.is_final_candidate
-    ? "text-slate-900"
-    : note.source === "ai"
-      ? "text-fuchsia-700"
-      : "text-amber-700";
-
-  return (
-    <article className={`nopan box-border flex h-full w-full flex-col justify-start border px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)] ${shellClass}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${labelClass}`}>
-              {sourceLabel}
-            </p>
-            {remoteEditing ? renderEditPresenceBadge() : null}
-          </div>
-          {editing ? (
-            <textarea
-              value={textDraft}
-              onChange={(event) => onTextDraftChange(event.target.value)}
-              onPointerDown={(event) => event.stopPropagation()}
-              placeholder="해결책 카드 내용을 입력합니다."
-              className="nodrag mt-2 min-h-[92px] w-full rounded-xl border border-black/10 bg-white px-3 py-3 text-sm leading-6 text-slate-700 focus:border-black/30 focus:outline-none"
-            />
-          ) : (
-            <p className="mt-2 line-clamp-5 text-sm leading-6 text-slate-700">{note.text}</p>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <button
-            type="button"
-            onClick={onToggleFinal}
-            className={`nodrag rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              note.is_final_candidate
-                ? "bg-slate-900 text-white"
-                : "border border-black/10 bg-white text-[#4d4d4d] hover:bg-[#f5f6f8]"
-            }`}
-          >
-            {note.is_final_candidate ? "최종 결론" : "결론 후보"}
-          </button>
-          {editing ? (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={onCancelEdit}
-                className="nodrag rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={onSaveEdit}
-                className="nodrag rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
-              >
-                저장
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={onStartEdit}
-              className="nodrag rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-            >
-              편집
-            </button>
-          )}
-        </div>
-      </div>
-      {note.is_final_candidate && editing ? (
-        <textarea
-          value={finalCommentDraft}
-          onChange={(event) => onFinalCommentDraftChange(event.target.value)}
-          onPointerDown={(event) => event.stopPropagation()}
-          placeholder="최종 결론에 붙일 설명을 입력합니다."
-          className="nodrag mt-3 min-h-[72px] w-full rounded-xl border border-black/10 bg-white px-3 py-3 text-sm leading-6 text-slate-700 focus:border-black/30 focus:outline-none"
-        />
-      ) : note.is_final_candidate ? (
-        <p className="mt-3 rounded-xl border border-black/10 bg-white px-3 py-3 text-xs leading-5 text-slate-500">
-          {note.final_comment || "최종 결론 설명은 편집을 눌러 추가할 수 있습니다."}
-        </p>
-      ) : null}
-    </article>
-  );
-}
-
-export function makeSolutionComposerNodeLabel(
-  draft: string,
-  onDraftChange: (value: string) => void,
-  onAdd: (event: React.MouseEvent<HTMLButtonElement>) => void,
-) {
-  return (
-    <div className="nopan box-border flex h-full w-full flex-col justify-start border border-black/10 bg-[#fafafa] px-4 py-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-      <p className="text-sm font-semibold text-slate-700">사용자 해결책 추가</p>
-      <textarea
-        value={draft}
-        onChange={(event) => onDraftChange(event.target.value)}
-        onPointerDown={(event) => event.stopPropagation()}
-        placeholder="직접 해결책 메모를 추가합니다."
-        className="nodrag mt-3 min-h-[96px] w-full rounded-xl border border-black/10 bg-white px-3 py-3 text-sm leading-6 text-slate-700 focus:border-black/30 focus:outline-none"
-      />
-      <button
-        type="button"
-        onClick={onAdd}
-        className="nodrag mt-3 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-      >
-        카드 추가
-      </button>
-    </div>
-  );
-}
-
-export function makeSolutionFinalNoteNodeLabel(
-  note: {
-    id: string;
-    topicId: string;
-    topicTitle: string;
-    text: string;
-    final_comment: string;
-  },
-  active: boolean,
-  onFocus: (event: React.MouseEvent<HTMLButtonElement>) => void,
-) {
-  return (
-    <button
-      type="button"
-      onClick={onFocus}
-      className={`nopan nodrag box-border block h-full w-full border px-4 py-3 text-left font-['Inter','Noto_Sans_KR',sans-serif] transition ${
-        active ? "border-slate-900 bg-white" : "border-black/10 bg-[#fafafa] hover:bg-white"
-      }`}
-    >
-      <p className="text-sm font-semibold text-slate-700">{note.topicTitle}</p>
-      <p className="mt-2 line-clamp-4 text-sm leading-6 text-slate-700">{note.text}</p>
-      {note.final_comment ? (
-        <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">{note.final_comment}</p>
-      ) : null}
-    </button>
-  );
-}
-
-export function makeSolutionEmptyNodeLabel() {
-  return (
-    <div className="nopan box-border flex h-full w-full flex-col items-center justify-center border border-dashed border-black/10 bg-white px-6 py-8 text-center font-['Inter','Noto_Sans_KR',sans-serif]">
-      <p className="text-base font-semibold text-slate-950">해결책 인사이트를 선택해 주세요</p>
-      <p className="mt-2 text-sm leading-6 text-[#777]">
-        왼쪽 인사이트를 클릭하면 AI 추천 아이디어와 채택 카드가 오른쪽 캔버스에 표시됩니다.
-      </p>
-    </div>
-  );
 }
 
 export function estimateWrappedLines(text: string, charsPerLine: number) {
@@ -1121,21 +775,6 @@ export function makeProblemTopicNodeLabel(
   );
 }
 
-export function estimateSolutionNodeHeight(topic: SolutionTopicViewModel) {
-  const topicLines = estimateWrappedLines(topic.topic, 18);
-  const conclusionLines = Math.min(
-    3,
-    estimateWrappedLines(topic.conclusion || topic.problem_conclusion || "해결 방향이 아직 없습니다.", 28),
-  );
-
-  return (
-    118 +
-    Math.max(0, topicLines - 1) * 22 +
-    Math.max(0, conclusionLines - 1) * 18 +
-    42
-  );
-}
-
 export function buildGridPositions(heights: number[], gapX: number, gapY: number, baseX: number, baseY: number) {
   const total = heights.length;
   const columns = Math.max(1, Math.ceil(Math.sqrt(Math.max(total, 1))));
@@ -1194,9 +833,5 @@ export function buildColumnPositions(
       y: rowOffsets[row] ?? baseY,
     };
   });
-}
-
-export function estimateSolutionCardLineChars(width: number) {
-  return Math.max(22, Math.floor(width / 10.5));
 }
 

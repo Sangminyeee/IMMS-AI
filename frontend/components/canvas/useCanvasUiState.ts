@@ -35,7 +35,6 @@ function clampNumber(value: number, min: number, max: number) {
 export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOptions) {
   const [rightDrawerCollapsed, setRightDrawerCollapsed] = useState(true);
   const [rightDrawerContentVisible, setRightDrawerContentVisible] = useState(false);
-  const [rightDrawerDetailCollapsed, setRightDrawerDetailCollapsed] = useState(false);
   const [rightDrawerNotesCollapsed, setRightDrawerNotesCollapsed] = useState(false);
   const [leftPanelRatio, setLeftPanelRatio] = useState(DEFAULT_LEFT_PANEL_RATIO);
   const [rightPanelRatio, setRightPanelRatio] = useState(DEFAULT_RIGHT_PANEL_RATIO);
@@ -154,8 +153,6 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
   return {
     rightDrawerCollapsed,
     rightDrawerContentVisible,
-    rightDrawerDetailCollapsed,
-    setRightDrawerDetailCollapsed,
     rightDrawerNotesCollapsed,
     setRightDrawerNotesCollapsed,
     openRightDrawer,
