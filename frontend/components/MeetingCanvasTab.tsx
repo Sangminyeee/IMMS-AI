@@ -18,7 +18,7 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type RefObject, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from "react";
 import {
   getCanvasWorkspaceState,
   getCanvasPersonalNotes,
@@ -37,7 +37,6 @@ import {
   saveCanvasWorkspacePatch,
   startCanvasProblemDiscussionWorkspace,
   startCanvasTopicSummaryWorkspace,
-  askCanvasQuickQuestion,
   extractCanvasIdeationKeywords,
 } from "@/lib/api";
 import {
@@ -66,6 +65,7 @@ import {
   type PendingIdeationDragFrame,
   type ProblemIdeaDropPreviewState,
 } from "@/components/canvas/useCanvasRuntimeState";
+import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
   AgendaActionItemDetail,
@@ -206,15 +206,6 @@ type ProblemStructureDragState = {
   overGroupId: string;
   overNodeId: string;
   mode: "group" | "node" | "";
-};
-
-type CanvasQuickAskMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  createdAt: string;
-  status: "pending" | "done" | "error";
-  warning?: string;
 };
 
 type ProblemDiscussionViewModel = CanvasProblemDiscussionItem;
@@ -4936,12 +4927,6 @@ export default function MeetingCanvasTab({
   );
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
-  const [quickAskDraft, setQuickAskDraft] = useState("");
-  const [quickAskMessages, setQuickAskMessages] = useState<CanvasQuickAskMessage[]>([]);
-  const [quickAskUnreadCount, setQuickAskUnreadCount] = useState(0);
-  const markQuickAskRead = useCallback(() => {
-    setQuickAskUnreadCount(0);
-  }, []);
   const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
   const [llmIdeationKeywordSignature, setLlmIdeationKeywordSignature] = useState("");
   const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
@@ -5014,10 +4999,6 @@ export default function MeetingCanvasTab({
     setProblemIdeaDragPoint,
   } = useCanvasRuntimeState();
   const {
-    quickAskOpen,
-    setQuickAskOpen,
-    quickAskOpenRef,
-    quickAskScrollRef,
     rightDrawerCollapsed,
     rightDrawerContentVisible,
     rightDrawerDetailCollapsed,
@@ -5040,8 +5021,6 @@ export default function MeetingCanvasTab({
     canvasPlacementPreview,
     setCanvasPlacementPreview,
   } = useCanvasUiState({
-    quickAskMessageCount: quickAskMessages.length,
-    onQuickAskRead: markQuickAskRead,
     solutionPaneMeasureKey: stage,
   });
   const [endMeetingConfirmOpen, setEndMeetingConfirmOpen] = useState(false);
@@ -5424,10 +5403,6 @@ export default function MeetingCanvasTab({
         : "",
     [endMeetingSummaryPreviewMarkdown],
   );
-  const quickAskPendingCount = useMemo(
-    () => quickAskMessages.filter((message) => message.status === "pending").length,
-    [quickAskMessages],
-  );
   const buildQuickAskContext = useCallback((): Record<string, unknown> => {
     const sourceTranscriptRows = normalizeTranscriptRows(
       (effectiveState?.transcript?.length ? effectiveState.transcript : transcripts) || [],
@@ -5511,88 +5486,23 @@ export default function MeetingCanvasTab({
     stage,
     transcripts,
   ]);
-  const handleToggleQuickAsk = useCallback(() => {
-    setQuickAskOpen((prev) => {
-      const next = !prev;
-      if (next) {
-        markQuickAskRead();
-      }
-      return next;
-    });
-  }, [markQuickAskRead, setQuickAskOpen]);
-  const handleSubmitQuickAsk = useCallback(
-    (event?: FormEvent<HTMLFormElement>) => {
-      event?.preventDefault();
-      const question = quickAskDraft.trim();
-      if (!question || !meetingId) return;
-
-      const now = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-      const userMessageId = `quick-user-${requestId}`;
-      const assistantMessageId = `quick-assistant-${requestId}`;
-      setQuickAskMessages((prev) => [
-        ...prev,
-        {
-          id: userMessageId,
-          role: "user",
-          text: question,
-          createdAt: now,
-          status: "done",
-        },
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          text: "응답 생성 중...",
-          createdAt: now,
-          status: "pending",
-        },
-      ]);
-      setQuickAskDraft("");
-
-      void askCanvasQuickQuestion({
-        meeting_id: meetingId,
-        meeting_topic: meetingTopicForAi,
-        stage,
-        question,
-        context: buildQuickAskContext(),
-      })
-        .then((result) => {
-          setQuickAskMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMessageId
-                ? {
-                    ...message,
-                    text: result.answer || "응답이 비어 있습니다.",
-                    status: "done",
-                    warning: result.warning || "",
-                  }
-                : message,
-            ),
-          );
-          if (!quickAskOpenRef.current) {
-            setQuickAskUnreadCount((prev) => prev + 1);
-          }
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setQuickAskMessages((prev) =>
-            prev.map((item) =>
-              item.id === assistantMessageId
-                ? {
-                    ...item,
-                    text: `응답을 가져오지 못했습니다. ${message}`,
-                    status: "error",
-                  }
-                : item,
-            ),
-          );
-          if (!quickAskOpenRef.current) {
-            setQuickAskUnreadCount((prev) => prev + 1);
-          }
-        });
-    },
-    [buildQuickAskContext, meetingId, meetingTopicForAi, quickAskDraft, quickAskOpenRef, stage],
-  );
+  const {
+    quickAskOpen,
+    setQuickAskOpen,
+    quickAskDraft,
+    setQuickAskDraft,
+    quickAskMessages,
+    quickAskUnreadCount,
+    quickAskPendingCount,
+    quickAskScrollRef,
+    handleToggleQuickAsk,
+    handleSubmitQuickAsk,
+  } = useCanvasQuickAsk({
+    meetingId,
+    meetingTopic: meetingTopicForAi,
+    stage,
+    buildContext: buildQuickAskContext,
+  });
   useEffect(() => {
     if (stage !== "ideation") return;
     if (!meetingId || ideationKeywordUtterances.length === 0) {

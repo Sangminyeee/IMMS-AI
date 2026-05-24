@@ -25,8 +25,6 @@ type CanvasPlacementPreviewState = {
 } | null;
 
 type UseCanvasUiStateOptions = {
-  quickAskMessageCount: number;
-  onQuickAskRead: () => void;
   solutionPaneMeasureKey: string;
 };
 
@@ -34,12 +32,7 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-export function useCanvasUiState({
-  quickAskMessageCount,
-  onQuickAskRead,
-  solutionPaneMeasureKey,
-}: UseCanvasUiStateOptions) {
-  const [quickAskOpen, setQuickAskOpen] = useState(false);
+export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOptions) {
   const [rightDrawerCollapsed, setRightDrawerCollapsed] = useState(true);
   const [rightDrawerContentVisible, setRightDrawerContentVisible] = useState(false);
   const [rightDrawerDetailCollapsed, setRightDrawerDetailCollapsed] = useState(false);
@@ -52,8 +45,6 @@ export function useCanvasUiState({
   const [placementFeedback, setPlacementFeedback] = useState<PlacementFeedbackState>(null);
   const [canvasPlacementPreview, setCanvasPlacementPreview] = useState<CanvasPlacementPreviewState>(null);
 
-  const quickAskOpenRef = useRef(quickAskOpen);
-  const quickAskScrollRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{ side: "left" | "right"; startX: number; startRatio: number } | null>(null);
   const solutionRightPaneRef = useRef<HTMLElement | null>(null);
   const placementFeedbackTimerRef = useRef<number | null>(null);
@@ -85,23 +76,6 @@ export function useCanvasUiState({
       return !prev;
     });
   }, []);
-
-  useEffect(() => {
-    quickAskOpenRef.current = quickAskOpen;
-    if (quickAskOpen) {
-      onQuickAskRead();
-    }
-  }, [onQuickAskRead, quickAskOpen]);
-
-  useEffect(() => {
-    if (!quickAskOpen) return undefined;
-    const frame = window.requestAnimationFrame(() => {
-      if (quickAskScrollRef.current) {
-        quickAskScrollRef.current.scrollTop = quickAskScrollRef.current.scrollHeight;
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [quickAskMessageCount, quickAskOpen]);
 
   useEffect(() => {
     const syncViewportMode = () => {
@@ -179,10 +153,6 @@ export function useCanvasUiState({
   );
 
   return {
-    quickAskOpen,
-    setQuickAskOpen,
-    quickAskOpenRef,
-    quickAskScrollRef,
     rightDrawerCollapsed,
     rightDrawerContentVisible,
     rightDrawerDetailCollapsed,
