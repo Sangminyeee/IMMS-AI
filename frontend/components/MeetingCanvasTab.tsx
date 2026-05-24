@@ -46,13 +46,21 @@ import {
   buildProblemExploreLayout,
 } from "@/components/canvas/CanvasGraphLayouts";
 import {
+  buildIdeationCanvasBlueprint,
+  buildIdeationKeywordBubbleBlueprint,
+} from "@/components/canvas/CanvasIdeationNodeDescriptors";
+import {
+  buildNodeContentSignature,
+  type CanvasEdgeData,
+  type CanvasNodeData,
+  type CanvasNodeDescriptor,
+} from "@/components/canvas/CanvasGraphTypes";
+import {
   CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING,
   CANVAS_ITEM_NODE_WIDTH,
   CANVAS_TOPIC_CHILD_GAP_X,
-  CANVAS_TOP_LEVEL_GAP_Y,
   buildColumnPositions,
   buildUserMergedTopicTitle,
-  estimateCanvasItemNodeHeight,
   estimateProblemTopicNodeHeight,
   estimateSolutionCardLineChars,
   estimateSolutionNodeHeight,
@@ -64,10 +72,7 @@ import {
   getTopicDirectChildIds,
   getTopicFlattenedIdeaChildIds,
   isTopicCanvasItem,
-  makeAgendaNodeLabel,
-  makeCanvasItemNodeLabel,
   makeIdeationDragGhostLabel,
-  makeIdeationKeywordBubbleNodeLabel,
   makeIdeationMergeDropPreview,
   makeProblemTopicNodeLabel,
   makeSolutionAiSuggestionNodeLabel,
@@ -83,7 +88,6 @@ import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
   CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH,
-  CANVAS_IDEATION_BUBBLE_TRANSITION,
   buildIdeationKeywordBubbles,
   buildStableIdeationBubbleVisuals,
   extractCanvasItemKeywords,
@@ -838,14 +842,6 @@ type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
   targetY: number;
   firstSeenTick: number;
   lastSeenTick: number;
-};
-
-type IdeationKeywordBubblePlacement = {
-  bubble: IdeationKeywordBubble;
-  x: number;
-  y: number;
-  size: number;
-  opacity?: number;
 };
 
 type LocalEditPresenceTarget = {
@@ -2312,38 +2308,6 @@ function getNodePositionUpdateKey(stage: CanvasStage, nodeId: string) {
 function getSyncUpdatedAtMs(updatedAt: string | undefined) {
   const parsed = updatedAt ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
-type CanvasNodeData = {
-  label: React.ReactNode;
-  contentSignature: string;
-};
-
-type CanvasEdgeData = {
-  kind?: "canvasItemLink";
-  canvasItemId?: string;
-  linkField?: "agenda_id" | "point_id";
-};
-
-type CanvasNodeDescriptor = {
-  id: string;
-  position: { x: number; y: number };
-  positionSource: "persisted" | "computed" | "fallback";
-  sourcePosition: Position;
-  targetPosition: Position;
-  className: string;
-  style: React.CSSProperties;
-  data: CanvasNodeData;
-  draggable?: boolean;
-  dragHandle?: string;
-  selectable?: boolean;
-  zIndex?: number;
-};
-
-function buildNodeContentSignature(parts: Array<string | number | boolean | undefined>) {
-  return parts
-    .map((part) => (part === undefined ? "" : String(part)))
-    .join("|");
 }
 
 function positionsEqual(
@@ -8150,320 +8114,34 @@ export default function MeetingCanvasTab({
     }
 
     if (stage === "ideation") {
-      const bubbles = ideationBubbleVisuals;
-      const bubblePlacements: IdeationKeywordBubblePlacement[] = bubbles.map((bubble) => ({
-        bubble,
-        x: bubble.targetX,
-        y: bubble.targetY,
-        size: bubble.size,
-        opacity: bubble.opacity,
-      }));
-      const bubbleDescriptors: CanvasNodeDescriptor[] = bubbles.length > 0
-        ? bubblePlacements.map(({ bubble, x, y, size, opacity }) => {
-            const debugGrowth = ideationBubbleDebugGrowthById[bubble.id] || 1;
-            return {
-              id: bubble.id,
-              position: {
-                x,
-                y,
-              },
-              positionSource: "computed" as const,
-              sourcePosition: Position.Bottom,
-              targetPosition: Position.Top,
-              className: "imms-ideation-keyword-node pointer-events-none !border-0 !bg-transparent !p-0 !shadow-none",
-              style: {
-                width: size,
-                height: size,
-                padding: 0,
-                opacity: opacity ?? 1,
-                transition: CANVAS_IDEATION_BUBBLE_TRANSITION,
-                willChange: "transform, opacity, width, height",
-              },
-              draggable: false,
-              selectable: false,
-              data: {
-                contentSignature: buildNodeContentSignature([
-                  "ideation-keyword-bubble",
-                  bubble.text,
-                  bubble.count,
-                  bubble.weight,
-                  debugGrowth,
-                  bubble.activity,
-                  bubble.opacity,
-                  bubble.kind,
-                  bubble.offTopic,
-                  bubble.offTopicReason,
-                  ...bubble.related,
-                ]),
-                label: makeIdeationKeywordBubbleNodeLabel(bubble, size),
-              },
-            };
-          })
-        : [
-            {
-              id: "ideation-keyword-empty",
-              position: { x: 320, y: 260 },
-              positionSource: "computed" as const,
-              sourcePosition: Position.Bottom,
-              targetPosition: Position.Top,
-              className: "!border-0 !bg-transparent !p-0 !shadow-none",
-              style: { width: 520, minHeight: 180, padding: 0 },
-              draggable: false,
-              selectable: false,
-              data: {
-                contentSignature: "ideation-keyword-empty",
-                label: (
-                  <div className="flex min-h-[180px] items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-white/80 px-6 text-center text-sm leading-6 text-[#777]">
-                    발화가 들어오면 자주 나온 명사가 버블로 표시됩니다.
-                  </div>
-                ),
-              },
-            },
-          ];
-
-      return {
-        layoutSignature: buildNodeContentSignature([
-          stage,
-          "keyword-bubbles",
-          ideationBubbleLayoutRevision,
-          ...bubbles.flatMap((bubble) => [
-            bubble.text,
-            bubble.count,
-            bubble.activity,
-            bubble.opacity,
-            bubble.targetX,
-            bubble.targetY,
-            bubble.size,
-            bubble.kind,
-            bubble.offTopic,
-            ideationBubbleDebugGrowthById[bubble.id] || 1,
-            ...bubble.related,
-          ]),
-        ]),
-        nodeDescriptors: bubbleDescriptors,
-      };
+      return buildIdeationKeywordBubbleBlueprint({
+        bubbles: ideationBubbleVisuals,
+        debugGrowthById: ideationBubbleDebugGrowthById,
+        layoutRevision: ideationBubbleLayoutRevision,
+        stage,
+      });
     }
 
-    const {
-      agendaHeights,
-      agendaTitleById,
-      canvasItemHeights,
-      computedCanvasPositions,
-      positions,
-      visibleCanvasItems,
-    } = ideationGraphLayout;
-
-    return {
-      layoutSignature: buildNodeContentSignature([
-        stage,
-        ...agendaModels.map((agenda) => agenda.id),
-        ...canvasItems.flatMap((item) => [
-          item.id,
-          item.kind,
-          item.status || "",
-          item.parent_topic_id || "",
-          isTopicCanvasItem(item) && getTopicCollapsed(item) ? "collapsed" : "expanded",
-          ...(item.child_item_ids || []),
-        ]),
-      ]),
-      nodeDescriptors: [
-        ...agendaModels.map((agenda, agendaIndex) => {
-          const nodeId = `agenda-${agenda.id}`;
-          const savedPosition = nodePositions.ideation?.[nodeId];
-          const positionSource: CanvasNodeDescriptor["positionSource"] = savedPosition
-            ? "persisted"
-            : "fallback";
-          const isAgendaDragSource = agendaDragPreview?.agendaId === agenda.id;
-          const remoteAgendaEditPresence =
-            remoteEditPresenceByKey[makeEditPresenceKey("agenda", agenda.id)] || null;
-
-          return {
-            id: nodeId,
-            position: savedPosition || positions[agendaIndex],
-            positionSource,
-            sourcePosition: Position.Bottom,
-            targetPosition: Position.Top,
-            className: `imms-agenda-node rounded-[28px] border border-amber-200 bg-white shadow-[0_18px_40px_rgba(148,163,184,0.16)] ${isAgendaDragSource ? "z-20" : ""}`,
-            style: { width: 300, minHeight: agendaHeights[agendaIndex], borderRadius: 28, padding: 0 },
-            data: {
-              contentSignature: buildNodeContentSignature([
-                agenda.id,
-                agenda.title,
-                agenda.status,
-                editingAgendaId === agenda.id,
-                remoteAgendaEditPresence?.updated_at || "",
-                ...(agenda.keywords || []),
-                ...(agenda.summaryBullets || []),
-              ]),
-              label: makeAgendaNodeLabel(
-                agenda.title,
-                stripLeadingTimestamp(agenda.summaryBullets[0] || "요약이 아직 없습니다."),
-                agenda.status,
-                agenda.keywords || [],
-                Boolean(remoteAgendaEditPresence),
-                (event) => {
-                  event.stopPropagation();
-                  handleQuickEditAgenda(agenda);
-                },
-              ),
-            },
-          };
-        }),
-        ...(agendaDragPreview
-          ? agendaModels
-              .filter((agenda) => agenda.id === agendaDragPreview.agendaId)
-              .map((agenda) => {
-                const agendaIndex = agendaIndexById.get(agenda.id) ?? 0;
-                const agendaHeight = agendaHeights[Math.max(0, agendaIndex)] || 160;
-                return {
-                  id: `agenda-drag-placeholder-${agenda.id}`,
-                  position: agendaDragPreview.originPosition,
-                  positionSource: "persisted" as const,
-                  sourcePosition: Position.Bottom,
-                  targetPosition: Position.Top,
-                  className: "imms-agenda-drag-placeholder rounded-[28px] border border-dashed border-fuchsia-300 bg-fuchsia-50/70 shadow-[0_18px_40px_rgba(161,58,184,0.10)]",
-                  style: { width: 300, minHeight: agendaHeight, borderRadius: 28, padding: 0 },
-                  draggable: false,
-                  selectable: false,
-                  zIndex: 0,
-                  data: {
-                    contentSignature: buildNodeContentSignature([
-                      "agenda-placeholder",
-                      agenda.id,
-                      agenda.title,
-                      agendaDragPreview.originPosition.x,
-                      agendaDragPreview.originPosition.y,
-                    ]),
-                    label: (
-                      <div className="p-5">
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
-                          기존 위치
-                        </p>
-                        <p className="mt-2 text-lg font-semibold leading-7 text-slate-800">{agenda.title}</p>
-                        <p className="mt-2 text-sm leading-6 text-slate-500">
-                          드롭하면 아래 콘텐츠와 함께 이동합니다.
-                        </p>
-                      </div>
-                    ),
-                  },
-                };
-              })
-          : []),
-        ...(ideationDropPreview
-          ? [
-              {
-                id: "ideation-drop-placeholder",
-                position: ideationDropPreview.position,
-                positionSource: "computed" as const,
-                sourcePosition: Position.Right,
-                targetPosition: Position.Left,
-                className: "imms-ideation-drop-placeholder pointer-events-none !border-0 !bg-transparent !p-0 !shadow-none",
-                style: {
-                  width: CANVAS_ITEM_NODE_WIDTH,
-                  height: 158,
-                  background: "transparent",
-                  border: "none",
-                  boxShadow: "none",
-                  padding: 0,
-                },
-                draggable: false,
-                selectable: false,
-                zIndex: 1,
-                data: {
-                  contentSignature: buildNodeContentSignature([
-                    "ideation-drop-placeholder",
-                    ideationDropPreview.draggedItemId,
-                    ideationDropPreview.targetId,
-                    ideationDropPreview.mode,
-                    ideationDropPreview.agendaId,
-                    ideationDropPreview.position.x,
-                    ideationDropPreview.position.y,
-                  ]),
-                  label: (
-                    <div className="flex h-full min-h-[158px] flex-col items-center justify-center rounded-[18px] border-2 border-dashed border-[#a13ab8]/55 bg-[#f7ecfb]/80 px-5 py-4 text-center shadow-[inset_0_0_0_5px_rgba(161,58,184,0.08),0_16px_34px_rgba(161,58,184,0.12)]">
-                      <p className="text-[15px] font-semibold text-[#a13ab8]">{ideationDropPreview.label}</p>
-                      <p className="mt-2 text-[13px] leading-5 text-[#4d4d4d]">{ideationDropPreview.hint}</p>
-                    </div>
-                  ),
-                },
-              },
-            ]
-          : []),
-        ...visibleCanvasItems.map((item, index) => {
-          const nodeId = `canvas-item-${item.id}`;
-          const displayItem =
-            isTopicCanvasItem(item)
-              ? {
-                  ...item,
-                  topic_collapsed: getTopicCollapsed(item),
-                }
-              : item;
-          const highlighted =
-            focusedCanvasItemId === item.id ||
-            (isTopicCanvasItem(item) && latestHighlightedTopicId === item.id);
-          const computedPosition = computedCanvasPositions.get(item.id);
-          const preferredPosition = computedPosition;
-          const positionSource: CanvasNodeDescriptor["positionSource"] =
-            computedPosition ? "computed" : "fallback";
-          const linkedAgendaTitle = agendaTitleById.get(item.agenda_id || "") || "";
-          const itemHeight = canvasItemHeights.get(item.id) || estimateCanvasItemNodeHeight(item);
-          const fallbackPosition = {
-            x: 180 + ((index % 3) * (CANVAS_ITEM_NODE_WIDTH + 36)),
-            y: 320 + Math.floor(index / 3) * (itemHeight + CANVAS_TOP_LEVEL_GAP_Y),
-          };
-          const remoteCanvasItemEditPresence =
-            remoteEditPresenceByKey[makeEditPresenceKey("canvas_item", item.id)] || null;
-
-          return {
-            id: nodeId,
-            position: preferredPosition || fallbackPosition,
-            positionSource,
-            sourcePosition: Position.Bottom,
-            targetPosition: Position.Top,
-            className: "nopan imms-canvas-node-drag-handle !border-0 !bg-transparent !p-0 !shadow-none",
-            style: {
-              width: CANVAS_ITEM_NODE_WIDTH,
-              height: itemHeight,
-              background: "transparent",
-              border: "none",
-              boxShadow: "none",
-              padding: 0,
-            },
-            data: {
-              contentSignature: buildNodeContentSignature([
-                item.id,
-                item.kind,
-                item.status || "",
-                item.title,
-                item.body,
-                ...(item.keywords || []),
-                item.agenda_id,
-                item.point_id,
-                item.parent_topic_id || "",
-                isTopicCanvasItem(item) && getTopicCollapsed(item) ? "collapsed" : "expanded",
-                highlighted,
-                ...(item.child_item_ids || []),
-                selectedCanvasItemId === item.id,
-                editingCanvasItemId === item.id,
-                remoteCanvasItemEditPresence?.updated_at || "",
-              ]),
-              label: makeCanvasItemNodeLabel(
-                displayItem,
-                selectedCanvasItemId === item.id,
-                linkedAgendaTitle,
-                handleToggleTopicCollapsed,
-                (event) => {
-                  event.stopPropagation();
-                  handleQuickEditCanvasItem(item);
-                },
-                Boolean(remoteCanvasItemEditPresence),
-                highlighted,
-              ),
-            },
-          };
-        }),
-      ],
-    };
+    return buildIdeationCanvasBlueprint({
+      agendaDragPreview,
+      agendaIndexById,
+      agendaModels,
+      canvasItems,
+      editingAgendaId,
+      editingCanvasItemId,
+      focusedCanvasItemId,
+      getTopicCollapsed,
+      handleQuickEditAgenda,
+      handleQuickEditCanvasItem,
+      handleToggleTopicCollapsed,
+      ideationDropPreview,
+      ideationGraphLayout,
+      latestHighlightedTopicId,
+      nodePositions,
+      remoteEditPresenceByKey,
+      selectedCanvasItemId,
+      stage,
+    });
   }, [
     stage,
     ideationBubbleVisuals,
