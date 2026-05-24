@@ -49,6 +49,9 @@ import {
   SelectedEdgePopover,
   SolutionStagePendingOverlay,
 } from "@/components/canvas/CanvasStatusOverlays";
+import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
+import { CanvasHeader } from "@/components/canvas/CanvasHeader";
+import { CanvasQuickAskPanel } from "@/components/canvas/CanvasQuickAskPanel";
 import {
   ProblemCanvasToolbar,
   ProblemStructureFloatingToolbar,
@@ -65,6 +68,7 @@ import {
   type PendingIdeationDragFrame,
   type ProblemIdeaDropPreviewState,
 } from "@/components/canvas/useCanvasRuntimeState";
+import { useCanvasEndMeetingState } from "@/components/canvas/useCanvasEndMeetingState";
 import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
@@ -5017,14 +5021,18 @@ export default function MeetingCanvasTab({
   } = useCanvasUiState({
     solutionPaneMeasureKey: stage,
   });
-  const [endMeetingConfirmOpen, setEndMeetingConfirmOpen] = useState(false);
-  const [endMeetingSaving, setEndMeetingSaving] = useState(false);
-  const [endMeetingPreview, setEndMeetingPreview] = useState<{
-    finalCount: number;
-    topicCount: number;
-    solutionTopics: SolutionTopicViewModel[];
-  } | null>(null);
-  const [endMeetingSummaryPreviewMarkdown, setEndMeetingSummaryPreviewMarkdown] = useState("");
+  const {
+    endMeetingConfirmOpen,
+    endMeetingSaving,
+    setEndMeetingSaving,
+    endMeetingPreview,
+    endMeetingSummaryPreviewMarkdown,
+    resetEndMeetingState,
+    openEndMeetingConfirm,
+    showEndMeetingSummaryPreview,
+    handleCancelEndMeeting,
+    handleBackToEndMeetingConfirm,
+  } = useCanvasEndMeetingState<SolutionTopicViewModel>();
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef, ideationLeftFlowRef, ideationRightFlowRef } = useCanvasFlowRefs();
   const ideationLeftPaneRef = useRef<HTMLDivElement | null>(null);
@@ -5664,9 +5672,7 @@ export default function MeetingCanvasTab({
     setIdeaCreateStack(0);
     setCustomGroups([]);
     resetMeetingGoalState();
-    setEndMeetingConfirmOpen(false);
-    setEndMeetingSaving(false);
-    setEndMeetingPreview(null);
+    resetEndMeetingState();
     onMeetingGoalChange("");
     onMeetingGoalContextChange("");
     setCustomGroupDraftTitle("");
@@ -5753,6 +5759,7 @@ export default function MeetingCanvasTab({
     problemIdeaPointerDragRef,
     remoteNodePreviewFrameRef,
     remoteNodePreviewTargetsRef,
+    resetEndMeetingState,
     resetMeetingGoalState,
     setAgendaDragPreview,
     setPlacementFeedback,
@@ -14583,12 +14590,11 @@ export default function MeetingCanvasTab({
       endingSolutionTopics,
       getEndingFinalSummaryDocumentSnapshot(),
     );
-    setEndMeetingPreview({
+    openEndMeetingConfirm({
       finalCount: finalSolutionSummary.final_count,
       topicCount: finalSolutionSummary.sections?.length || finalSolutionSummary.topics.length,
       solutionTopics: endingSolutionTopics,
     });
-    setEndMeetingConfirmOpen(true);
   };
 
   const handleDownloadEndMeetingSummaryPdf = () => {
@@ -14597,19 +14603,6 @@ export default function MeetingCanvasTab({
     if (!printStarted) {
       alert("PDF 저장 화면을 열 수 없습니다. 브라우저 인쇄 메뉴에서 직접 PDF로 저장해 주세요.");
     }
-  };
-
-  const handleCancelEndMeeting = () => {
-    if (endMeetingSaving) return;
-    setEndMeetingConfirmOpen(false);
-    setEndMeetingPreview(null);
-    setEndMeetingSummaryPreviewMarkdown("");
-  };
-
-  const handleBackToEndMeetingConfirm = () => {
-    if (endMeetingSaving) return;
-    setEndMeetingSummaryPreviewMarkdown("");
-    setEndMeetingConfirmOpen(true);
   };
 
   const handleSaveAndEndMeeting = async (finalSummarySnapshot: CanvasFinalSolutionSummary) => {
@@ -14641,9 +14634,7 @@ export default function MeetingCanvasTab({
 
     try {
       await onEndMeeting?.();
-      setEndMeetingConfirmOpen(false);
-      setEndMeetingPreview(null);
-      setEndMeetingSummaryPreviewMarkdown("");
+      resetEndMeetingState();
     } catch (error) {
       console.error("Failed to end meeting after final summary save:", error);
       alert("회의 종료에 실패했습니다.");
@@ -14656,8 +14647,7 @@ export default function MeetingCanvasTab({
     if (endMeetingSaving) return;
     const finalSummarySnapshot = getEndingFinalSummaryDocumentSnapshot();
     if (finalSummarySnapshot.markdown.trim()) {
-      setEndMeetingConfirmOpen(false);
-      setEndMeetingSummaryPreviewMarkdown(finalSummarySnapshot.markdown);
+      showEndMeetingSummaryPreview(finalSummarySnapshot.markdown);
       return;
     }
     await handleSaveAndEndMeeting(finalSummarySnapshot);
@@ -14781,12 +14771,6 @@ export default function MeetingCanvasTab({
       ? "hidden pointer-events-none -translate-x-8 px-0 py-0 opacity-0"
       : `${rightDrawerShowsDetailPanel ? "border-t-4 border-[#d5d5d5]" : ""} translate-x-0 opacity-100`
   }`;
-  const quickAskLauncherClassName = rightDrawerCollapsed
-    ? "absolute bottom-5 left-1/2 z-50 flex h-[62px] w-12 -translate-x-1/2 flex-col items-center justify-center rounded-[16px] border border-black/10 bg-white text-[11px] font-semibold leading-tight text-[#a13ab8] shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition hover:-translate-y-0.5 hover:bg-[#f7ecfb] focus:outline-none focus:ring-4 focus:ring-[#a13ab8]/10"
-    : "absolute bottom-4 left-4 right-4 z-50 flex min-h-[48px] items-center justify-between gap-3 rounded-[14px] border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-[#4d4d4d] shadow-[0_8px_24px_rgba(0,0,0,0.10)] transition hover:-translate-y-0.5 hover:border-[#a13ab8]/20 hover:bg-[#f7ecfb] focus:outline-none focus:ring-4 focus:ring-[#a13ab8]/10";
-  const quickAskPanelClassName = rightDrawerCollapsed
-    ? "absolute bottom-20 right-2 z-50 flex w-[min(26rem,calc(100vw-1.5rem))] max-h-[min(620px,72vh)] flex-col overflow-hidden rounded-[18px] border border-black/10 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.24)]"
-    : "absolute bottom-20 right-4 z-50 flex w-[min(28rem,calc(100vw-2rem))] max-h-[min(620px,72vh)] flex-col overflow-hidden rounded-[18px] border border-black/10 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.24)]";
   const workspaceGridColumns = rightDrawerCollapsed
     ? "minmax(0, 1fr) clamp(3.5rem, 4.2vw, 4.5rem)"
     : `minmax(0, 1fr) ${rightDrawerExpandedWidth}`;
@@ -16145,205 +16129,44 @@ export default function MeetingCanvasTab({
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
       <section className="flex h-full min-h-0 flex-col bg-[#f9f9f9]">
-        <div className="relative z-20 border border-black/10 bg-white shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-          <div className="grid min-h-[clamp(96px,13vh,141px)] grid-cols-1 items-center justify-items-center gap-3 px-[clamp(16px,2.4vw,33px)] py-[clamp(12px,1.8vh,16px)] lg:grid-cols-[minmax(0,1fr)_minmax(260px,1.35fr)_minmax(0,1fr)] lg:justify-items-stretch">
-            <div className="flex w-full flex-wrap items-center justify-center gap-2 lg:justify-start lg:justify-self-start">
-              <button
-                type="button"
-                onClick={() => void handleEndMeetingClick()}
-                disabled={endMeetingSaving}
-                className="h-[clamp(36px,4.4vh,43px)] rounded-[8px] bg-[#ef4e4e] px-[clamp(14px,1.7vw,24px)] text-[clamp(16px,1.2vw,20px)] font-semibold text-white hover:bg-[#df3f3f] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {endMeetingSaving ? "종료 중" : "종료"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (isRecording) {
-                    void handleStopRecordingClick();
-                  } else {
-                    void onToggleRecording?.();
-                  }
-                }}
-                className={`h-[clamp(36px,4.4vh,43px)] rounded-[8px] px-[clamp(12px,1.2vw,16px)] text-[clamp(12px,0.95vw,14px)] font-semibold ${
-                  isRecording
-                    ? "bg-red-50 text-[#ef4e4e] ring-1 ring-red-100"
-                    : "border border-[#ead0f2] bg-[#f4e8fb] text-[#6f2b7d] hover:border-[#d9b7e5] hover:bg-[#ecd9f7]"
-                }`}
-              >
-                {isRecording ? "녹음 중지" : "녹음 시작"}
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push("/dashboard")}
-                className="h-[clamp(36px,4.4vh,43px)] rounded-[8px] bg-[#eff0f6] px-[clamp(10px,1vw,12px)] text-[clamp(12px,0.95vw,14px)] font-semibold text-[#4d4d4d] hover:bg-[#e3e5ee]"
-              >
-                메인화면으로 돌아가기
-              </button>
-              {stage === "ideation" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIdeationBubbleLayoutRevision((current) => current + 1);
-                      setActivityMessage("아이디어 버블 배치를 다시 계산했습니다.");
-                    }}
-                    className="h-[clamp(36px,4.4vh,43px)] rounded-[8px] border border-black/10 bg-white px-[clamp(10px,1vw,12px)] text-[clamp(12px,0.95vw,14px)] font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#6f2b7d]"
-                  >
-                    버블 재배치
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={ideationBubbleDebugEnabled}
-                    onClick={() => setIdeationBubbleDebugEnabled((current) => !current)}
-                    className={`h-[clamp(36px,4.4vh,43px)] rounded-[8px] border px-[clamp(10px,1vw,12px)] text-[clamp(12px,0.95vw,14px)] font-semibold transition ${
-                      ideationBubbleDebugEnabled
-                        ? "border-[#ead0f2] bg-[#f4e8fb] text-[#6f2b7d] hover:bg-[#ecd9f7]"
-                        : "border-black/10 bg-white text-[#4d4d4d] hover:bg-[#f7ecfb] hover:text-[#6f2b7d]"
-                    }`}
-                  >
-                    {ideationBubbleDebugEnabled ? "디버그 ON" : "디버그"}
-                  </button>
-                </>
-              ) : null}
-              {isProblemDefinitionExploreStage ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleRefreshProblemChunkSummaries()}
-                    disabled={busy || problemDefinitionStagePending}
-                    className="h-[clamp(36px,4.4vh,43px)] rounded-[8px] border border-[#ead0f2] bg-[#f4e8fb] px-[clamp(10px,1vw,12px)] text-[clamp(12px,0.95vw,14px)] font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    요약캐시 재생성
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDebugRegenerateProblemDefinition()}
-                    disabled={busy || problemDefinitionStagePending}
-                    className="h-[clamp(36px,4.4vh,43px)] rounded-[8px] border border-black/10 bg-white px-[clamp(10px,1vw,12px)] text-[clamp(12px,0.95vw,14px)] font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#6f2b7d] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    디버그 재생성
-                  </button>
-                </>
-              ) : null}
-            </div>
-
-            <div className="relative min-w-0 justify-self-center text-center">
-              <div className="flex items-center justify-center gap-2 text-[clamp(14px,1.2vw,20px)] font-normal leading-[1.25] text-[#4d4d4d]">
-                <span>{meetingTitle || "회의 제목"}</span>
-                <span className={`h-2.5 w-2.5 rounded-full ${isRecording ? "bg-[#34c759]" : "bg-[#d9d9d9]"}`} />
-              </div>
-              <button
-                type="button"
-                onClick={meetingGoalEditorOpen ? handleCancelMeetingGoalEdit : handleOpenMeetingGoalEditor}
-                className="mx-auto mt-2 block w-full max-w-[min(760px,100%)] rounded-xl border border-transparent px-3 py-1 text-center transition hover:border-black/10 hover:bg-[#f9f9f9] focus:border-[#a13ab8]/30 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#a13ab8]/10"
-              >
-                <span
-                  className={`block truncate text-[clamp(20px,2.2vw,32px)] font-semibold leading-[1.2] tracking-normal ${
-                    meetingGoalDraft.trim() ? "text-black" : "text-black/30"
-                  }`}
-                >
-                  {meetingGoalDraft.trim() || "회의 목표를 입력해 주세요"}
-                </span>
-                <span className="mt-1 block truncate text-[clamp(11px,0.85vw,13px)] font-normal leading-[1.35] text-[#4d4d4d]">
-                  {meetingGoalContextDraft.trim()
-                    ? `관련 맥락: ${meetingGoalContextDraft.trim()}`
-                    : "클릭해서 회의 목표와 관련 맥락을 입력"}
-                </span>
-              </button>
-
-              {meetingGoalEditorOpen ? (
-                <div className="absolute left-1/2 top-[calc(100%+12px)] z-30 w-[min(560px,calc(100vw-32px))] -translate-x-1/2 rounded-[16px] border border-black/10 bg-white p-4 text-left shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)]">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-[18px] font-semibold leading-[24.811px] text-black">회의 목표 설정</p>
-                      <p className="mt-1 text-[13px] leading-5 text-[#4d4d4d]">
-                        입력한 내용은 저장을 누른 뒤 STT와 AI 분석의 참고 정보로 사용됩니다.
-                      </p>
-                    </div>
-                  </div>
-                  <label className="mt-4 block">
-                    <span className="text-xs font-semibold text-[#4d4d4d]">회의 목표</span>
-                    <input
-                      value={meetingGoalEditorDraft}
-                      onChange={(event) => {
-                        const nextGoal = event.target.value;
-                        setMeetingGoalEditorDraft(nextGoal);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          handleCancelMeetingGoalEdit();
-                        }
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void handleSaveMeetingGoalEdit();
-                        }
-                      }}
-                      placeholder="예: 신규 회의 관리 시스템의 핵심 기능 우선순위 결정"
-                      className="mt-2 w-full rounded-[12px] border border-black/10 bg-[#f9f9f9] px-4 py-3 text-[16px] leading-6 text-black outline-none transition placeholder:text-black/30 focus:border-[#a13ab8]/30 focus:bg-white focus:ring-2 focus:ring-[#a13ab8]/10"
-                    />
-                  </label>
-                  <label className="mt-3 block">
-                    <span className="text-xs font-semibold text-[#4d4d4d]">관련 맥락</span>
-                    <textarea
-                      value={meetingGoalContextEditorDraft}
-                      onChange={(event) => {
-                        const nextContext = event.target.value;
-                        setMeetingGoalContextEditorDraft(nextContext);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          handleCancelMeetingGoalEdit();
-                        }
-                      }}
-                      placeholder="회의에서 자주 나올 제품명, 고유명사, 참가자 역할, 논의 범위 등을 입력해 주세요."
-                      className="mt-2 min-h-[92px] w-full resize-none rounded-[12px] border border-black/10 bg-[#f9f9f9] px-4 py-3 text-[15px] leading-6 text-[#4d4d4d] outline-none transition placeholder:text-black/30 focus:border-[#a13ab8]/30 focus:bg-white focus:ring-2 focus:ring-[#a13ab8]/10"
-                    />
-                  </label>
-                  <div className="mt-4 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={handleCancelMeetingGoalEdit}
-                      disabled={meetingGoalSaving}
-                      className="rounded-[8px] bg-[#eff0f6] px-4 py-2 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#e3e5ee] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      취소
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveMeetingGoalEdit()}
-                      disabled={meetingGoalSaving}
-                      className="rounded-[8px] border border-[#ead0f2] bg-[#f4e8fb] px-5 py-2 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {meetingGoalSaving ? "저장 중" : "저장"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="flex w-full flex-wrap items-center justify-center gap-3 lg:justify-end lg:justify-self-end">
-              <div className="flex flex-wrap items-center justify-center gap-[clamp(8px,1.4vw,20px)]">
-                {(["ideation", "problem-definition", "solution"] as CanvasStage[]).map((item, index) => (
-                  <div key={item} className="flex items-center gap-[clamp(6px,1vw,16px)]">
-                    <button
-                      type="button"
-                      onClick={() => void handleStageSelect(item)}
-                      className={`rounded-[8px] border px-[clamp(12px,1.2vw,16px)] py-[clamp(7px,0.9vh,8px)] text-[clamp(14px,1.2vw,20px)] font-semibold leading-[1.25] transition ${
-                        stage === item
-                          ? "border-[#a13ab8]/20 bg-[rgba(161,58,184,0.1)] text-[#a13ab8]"
-                          : "border-black/10 bg-white text-black/50 hover:border-[#a13ab8]/20 hover:bg-[rgba(161,58,184,0.1)] hover:text-[#a13ab8]"
-                      }`}
-                    >
-                      {stageLabel(item)}
-                    </button>
-                    {index < 2 ? <span className="text-[clamp(18px,1.5vw,24px)] text-black/30">›</span> : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-            </div>
+        <CanvasHeader
+          meetingTitle={meetingTitle}
+          isRecording={isRecording}
+          endMeetingSaving={endMeetingSaving}
+          stage={stage}
+          busy={busy}
+          problemDefinitionStagePending={problemDefinitionStagePending}
+          isProblemDefinitionExploreStage={isProblemDefinitionExploreStage}
+          ideationBubbleDebugEnabled={ideationBubbleDebugEnabled}
+          meetingGoalDraft={meetingGoalDraft}
+          meetingGoalContextDraft={meetingGoalContextDraft}
+          meetingGoalEditorOpen={meetingGoalEditorOpen}
+          meetingGoalEditorDraft={meetingGoalEditorDraft}
+          meetingGoalContextEditorDraft={meetingGoalContextEditorDraft}
+          meetingGoalSaving={meetingGoalSaving}
+          onEndMeetingClick={() => void handleEndMeetingClick()}
+          onRecordingToggle={() => {
+            if (isRecording) {
+              void handleStopRecordingClick();
+              return;
+            }
+            void onToggleRecording?.();
+          }}
+          onBackToDashboard={() => router.push("/dashboard")}
+          onRecomputeIdeationBubbles={() => {
+            setIdeationBubbleLayoutRevision((current) => current + 1);
+            setActivityMessage("아이디어 버블 배치를 다시 계산했습니다.");
+          }}
+          onToggleIdeationBubbleDebug={() => setIdeationBubbleDebugEnabled((current) => !current)}
+          onRefreshProblemChunkSummaries={() => void handleRefreshProblemChunkSummaries()}
+          onDebugRegenerateProblemDefinition={() => void handleDebugRegenerateProblemDefinition()}
+          onOpenMeetingGoalEditor={handleOpenMeetingGoalEditor}
+          onCancelMeetingGoalEdit={handleCancelMeetingGoalEdit}
+          onSaveMeetingGoalEdit={() => void handleSaveMeetingGoalEdit()}
+          onMeetingGoalEditorDraftChange={setMeetingGoalEditorDraft}
+          onMeetingGoalContextEditorDraftChange={setMeetingGoalContextEditorDraft}
+          onStageSelect={(nextStage) => void handleStageSelect(nextStage)}
+        />
 
         <div
           className="imms-workspace-grid grid flex-1 min-h-0 grid-cols-1 overflow-y-auto bg-black/10 xl:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:overflow-hidden xl:gap-[clamp(0.25rem,0.45vw,0.5rem)] xl:border-x xl:border-b xl:border-black/10"
@@ -16704,220 +16527,35 @@ export default function MeetingCanvasTab({
             )}
             </RightDrawerPanel>
             </div>
-            {quickAskOpen ? (
-              <div className={quickAskPanelClassName}>
-                <div className="flex items-start justify-between gap-4 border-b border-black/10 px-4 py-3.5">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">LLM Search</p>
-                    <h4 className="mt-1 text-base font-semibold leading-tight text-black">LLM 및 검색</h4>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setQuickAskOpen(false)}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#eff0f6] text-lg leading-none text-[#4d4d4d] transition hover:bg-[#e3e5ee]"
-                    aria-label="LLM 및 검색 닫기"
-                  >
-                    ×
-                  </button>
-                </div>
-                <div ref={quickAskScrollRef} className="imms-overlay-scroll flex-1 space-y-3 overflow-y-auto bg-[#f7f8fb] px-4 py-4">
-                  {quickAskMessages.length === 0 ? (
-                    <div className="rounded-[14px] border border-dashed border-black/10 bg-white px-4 py-5 text-sm leading-6 text-[#6f6f6f]">
-                      아직 질문이 없습니다.
-                    </div>
-                  ) : (
-                    quickAskMessages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[86%] rounded-[14px] px-3.5 py-3 text-sm leading-6 shadow-sm ${
-                            message.role === "user"
-                              ? "bg-[#a13ab8] text-white"
-                              : message.status === "error"
-                              ? "border border-red-100 bg-red-50 text-red-700"
-                              : "border border-black/10 bg-white text-[#2f3440]"
-                          }`}
-                        >
-                          <div className="whitespace-pre-wrap">{message.text}</div>
-                          <div
-                            className={`mt-2 flex items-center gap-2 text-[11px] ${
-                              message.role === "user" ? "text-white/70" : "text-[#8b8f9a]"
-                            }`}
-                          >
-                            <span>{message.createdAt}</span>
-                            {message.status === "pending" ? <span>처리 중</span> : null}
-                            {message.warning && message.status === "done" ? <span>주의 있음</span> : null}
-                          </div>
-                          {message.warning && message.status === "done" ? (
-                            <p className="mt-2 rounded-[10px] bg-[#fff8e8] px-2.5 py-2 text-xs leading-5 text-[#8a6516]">
-                              {message.warning}
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <form onSubmit={handleSubmitQuickAsk} className="border-t border-black/10 bg-white p-3">
-                  <textarea
-                    value={quickAskDraft}
-                    onChange={(event) => setQuickAskDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        handleSubmitQuickAsk();
-                      }
-                    }}
-                    placeholder="질문 입력"
-                    className="min-h-[78px] w-full resize-none rounded-[12px] border border-black/10 bg-[#f9f9f9] px-3.5 py-3 text-sm leading-6 text-black outline-none transition placeholder:text-black/30 focus:border-[#a13ab8]/30 focus:bg-white focus:ring-2 focus:ring-[#a13ab8]/10"
-                  />
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <span className="text-[11px] font-medium text-[#8b8f9a]">
-                      {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "LLM 응답"}
-                    </span>
-                    <button
-                      type="submit"
-                      disabled={!quickAskDraft.trim()}
-                      className="rounded-[10px] border border-[#ead0f2] bg-[#f4e8fb] px-4 py-2 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      보내기
-                    </button>
-                  </div>
-                </form>
-              </div>
-            ) : null}
-            <button
-              type="button"
-              onClick={handleToggleQuickAsk}
-              className={quickAskLauncherClassName}
-              title="LLM 및 검색"
-            >
-              {rightDrawerCollapsed ? (
-                <span className="relative">
-                  <span className="block">LLM</span>
-                  <span className="block text-[10px] font-medium leading-tight text-[#777]">검색</span>
-                  {quickAskUnreadCount > 0 || quickAskPendingCount > 0 ? (
-                    <span className="absolute -right-2.5 -top-2.5 h-3 w-3 rounded-full border-2 border-white bg-[#a13ab8]" />
-                  ) : null}
-                </span>
-              ) : (
-                <>
-                  <span className="flex flex-col leading-tight">
-                    <span className="text-[#a13ab8]">LLM 및 검색</span>
-                    <span className="mt-0.5 text-[11px] font-medium text-[#777]">바로 질문하고 응답 확인</span>
-                  </span>
-                  <span className="rounded-full bg-[#f4e8fb] px-2.5 py-1 text-[11px] font-semibold text-[#a13ab8]">
-                    {quickAskPendingCount > 0
-                      ? `${quickAskPendingCount}개 처리 중`
-                      : quickAskUnreadCount > 0
-                      ? `새 응답 ${quickAskUnreadCount}`
-                      : "바로 질문"}
-                  </span>
-                </>
-              )}
-            </button>
+            <CanvasQuickAskPanel
+              open={quickAskOpen}
+              rightDrawerCollapsed={rightDrawerCollapsed}
+              messages={quickAskMessages}
+              draft={quickAskDraft}
+              unreadCount={quickAskUnreadCount}
+              pendingCount={quickAskPendingCount}
+              scrollRef={quickAskScrollRef}
+              onClose={() => setQuickAskOpen(false)}
+              onToggle={handleToggleQuickAsk}
+              onDraftChange={setQuickAskDraft}
+              onSubmit={handleSubmitQuickAsk}
+            />
           </div>
         </div>
       </section>
 
-      {endMeetingConfirmOpen ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4">
-          <div className="w-full max-w-[560px] overflow-hidden rounded-[18px] border border-black/10 bg-white shadow-2xl">
-            <div className="border-b border-black/10 px-7 py-6">
-              <p className="text-sm font-semibold text-[#ef4e4e]">회의 종료 확인</p>
-              <h2 className="mt-2 text-2xl font-semibold text-black">
-                {(endMeetingPreview?.finalCount || 0) > 0 ? "회의를 종료할까요?" : "최종 결과 없이 종료할까요?"}
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-[#4d4d4d]">
-                {(endMeetingPreview?.finalCount || 0) > 0
-                  ? `최종 결과 ${endMeetingPreview?.finalCount || 0}개가 대시보드 결과 확인에 저장됩니다.`
-                  : "현재 최종 결과로 선택된 항목이 없습니다. 그대로 종료하면 대시보드 결과 확인에 표시할 내용이 없습니다."}
-              </p>
-            </div>
-            <div className="space-y-3 px-7 py-5">
-              <div className="rounded-[14px] bg-[#f9f9f9] px-4 py-3">
-                <div className="flex items-center justify-between gap-4 text-sm">
-                  <span className="font-medium text-[#4d4d4d]">저장될 최종 항목</span>
-                  <span className="font-semibold text-black">{endMeetingPreview?.finalCount || 0}개</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-4 text-sm">
-                  <span className="font-medium text-[#4d4d4d]">포함된 해결책 그룹</span>
-                  <span className="font-semibold text-black">{endMeetingPreview?.topicCount || 0}개</span>
-                </div>
-              </div>
-              {(endMeetingPreview?.finalCount || 0) === 0 ? (
-                <p className="rounded-[14px] border border-[#f0c6c6] bg-[#fff5f5] px-4 py-3 text-sm font-medium leading-6 text-[#b23b3b]">
-                  결과를 남기려면 해결책 단계에서 카드의 `최종 결론` 표시를 먼저 선택해 주세요.
-                </p>
-              ) : null}
-            </div>
-            <div className="flex justify-end gap-3 border-t border-black/10 px-7 py-5">
-              <button
-                type="button"
-                onClick={handleCancelEndMeeting}
-                disabled={endMeetingSaving}
-                className="inline-flex h-11 items-center justify-center rounded-[12px] bg-[#eff0f6] px-5 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#e3e5ee] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                돌아가기
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleConfirmEndMeeting()}
-                disabled={endMeetingSaving}
-                className="inline-flex h-11 items-center justify-center rounded-[12px] bg-[#ef4e4e] px-5 text-sm font-semibold text-white transition hover:bg-[#df3f3f] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {endMeetingSaving ? "저장 중" : (endMeetingPreview?.finalCount || 0) > 0 ? "저장하고 종료" : "결과 없이 종료"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {endMeetingSummaryPreviewMarkdown ? (
-        <div className="fixed inset-0 z-[85] flex flex-col bg-[#f5f6f8]">
-          <div className="flex min-h-[64px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Preview</p>
-              <h2 className="mt-1 truncate text-lg font-semibold text-black">최종 정리 문서</h2>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={handleDownloadEndMeetingSummaryPdf}
-                disabled={endMeetingSaving}
-                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-[#ead0f2] bg-[#f4e8fb] px-4 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                PDF 다운
-              </button>
-              <button
-                type="button"
-                onClick={handleBackToEndMeetingConfirm}
-                disabled={endMeetingSaving}
-                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-black/10 bg-white px-4 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#6f2b7d] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                돌아가기
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSaveAndEndMeeting(getEndingFinalSummaryDocumentSnapshot())}
-                disabled={endMeetingSaving}
-                className="inline-flex h-10 items-center justify-center rounded-[10px] bg-[#ef4e4e] px-4 text-sm font-semibold text-white transition hover:bg-[#df3f3f] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {endMeetingSaving ? "저장 중" : "저장하고 종료"}
-              </button>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 p-4">
-            <iframe
-              title="최종 정리 문서 미리보기"
-              srcDoc={endMeetingSummaryPreviewHtml}
-              className="h-full w-full rounded-[16px] border border-black/10 bg-white shadow-[0_20px_70px_rgba(15,23,42,0.09)]"
-            />
-          </div>
-        </div>
-      ) : null}
+      <CanvasEndMeetingDialogs
+        confirmOpen={endMeetingConfirmOpen}
+        saving={endMeetingSaving}
+        preview={endMeetingPreview}
+        summaryPreviewMarkdown={endMeetingSummaryPreviewMarkdown}
+        summaryPreviewHtml={endMeetingSummaryPreviewHtml}
+        onCancel={handleCancelEndMeeting}
+        onConfirm={() => void handleConfirmEndMeeting()}
+        onDownloadPdf={handleDownloadEndMeetingSummaryPdf}
+        onBackToConfirm={handleBackToEndMeetingConfirm}
+        onSaveAndEnd={() => void handleSaveAndEndMeeting(getEndingFinalSummaryDocumentSnapshot())}
+      />
     </div>
   );
 }
