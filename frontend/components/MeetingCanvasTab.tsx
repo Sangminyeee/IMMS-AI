@@ -15,7 +15,6 @@ import {
   confirmCanvasPlacement,
   getCanvasIdeaAssimilationWorkspaceJob,
   getCanvasProblemDiscussionWorkspaceJob,
-  generateProblemGroupConclusion,
   generateProblemStructure,
   generateCanvasProblemTaxonomy,
   generateCanvasSummaryDocument,
@@ -99,6 +98,8 @@ import { useProblemStructureEditor } from "@/components/canvas/useProblemStructu
 import { useProblemChildGeneration } from "@/components/canvas/useProblemChildGeneration";
 import { useProblemGroupActions } from "@/components/canvas/useProblemGroupActions";
 import { useProblemGroupingRationale } from "@/components/canvas/useProblemGroupingRationale";
+import { useProblemGroupRelationships } from "@/components/canvas/useProblemGroupRelationships";
+import { usePersonalNoteCanvasLinking } from "@/components/canvas/usePersonalNoteCanvasLinking";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
@@ -2022,7 +2023,6 @@ export default function MeetingCanvasTab({
   const [draggingPersonalNoteId, setDraggingPersonalNoteId] = useState("");
   const [dropProblemGroupId, setDropProblemGroupId] = useState("");
   const [, setLeftPanelTab] = useState<LeftPanelTab>("detail");
-  const [, setConclusionRefreshingGroupId] = useState("");
   const conclusionBatchBusy = false;
   const [problemDefinitionStagePending, setProblemDefinitionStagePending] = useState(false);
   const [summaryDocumentPending, setSummaryDocumentPending] = useState(false);
@@ -3326,27 +3326,6 @@ export default function MeetingCanvasTab({
     setMeetingGoalContextEditorDraft,
   ]);
 
-  const buildProblemConclusionPayload = useCallback(
-    (group: ProblemGroupViewModel) => ({
-      meeting_id: meetingId,
-      meeting_topic: meetingTopicForAi,
-      group: {
-        group_id: group.group_id,
-        topic: group.topic,
-        insight_lens: group.insight_lens,
-        agenda_titles: group.agenda_titles || [],
-        source_summary_items: group.source_summary_items || [],
-        ideas: (group.ideas || []).map((idea) => ({
-          id: idea.id,
-          kind: idea.kind,
-          title: idea.title,
-          body: idea.body,
-        })),
-      },
-    }),
-    [meetingId, meetingTopicForAi],
-  );
-
   const buildProblemGroupingRationalePayload = useCallback(
     (group: ProblemGroupViewModel) => ({
       meeting_id: meetingId,
@@ -3921,80 +3900,6 @@ export default function MeetingCanvasTab({
     };
   }, []);
 
-  const setProblemGroupsLoading = useCallback((groupIds: string[], loading: boolean) => {
-    if (groupIds.length === 0) return;
-    setLoadingProblemGroupIds((prev) => {
-      if (loading) {
-        return Array.from(new Set([...prev, ...groupIds]));
-      }
-      const removeSet = new Set(groupIds);
-      return prev.filter((groupId) => !removeSet.has(groupId));
-    });
-  }, []);
-
-  const handleGenerateProblemGroupConclusion = useCallback(
-    async (group: ProblemGroupViewModel, reason: "manual" | "drop" = "manual") => {
-      if (group.insight_user_edited && group.conclusion_user_edited) {
-        setActivityMessage("이 그룹의 Insight와 결론은 수동 수정 상태라 AI 재생성을 건너뜁니다.");
-        return;
-      }
-
-      setProblemGroupsLoading([group.group_id], true);
-      setConclusionRefreshingGroupId(group.group_id);
-      try {
-        const result = await generateProblemGroupConclusion(buildProblemConclusionPayload(group));
-        let nextGroups: ProblemGroupViewModel[] = [];
-        setProblemGroups((prev) => {
-          nextGroups = prev.map((item) =>
-            item.group_id === group.group_id
-              ? {
-                  ...item,
-                  insight_lens: item.insight_user_edited
-                    ? item.insight_lens
-                    : (result.used_llm ? result.insight_lens : "") || item.insight_lens,
-                  conclusion: item.conclusion_user_edited
-                    ? item.conclusion
-                    : result.conclusion || item.conclusion,
-                }
-              : item,
-          );
-          return nextGroups;
-        });
-        if (!sharedSyncEnabled && nextGroups.length > 0) {
-          forceBroadcastSharedCanvas({
-            stage: "problem-definition",
-            problemGroups: nextGroups,
-          });
-        }
-        if (editingProblemGroupId === group.group_id) {
-          if (!group.insight_user_edited) {
-            setProblemGroupDraftInsight((result.used_llm ? result.insight_lens : "") || group.insight_lens || "");
-          }
-          if (!group.conclusion_user_edited) {
-            setProblemGroupDraftConclusion(result.conclusion || group.conclusion);
-          }
-        }
-        setActivityMessage(
-          result.warning ||
-            (reason === "drop" ? "메모 편입 내용을 반영해 결론을 다시 생성했습니다." : "문제 정의 그룹 결론을 생성했습니다."),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setActivityMessage(`결론 생성 실패: ${message}`);
-      } finally {
-        setProblemGroupsLoading([group.group_id], false);
-        setConclusionRefreshingGroupId("");
-      }
-    },
-    [
-      buildProblemConclusionPayload,
-      editingProblemGroupId,
-      forceBroadcastSharedCanvas,
-      setProblemGroupsLoading,
-      sharedSyncEnabled,
-    ],
-  );
-
   const { handleShowProblemGroupingRationale } = useProblemGroupingRationale({
     buildProblemGroupingRationalePayload,
     meetingId,
@@ -4005,41 +3910,31 @@ export default function MeetingCanvasTab({
     setProblemGroupingRationalePendingId,
   });
 
-  const handleAttachPersonalNoteToProblemGroup = useCallback((groupId: string, noteId: string) => {
-    const note = personalNotes.find((entry) => entry.id === noteId);
-    const group = problemGroupById.get(groupId);
-    if (!note || !group) return;
-
-    if (group.ideas.some((idea) => idea.id === noteId)) {
-      setDropProblemGroupId("");
-      setDraggingPersonalNoteId("");
-      setActivityMessage("이미 편입된 메모입니다.");
-      return;
-    }
-
-    const nextGroup = {
-      ...group,
-      ideas: [
-        ...group.ideas,
-        {
-          id: note.id,
-          kind: note.kind,
-          title: note.title,
-          body: note.body,
-        },
-      ],
-    };
-
-    setProblemGroups((prev) =>
-      prev.map((item) => (item.group_id === groupId ? nextGroup : item)),
-    );
-    setSelectedProblemGroupId(groupId);
-    setSelectedNodeId(`problem-${groupId}`);
-    setLeftPanelTab("detail");
-    setDropProblemGroupId("");
-    setDraggingPersonalNoteId("");
-    void handleGenerateProblemGroupConclusion(nextGroup, "drop");
-  }, [handleGenerateProblemGroupConclusion, personalNotes, problemGroupById]);
+  const { handleAttachPersonalNoteToProblemGroup, handleCreateProblemGroupLink } = useProblemGroupRelationships({
+    buildCurrentWorkspacePatchPayload,
+    forceBroadcastSharedCanvas,
+    latestSharedWorkspaceRef,
+    meetingId,
+    persistedSharedImportedState,
+    personalNotes,
+    problemGroupById,
+    problemGroups,
+    serializeSharedProblemGroups,
+    sharedSyncEnabled,
+    stage,
+    writeSharedWorkspaceSessionCache,
+    setActivityMessage,
+    setCollapsedProblemGroupIds,
+    setDraggingPersonalNoteId,
+    setDropProblemGroupId,
+    setLeftPanelTab,
+    setPendingProblemGroupLinkId,
+    setProblemGroups,
+    setSelectedCanvasItemId,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    setSelectedProblemSourceNodeId,
+  });
 
   const getProblemIdeaDropPreviewFromPoint = useCallback(
     (clientX: number, clientY: number): ProblemIdeaDropPreviewState | null => {
@@ -8347,116 +8242,20 @@ export default function MeetingCanvasTab({
     [canvasItemById, ideationDragGhost],
   );
 
-  const linkPendingPersonalNoteToCanvasItem = (item: CanvasItemViewModel) => {
-    if (!pendingPersonalNoteLinkId) return false;
-
-    if (isTopicCanvasItem(item)) {
-      setActivityMessage("토픽 내용은 열어두고, 연결할 아이디어 노드를 선택해 주세요.");
-      return false;
-    }
-
-    if (pendingPersonalNoteLinkId === COMPOSER_PERSONAL_NOTE_LINK_ID) {
-      setComposerAgendaId(item.agenda_id || composerAgendaId);
-      setComposerLinkedCanvasItemId(item.id);
-      setComposerLinkedCanvasItemTitle(item.title || "연결 아이디어");
-      setPendingPersonalNoteLinkId("");
-      setFocusedCanvasItemId(item.id);
-      setSelectedCanvasItemId(item.id);
-      setSelectedNodeId(`canvas-item-${item.id}`);
-      setActivityMessage("작성 중인 개인 메모에 연결할 아이디어를 선택했습니다.");
-      return true;
-    }
-
-    setPersonalNotes((prev) =>
-      prev.map((note) =>
-        note.id === pendingPersonalNoteLinkId
-          ? {
-              ...note,
-              agendaId: item.agenda_id || note.agendaId,
-              linkedCanvasItemId: item.id,
-              linkedCanvasItemTitle: item.title || "연결 아이디어",
-            }
-          : note,
-      ),
-    );
-    setPendingPersonalNoteLinkId("");
-    setFocusedCanvasItemId(item.id);
-    setSelectedCanvasItemId(item.id);
-    setSelectedNodeId(`canvas-item-${item.id}`);
-    setActivityMessage("개인 메모를 선택한 아이디어 노드에 연결했습니다.");
-    return true;
-  };
-
-  const handleCreateProblemGroupLink = (sourceGroupId: string, targetGroupId: string) => {
-    if (!sourceGroupId || !targetGroupId) return false;
-    if (sourceGroupId === targetGroupId) {
-      setPendingProblemGroupLinkId("");
-      setActivityMessage("같은 문제정의 그룹에는 연결할 수 없습니다.");
-      return true;
-    }
-
-    const sourceGroup = problemGroupById.get(sourceGroupId);
-    const targetGroup = problemGroupById.get(targetGroupId);
-    if (!sourceGroup || !targetGroup) {
-      setPendingProblemGroupLinkId("");
-      setActivityMessage("연결할 문제정의 그룹을 찾지 못했습니다.");
-      return true;
-    }
-
-    if ((sourceGroup.linked_group_ids || []).includes(targetGroupId)) {
-      setSelectedProblemGroupId(targetGroupId);
-      setPendingProblemGroupLinkId("");
-      setActivityMessage("이미 연결된 문제정의 그룹입니다.");
-      return true;
-    }
-
-    const nextProblemGroups = problemGroups.map((group) =>
-      group.group_id === sourceGroupId
-        ? {
-            ...group,
-            linked_group_ids: [...new Set([...(group.linked_group_ids || []), targetGroupId])],
-          }
-        : group,
-    );
-
-    latestSharedWorkspaceRef.current = {
-      ...latestSharedWorkspaceRef.current,
-      stage,
-      problemGroups: nextProblemGroups,
-      importedState: persistedSharedImportedState,
-    };
-    setProblemGroups(nextProblemGroups);
-    setSelectedProblemGroupId(targetGroupId);
-    setSelectedProblemSourceNodeId("");
-    setSelectedCanvasItemId("");
-    setPendingProblemGroupLinkId("");
-    setActivityMessage(`"${sourceGroup.topic}"와 "${targetGroup.topic}" 문제정의 그룹을 연결했습니다.`);
-
-    if (sharedSyncEnabled) {
-      if (meetingId) {
-        writeSharedWorkspaceSessionCache(
-          meetingId,
-          buildCurrentWorkspacePatchPayload({
-            problemGroups: nextProblemGroups,
-          }),
-        );
-      }
-      forceBroadcastSharedCanvas({
-        problemGroups: nextProblemGroups,
-      });
-      if (meetingId) {
-        void saveCanvasWorkspacePatch({
-          meeting_id: meetingId,
-          problem_groups: serializeSharedProblemGroups(nextProblemGroups),
-          imported_state: persistedSharedImportedState,
-        }).catch((error) => {
-          console.error("Failed to save problem group link:", error);
-        });
-      }
-    }
-
-    return true;
-  };
+  const { linkPendingPersonalNoteToCanvasItem } = usePersonalNoteCanvasLinking({
+    composerAgendaId,
+    composerPersonalNoteLinkId: COMPOSER_PERSONAL_NOTE_LINK_ID,
+    pendingPersonalNoteLinkId,
+    setActivityMessage,
+    setComposerAgendaId,
+    setComposerLinkedCanvasItemId,
+    setComposerLinkedCanvasItemTitle,
+    setFocusedCanvasItemId,
+    setPendingPersonalNoteLinkId,
+    setPersonalNotes,
+    setSelectedCanvasItemId,
+    setSelectedNodeId,
+  });
 
   const handleCanvasNodeClick = (event: React.MouseEvent, node: Node) => {
     if (node.id.startsWith("ideation-keyword-")) {

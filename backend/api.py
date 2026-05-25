@@ -51,6 +51,7 @@ PROBLEM_TAXONOMY_CHUNK_SUMMARY_CONTEXT_CHAR_BUDGET = 2200
 PROBLEM_TAXONOMY_CHUNK_SUMMARY_MAX_ITEMS = 2
 PROBLEM_TAXONOMY_OVERVIEW_TRIGGER_CHUNKS = 12
 PROBLEM_TAXONOMY_OVERVIEW_CONTEXT_CHAR_BUDGET = 1800
+PROBLEM_TAXONOMY_OUTLINE_MAX_DEPTH = 2
 CANVAS_IDEA_FAILURE_RETRY_DELAY_SECONDS = 60
 CANVAS_IDEA_COMPACTION_MIN_VISIBLE = 6
 CANVAS_IDEA_COMPACTION_MAX_MERGES_PER_JOB = 4
@@ -2782,6 +2783,84 @@ def _normalize_problem_summary_label(raw: Any, fallback: str = "분류", max_len
     return _safe_text(text, _safe_text(fallback, "분류"))
 
 
+def _problem_taxonomy_conclusion_key(raw: Any) -> str:
+    text = _safe_text(raw).lower()
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[^\w가-힣]", "", text)
+    text = re.sub(
+        r"(이라는|라는)?(의견|논의|내용|근거|쟁점|포인트)(이다|임|입니다|이었다|였습니다)?$",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"(으로|로)?(제시|언급|확인|정리|요약)(됨|됐다|되었다|된다|되었습니다|됐습니다|됐다)$",
+        "",
+        text,
+    )
+    text = re.sub(r"(볼수있다|보인다|보입니다|판단된다|판단됩니다)$", "", text)
+    return text
+
+
+def _normalize_problem_taxonomy_conclusion(raw: Any, topic: Any = "", fallback: Any = "") -> str:
+    topic_text = _normalize_problem_summary_label(topic, "", max_len=34)
+    text = _normalize_problem_summary_label(raw, fallback or topic_text or "결론", max_len=96)
+    text = re.sub(r"\s+", " ", text).strip(" .,!?:;\"'“”‘’")
+    text = re.sub(r"(이라는|라는)?\s*(의견|논의|내용)$", "", text).strip()
+    text = re.sub(r"(으로|로)?\s*(정리됨|정리됐다|요약됨|요약됐다|확인됨|확인됐다)$", "", text).strip()
+
+    text_key = _problem_taxonomy_conclusion_key(text)
+    topic_key = _problem_taxonomy_conclusion_key(topic_text)
+    if not text_key or (topic_key and text_key == topic_key):
+        return ""
+    return text
+
+
+def _dedupe_problem_taxonomy_conclusions(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen_keys: set[str] = set()
+    for group in groups:
+        topic = group.get("topic", "")
+        source_items = group.get("source_summary_items") if isinstance(group.get("source_summary_items"), list) else []
+        candidates = [
+            group.get("conclusion"),
+            group.get("insight_lens"),
+            *source_items,
+        ]
+        conclusion = ""
+        for candidate in candidates:
+            normalized = _normalize_problem_taxonomy_conclusion(candidate, topic)
+            key = _problem_taxonomy_conclusion_key(normalized)
+            if not normalized or not key or key in seen_keys:
+                continue
+            conclusion = normalized
+            seen_keys.add(key)
+            break
+        group["conclusion"] = conclusion
+        group["conclusion_user_edited"] = False
+    return groups
+
+
+def _problem_taxonomy_root_payload(payload: ProblemTaxonomyGenerateInput) -> ProblemTaxonomyGenerateInput:
+    data = _payload_to_primitive(payload)
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        max_groups = max(6, int(data.get("max_groups") or 6))
+    except (TypeError, ValueError):
+        max_groups = 6
+    data.update(
+        {
+            "parent_group_id": "",
+            "parent_topic": "",
+            "parent_depth": -1,
+            "parent_evidence_utterance_ids": [],
+            "existing_group_ids": [],
+            "existing_groups": [],
+            "max_groups": max_groups,
+        }
+    )
+    return ProblemTaxonomyGenerateInput(**data)
+
+
 def _stable_short_id(raw: Any) -> str:
     text = _safe_text(raw)
     value = 2166136261
@@ -3085,9 +3164,15 @@ def _problem_taxonomy_group_from_cluster(
     index: int,
     cluster: dict[str, Any],
     used_ids: set[str],
+    *,
+    parent_group_id_override: str | None = None,
+    parent_depth_override: int | None = None,
 ) -> dict[str, Any]:
-    parent_group_id = _safe_text(payload.parent_group_id)
-    parent_depth = int(payload.parent_depth if payload.parent_depth is not None else -1)
+    parent_group_id = _safe_text(
+        parent_group_id_override if parent_group_id_override is not None else payload.parent_group_id
+    )
+    parent_depth_raw = parent_depth_override if parent_depth_override is not None else payload.parent_depth
+    parent_depth = int(parent_depth_raw if parent_depth_raw is not None else -1)
     depth = max(0, parent_depth + 1)
     label = _normalize_problem_summary_label(cluster.get("label"), f"분류 {index}")
     group_id_base = f"{parent_group_id or 'problem-group'}-{_stable_short_id(label)}"
@@ -3117,10 +3202,10 @@ def _problem_taxonomy_group_from_cluster(
         [_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
         limit=60,
     )
-    conclusion = _normalize_problem_summary_label(
+    conclusion = _normalize_problem_taxonomy_conclusion(
         cluster.get("summary") or (source_items[0] if source_items else label),
         label,
-        max_len=54,
+        source_items[0] if source_items else "",
     )
 
     return {
@@ -3137,7 +3222,7 @@ def _problem_taxonomy_group_from_cluster(
         "linked_group_ids": [],
         "evidence_utterance_ids": evidence_ids,
         "source_summary_items": source_items,
-        "conclusion": conclusion if conclusion != label else "",
+        "conclusion": conclusion,
         "conclusion_user_edited": False,
         "status": "draft",
         "source_signature": _canvas_llm_signature(
@@ -3251,15 +3336,170 @@ def _normalize_problem_taxonomy_llm_groups(
         if llm_keywords:
             group["keywords"] = _dedup_preserve(llm_keywords, limit=6)
         group["topic"] = _normalize_problem_summary_label(raw.get("topic"), group["topic"])
-        group["conclusion"] = _normalize_problem_summary_label(
+        group["conclusion"] = _normalize_problem_taxonomy_conclusion(
             raw.get("conclusion") or group["conclusion"],
             group["topic"],
-            max_len=54,
         )
-        if group["conclusion"] == group["topic"]:
-            group["conclusion"] = ""
         group["insight_lens"] = _safe_text(raw.get("insight_lens") or raw.get("insightLens") or "")
         groups.append(group)
+    return groups
+
+
+def _problem_taxonomy_outline_raw_nodes(parsed: Any) -> list[Any]:
+    if isinstance(parsed, dict):
+        raw = (
+            parsed.get("outline")
+            or parsed.get("tree")
+            or parsed.get("nodes")
+            or parsed.get("groups")
+        )
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            return [raw]
+        if any(key in parsed for key in ("topic", "label", "title", "conclusion", "children")):
+            return [parsed]
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _problem_taxonomy_outline_raw_children(raw: dict[str, Any]) -> list[Any]:
+    children = (
+        raw.get("children")
+        or raw.get("child_groups")
+        or raw.get("childGroups")
+        or raw.get("subgroups")
+        or raw.get("sub_groups")
+    )
+    return children if isinstance(children, list) else []
+
+
+def _promote_single_problem_taxonomy_outline_root(nodes: list[Any]) -> list[Any]:
+    if len(nodes) != 1 or not isinstance(nodes[0], dict):
+        return nodes
+    children = _problem_taxonomy_outline_raw_children(nodes[0])
+    if len(children) < 2:
+        return nodes
+    return children
+
+
+def _problem_taxonomy_outline_score(raw: dict[str, Any], key: str) -> float | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number > 1:
+        number = number / 100
+    return max(0.0, min(1.0, number))
+
+
+def _problem_taxonomy_outline_node_allowed(raw: dict[str, Any], depth: int) -> bool:
+    if raw.get("should_include") is False or raw.get("shouldInclude") is False:
+        return False
+    if depth <= 0:
+        return True
+    direct_child = raw.get("is_direct_child", raw.get("isDirectChild"))
+    if direct_child is False:
+        return False
+    importance = _problem_taxonomy_outline_score(raw, "importance")
+    parent_fit = _problem_taxonomy_outline_score(raw, "parent_fit")
+    if parent_fit is None:
+        parent_fit = _problem_taxonomy_outline_score(raw, "parentFit")
+    novelty = _problem_taxonomy_outline_score(raw, "novelty")
+    if importance is not None and importance < 0.45:
+        return False
+    if parent_fit is not None and parent_fit < 0.5:
+        return False
+    if novelty is not None and novelty < 0.35:
+        return False
+    return True
+
+
+def _problem_taxonomy_rows_for_outline_node(
+    raw: dict[str, Any],
+    rows_by_id: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    evidence_ids = [
+        _safe_text(item)
+        for item in (raw.get("evidence_utterance_ids") or raw.get("evidenceUtteranceIds") or [])
+        if _safe_text(item) in rows_by_id
+    ]
+    if evidence_ids:
+        return [rows_by_id[item] for item in evidence_ids]
+
+    topic = _safe_text(raw.get("topic") or raw.get("label") or raw.get("title"))
+    tokens = set(_problem_taxonomy_tokens(topic))
+    if not tokens:
+        return []
+    scored = [
+        (row, len(tokens & set(_problem_taxonomy_tokens(row.get("text", "")))))
+        for row in rows_by_id.values()
+    ]
+    matched = [row for row, score in sorted(scored, key=lambda item: -item[1]) if score > 0]
+    return matched[:3]
+
+
+def _normalize_problem_taxonomy_outline_groups(
+    payload: ProblemTaxonomyGenerateInput,
+    raw_nodes: Any,
+) -> list[dict[str, Any]]:
+    nodes = _problem_taxonomy_outline_raw_nodes(raw_nodes)
+    nodes = _promote_single_problem_taxonomy_outline_root(nodes)
+    if not nodes:
+        return []
+    rows_by_id = {row["id"]: row for row in _select_problem_taxonomy_rows(_problem_taxonomy_root_payload(payload))}
+    used_ids: set[str] = set()
+    groups: list[dict[str, Any]] = []
+
+    def visit(raw: Any, index_path: str, parent_group_id: str, parent_depth: int, depth: int) -> None:
+        if not isinstance(raw, dict) or depth > PROBLEM_TAXONOMY_OUTLINE_MAX_DEPTH:
+            return
+        if not _problem_taxonomy_outline_node_allowed(raw, depth):
+            return
+
+        label_source = raw.get("topic") or raw.get("label") or raw.get("title") or f"분류 {index_path}"
+        source_rows = _problem_taxonomy_rows_for_outline_node(raw, rows_by_id)
+        source_items = [
+            _safe_text(item)
+            for item in (raw.get("source_summary_items") or raw.get("sourceSummaryItems") or [])
+            if _safe_text(item)
+        ]
+        cluster = {
+            "label": label_source,
+            "summary": raw.get("conclusion") or raw.get("summary") or (source_items[0] if source_items else ""),
+            "rows": source_rows,
+        }
+        group = _problem_taxonomy_group_from_cluster(
+            payload,
+            len(groups) + 1,
+            cluster,
+            used_ids,
+            parent_group_id_override=parent_group_id,
+            parent_depth_override=parent_depth,
+        )
+        group["topic"] = _normalize_problem_summary_label(label_source, group["topic"])
+        if source_items:
+            group["source_summary_items"] = _dedup_preserve(source_items, limit=5)
+        raw_keywords = [_safe_text(item) for item in (raw.get("keywords") or []) if _safe_text(item)]
+        if raw_keywords:
+            group["keywords"] = _dedup_preserve(raw_keywords, limit=6)
+        group["conclusion"] = _normalize_problem_taxonomy_conclusion(
+            raw.get("conclusion") or raw.get("summary") or group["conclusion"],
+            group["topic"],
+            group["source_summary_items"][0] if group.get("source_summary_items") else "",
+        )
+        group["insight_lens"] = _safe_text(raw.get("insight_lens") or raw.get("insightLens") or "")
+        groups.append(group)
+
+        children = _problem_taxonomy_outline_raw_children(raw)
+        for child_index, child in enumerate(children[:5], start=1):
+            visit(child, f"{index_path}.{child_index}", group["group_id"], int(group.get("depth") or 0), depth + 1)
+
+    for index, raw in enumerate(nodes[: payload.max_groups], start=1):
+        visit(raw, str(index), "", -1, 0)
     return groups
 
 
@@ -3884,38 +4124,68 @@ def _build_problem_taxonomy_prompt(payload: ProblemTaxonomyGenerateInput, contex
     output_example = {
         "groups": [
             {
+                "source_summary_items": ["경복궁은 교통편을 구하기 쉽다는 장점이 언급됐다."],
+                "conclusion": "경복궁은 대중교통과 이동 동선이 비교적 편해 아이들과 함께 방문하기 쉬운 후보로 언급됐다.",
                 "topic": "교통의 편의성",
                 "keywords": ["교통", "편의"],
-                "source_summary_items": ["경복궁은 교통편을 구하기 쉽다는 장점이 언급됐다."],
-                "conclusion": "교통 접근성이 경복궁 선택 근거로 제시됐다.",
                 "evidence_utterance_ids": ["utt-1"],
             },
             {
+                "source_summary_items": ["근처에 아이들이 좋아할 만한 식당이 많다는 경험이 공유됐다."],
+                "conclusion": "방문 후 식사까지 이어가기 좋은 선택지가 주변에 많아 가족 단위 일정에 적합하다는 경험이 공유됐다.",
                 "topic": "괜찮은 식당이 많음",
                 "keywords": ["식당", "근처"],
-                "source_summary_items": ["근처에 아이들이 좋아할 만한 식당이 많다는 경험이 공유됐다."],
-                "conclusion": "식사 장소 선택지가 경복궁 후보의 장점으로 언급됐다.",
                 "evidence_utterance_ids": ["utt-1"],
             },
         ]
     } if parent_topic else {
         "groups": [
             {
+                "source_summary_items": ["경복궁은 역사 학습, 교통, 식당 접근성이 함께 언급된 후보였다."],
+                "conclusion": "경복궁은 역사 학습에 도움이 되고 이동과 식사 동선도 무리 없다는 점에서 목적지 후보로 제안됐다.",
                 "topic": "목적지 경복궁 설정",
                 "keywords": ["경복궁", "목적지"],
-                "source_summary_items": ["경복궁은 역사 학습, 교통, 식당 접근성이 함께 언급된 후보였다."],
-                "conclusion": "경복궁을 목적지로 두자는 의견이 여러 근거와 함께 나왔다.",
                 "evidence_utterance_ids": ["utt-1"],
+            },
+            {
+                "source_summary_items": ["박물관은 실내 활동이 가능하고 비가 와도 일정 진행이 쉽다는 장점이 언급됐다."],
+                "conclusion": "박물관은 날씨 영향을 덜 받고 실내에서 안정적으로 진행할 수 있어 대체 목적지로 검토됐다.",
+                "topic": "실내 대체지 박물관 검토",
+                "keywords": ["박물관", "실내"],
+                "evidence_utterance_ids": ["utt-2"],
+            },
+            {
+                "source_summary_items": ["최종 방문지는 이동 시간과 교육 효과를 함께 보고 결정하자는 의견이 나왔다."],
+                "conclusion": "방문지는 흥미만으로 정하지 않고 이동 부담과 학습 효과를 함께 비교해 정하기로 했다.",
+                "topic": "방문지 선택 기준 정리",
+                "keywords": ["이동 시간", "학습 효과"],
+                "evidence_utterance_ids": ["utt-3"],
             }
         ]
     }
+    conclusion_examples = (
+        "[conclusion 작성 예]\n"
+        "- 나쁨: 이번 방문의 결과에 대한 요약을 제시하며, 회의의 결론임을 명확히 했다.\n"
+        "- 좋음: 방문 결과 이동 동선은 무리 없었지만 식사 장소 예약과 우천 대비가 다음 준비 과제로 남았다.\n"
+        "- 나쁨: 예산 관련 논의가 있었다.\n"
+        "- 좋음: 예산은 장비 구입보다 운영 인력 확보에 우선 배정해야 한다는 의견이 모였다.\n\n"
+        "[압축 방식 예]\n"
+        "- 원문: 2026년 방문에서는 9년 전과 달리 시진핑 주석이 트럼프 대통령을 '위대한 지도자'라고 칭하며 만남을 마무리하는 등 다른 양상을 보였다.\n"
+        "- 좋음: 시진핑 주석이 트럼프 대통령을 '위대한 지도자'라고 칭하며 9년 전과 다른 양상을 보임.\n"
+        "- 나쁨: 2026년 방문과 9년 전 방문의 차이에 대한 요약을 제시함.\n\n"
+    )
     return (
         "너는 회의 전문을 읽고 Markdown 문서의 제목 구조처럼 문제정의 요약 트리를 만드는 회의 퍼실리테이터다. 출력은 JSON 하나만 반환한다.\n\n"
         f"[목표]\n- 입력 발화에서 실제로 말한 내용만 근거로 {scope}를 만든다.\n"
         f"{depth_hint}"
+        "- 각 group은 먼저 source_summary_items와 conclusion으로 실제 본문을 요약한 뒤, 그 본문을 대표하는 topic을 붙인다.\n"
+        "- parent_topic이 없으면 전체 전사문의 1차 목차를 만든다. 회의가 명백히 하나의 단일 논점만 다룬 경우가 아니라면 보통 3~6개 root로 나눈다.\n"
         "- 새로운 아이디어, 장소, 원인, 해결책을 발명하지 않는다.\n"
         "- topic은 키워드가 아니라, 제목으로 바로 읽히는 짧은 요약 문장이어야 한다.\n"
         "- topic은 '경복궁' 같은 명사 하나가 아니라 '목적지 경복궁 설정'처럼 논의 행위/판단이 드러나야 한다.\n"
+        "- conclusion은 해당 topic 아래에 실제로 들어갈 핵심 본문 요약이다. topic을 설명하는 메타 문장을 쓰지 않는다.\n"
+        "- conclusion은 topic의 성격을 문맥상 판단해 실제 결과, 쟁점, 근거, 대안, 비교 내용을 자연스럽게 쓴다.\n"
+        "- conclusion은 같은 레벨에서 같은 문장을 반복하지 않는다.\n"
         "- 같은 레벨의 groups는 서로 겹치지 않게 분리한다. 한 근거를 같은 의미의 노드로 반복하지 않는다.\n"
         "- source_summary_items는 실제 발화를 1~3문장으로 압축한 근거 요약이다.\n"
         "- evidence_utterance_ids에는 그 분류를 뒷받침하는 utterance id만 넣는다.\n"
@@ -3928,16 +4198,234 @@ def _build_problem_taxonomy_prompt(payload: ProblemTaxonomyGenerateInput, contex
         f"{json.dumps(input_payload, ensure_ascii=False, indent=2)}\n\n"
         "[출력 JSON 예시]\n"
         f"{json.dumps(output_example, ensure_ascii=False, indent=2)}\n\n"
+        f"{conclusion_examples}"
         "[규칙]\n"
         f"- groups는 최대 {payload.max_groups}개다.\n"
         "- 같은 의미의 분류를 중복 생성하지 않는다. MECE에 가깝게 서로 다른 포인트로 나눈다.\n"
         "- parent_topic이 있으면 parent_topic과 직접 관련된 세부 요약만 만든다. 부모와 같은 수준의 큰 노드를 다시 만들지 않는다.\n"
         "- topic은 8~32자 정도의 한국어 요약 문장/구로 쓴다.\n"
+        "- conclusion은 40~90자 정도의 1~2문장으로 쓰고, 제목 자체가 아니라 해당 section의 실제 내용을 쓴다.\n"
+        "- conclusion은 주체, 대상, 핵심 행동, 비교 기준, 숫자, 시점, 인용 표현을 가능한 보존해 압축한다.\n"
+        "- conclusion은 '~함', '~보임', '~드러남', '~제시됨' 같은 짧은 요약체를 우선 사용한다.\n"
+        "- '요약을 제시했다', '관련 논의가 있었다', '결론임을 명확히 했다', '중요성이 언급됐다' 같은 메타 설명은 쓰지 않는다.\n"
         "- topic은 '서울', '경복궁', '식당'처럼 단일 명사로 끝내지 않는다.\n"
         "- topic은 '논의됨', '관련 내용', '기타' 같은 메타 표현을 쓰지 않는다.\n"
         "- utterance에 직접 근거가 없는 세부 노드는 만들지 않는다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
+
+
+def _build_problem_taxonomy_outline_prompt(
+    payload: ProblemTaxonomyGenerateInput,
+    context: dict[str, Any] | None = None,
+) -> str:
+    context = context or {}
+    root_payload = _problem_taxonomy_root_payload(payload)
+    rows = context.get("rows") if isinstance(context.get("rows"), list) else _select_problem_taxonomy_rows(root_payload)
+    chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
+    overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
+    input_payload = {
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "context_policy": {
+            "total_utterance_count": int(context.get("total_utterance_count") or len(rows)),
+            "included_raw_utterance_count": int(context.get("included_utterance_count") or len(rows)),
+            "total_chunk_summary_count": int(context.get("chunk_summary_count") or len(chunk_summaries)),
+            "included_chunk_summary_count": int(context.get("included_chunk_summary_count") or len(chunk_summaries)),
+            "overview_summary_count": len(overview_summaries),
+            "note": "회의 전문을 Markdown heading 구조로 정리하기 위한 전체 흐름 요약과 선별 원문이다.",
+        },
+        "overview_summaries": overview_summaries,
+        "chunk_summaries": chunk_summaries,
+        "raw_utterances": _problem_taxonomy_prompt_rows(
+            rows[:PROBLEM_TAXONOMY_PROMPT_RAW_ROW_LIMIT],
+            PROBLEM_TAXONOMY_PROMPT_RAW_TEXT_CHARS,
+        ),
+        "max_root_groups": payload.max_groups,
+        "max_depth": PROBLEM_TAXONOMY_OUTLINE_MAX_DEPTH,
+    }
+    output_example = {
+        "outline": [
+            {
+                "source_summary_items": ["경복궁은 역사 학습, 교통, 식당 접근성이 함께 언급된 후보였다."],
+                "conclusion": "역사 학습, 이동 편의, 식사 여건이 함께 언급되어 경복궁이 목적지 후보로 정리됐다.",
+                "topic": "목적지 경복궁 설정",
+                "importance": 0.92,
+                "parent_fit": 1.0,
+                "is_direct_child": True,
+                "keywords": ["경복궁", "목적지"],
+                "evidence_utterance_ids": ["utt-1"],
+                "children": [
+                    {
+                        "source_summary_items": ["경복궁 방문이 아이들의 역사 학습에 도움이 된다는 의견이 나왔다."],
+                        "conclusion": "방문 이유가 단순 관광이 아니라 아이들의 역사 이해를 돕는 학습 경험으로 설명됐다.",
+                        "topic": "역사 학습에 유용",
+                        "importance": 0.78,
+                        "parent_fit": 0.93,
+                        "is_direct_child": True,
+                        "keywords": ["역사", "학습"],
+                        "evidence_utterance_ids": ["utt-1"],
+                        "children": [],
+                    }
+                ],
+            },
+            {
+                "source_summary_items": ["박물관은 실내 활동이 가능하고 비가 와도 일정 진행이 쉽다는 장점이 언급됐다."],
+                "conclusion": "박물관은 날씨 영향을 덜 받고 실내에서 안정적으로 진행할 수 있어 대체 목적지로 검토됐다.",
+                "topic": "실내 대체지 박물관 검토",
+                "importance": 0.84,
+                "parent_fit": 1.0,
+                "is_direct_child": True,
+                "keywords": ["박물관", "실내"],
+                "evidence_utterance_ids": ["utt-2"],
+                "children": [],
+            },
+            {
+                "source_summary_items": ["최종 방문지는 이동 시간과 교육 효과를 함께 보고 결정하자는 의견이 나왔다."],
+                "conclusion": "방문지는 흥미만으로 정하지 않고 이동 부담과 학습 효과를 함께 비교해 정하기로 했다.",
+                "topic": "방문지 선택 기준 정리",
+                "importance": 0.88,
+                "parent_fit": 1.0,
+                "is_direct_child": True,
+                "keywords": ["이동 시간", "학습 효과"],
+                "evidence_utterance_ids": ["utt-3"],
+                "children": [],
+            },
+        ]
+    }
+    conclusion_examples = (
+        "[conclusion 작성 예]\n"
+        "- 나쁨: 이번 방문의 결과에 대한 요약을 제시하며, 회의의 결론임을 명확히 했다.\n"
+        "- 좋음: 방문 결과 이동 동선은 무리 없었지만 식사 장소 예약과 우천 대비가 다음 준비 과제로 남았다.\n"
+        "- 나쁨: 예산 관련 논의가 있었다.\n"
+        "- 좋음: 예산은 장비 구입보다 운영 인력 확보에 우선 배정해야 한다는 의견이 모였다.\n\n"
+        "[압축 방식 예]\n"
+        "- 원문: 2026년 방문에서는 9년 전과 달리 시진핑 주석이 트럼프 대통령을 '위대한 지도자'라고 칭하며 만남을 마무리하는 등 다른 양상을 보였다.\n"
+        "- 좋음: 시진핑 주석이 트럼프 대통령을 '위대한 지도자'라고 칭하며 9년 전과 다른 양상을 보임.\n"
+        "- 나쁨: 2026년 방문과 9년 전 방문의 차이에 대한 요약을 제시함.\n\n"
+    )
+    return (
+        "너는 회의 전문을 하나의 Markdown 문서로 읽고, 문제정의용 heading outline을 만드는 회의 분석가다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- 회의 전체 흐름에서 중요한 논점만 Markdown heading 트리처럼 구조화한다.\n"
+        "- 각 노드는 먼저 source_summary_items와 conclusion으로 실제 본문을 요약한 뒤, 그 본문을 대표하는 topic을 붙인다.\n"
+        "- root outline은 전체 전사문의 1차 목차다. 회의가 명백히 하나의 단일 논점만 다룬 경우가 아니라면 보통 3~6개 root로 나눈다.\n"
+        "- depth 0은 H1 수준의 큰 문제정의 논점, depth 1~2는 바로 위 heading의 직접 하위 논점이다.\n"
+        "- 각 children은 부모 heading을 더 구체화하는 중요한 하위 heading일 때만 만든다.\n"
+        "- 중요도가 낮은 예시, 잡담, 단순 배경, 부모 반복, 같은 레벨 반복은 만들지 않는다.\n"
+        "- 만들 만한 하위 논점이 없으면 children은 빈 배열로 둔다. 빈 children은 정상이다.\n"
+        "- 새로운 사실, 원인, 해결책을 발명하지 않는다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, indent=2)}\n\n"
+        "[출력 JSON 예시]\n"
+        f"{json.dumps(output_example, ensure_ascii=False, indent=2)}\n\n"
+        f"{conclusion_examples}"
+        "[규칙]\n"
+        f"- outline의 root는 최대 {payload.max_groups}개다.\n"
+        "- root가 1개뿐이라면 전체 전사문이 정말 하나의 큰 논점만 다뤘는지 다시 확인하고, 나눌 수 있는 1차 목차가 있으면 반드시 분리한다.\n"
+        "- 각 노드의 children은 최대 5개다.\n"
+        f"- 최대 depth는 {PROBLEM_TAXONOMY_OUTLINE_MAX_DEPTH}이다. 그보다 깊게 만들지 않는다.\n"
+        "- topic은 8~32자 정도의 한국어 요약 문장/구로 쓴다.\n"
+        "- conclusion은 topic의 다른 표현이 아니라, 해당 heading 아래에 실제로 들어갈 핵심 본문 요약이다.\n"
+        "- conclusion은 topic의 성격을 문맥상 판단해 실제 결과, 쟁점, 근거, 대안, 비교 내용을 자연스럽게 쓴다.\n"
+        "- conclusion은 40~90자 정도의 1~2문장으로 쓰고, 제목 자체가 아니라 해당 section의 실제 내용을 쓴다.\n"
+        "- conclusion은 주체, 대상, 핵심 행동, 비교 기준, 숫자, 시점, 인용 표현을 가능한 보존해 압축한다.\n"
+        "- conclusion은 '~함', '~보임', '~드러남', '~제시됨' 같은 짧은 요약체를 우선 사용한다.\n"
+        "- '요약을 제시했다', '관련 논의가 있었다', '결론임을 명확히 했다', '중요성이 언급됐다' 같은 메타 설명은 쓰지 않는다.\n"
+        "- importance, parent_fit, novelty는 0~1 숫자로 쓴다.\n"
+        "- parent_fit은 부모와 직접 연결된 하위 논점일수록 높다. root는 1.0으로 둔다.\n"
+        "- is_direct_child는 바로 위 heading 아래에 놓을 수 있을 때만 true다.\n"
+        "- evidence_utterance_ids는 입력 utterances에 있는 id만 사용한다.\n"
+        "- overview_summaries와 chunk_summaries로 전체 흐름을 먼저 파악하고, raw_utterances는 근거 확인에만 사용한다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _get_or_create_problem_taxonomy_outline_groups(
+    rt: RuntimeStore,
+    payload: ProblemTaxonomyGenerateInput,
+    client: Any,
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    meeting_id = _safe_text(payload.meeting_id)
+    if not meeting_id:
+        return []
+    root_payload = _problem_taxonomy_root_payload(payload)
+    snapshot_rows = _resolve_problem_taxonomy_utterance_rows(root_payload.meeting_id, root_payload.utterances)
+    signature = _canvas_llm_signature(
+        {
+            "meeting_topic": _safe_text(root_payload.meeting_topic),
+            "utterance_snapshot_signature": _canvas_llm_signature(snapshot_rows),
+            "outline_policy": "markdown_section_body_v3",
+            "max_depth": PROBLEM_TAXONOMY_OUTLINE_MAX_DEPTH,
+            "max_root_groups": root_payload.max_groups,
+        }
+    )
+    cache_key = "problem_taxonomy_outline"
+    bypass_cache = bool(_safe_text(payload.debug_nonce) or payload.refresh_chunk_summaries)
+    if not bypass_cache:
+        with rt.lock:
+            cached = _get_canvas_llm_cached_result(rt, meeting_id, cache_key, signature)
+        if cached and isinstance(cached.get("groups"), list):
+            return copy.deepcopy(cached["groups"])
+
+    parsed = _call_llm_json(
+        rt,
+        client,
+        prompt=_build_problem_taxonomy_outline_prompt(root_payload, context),
+        stage="canvas_problem_taxonomy_outline",
+        temperature=0.12,
+        max_tokens=3200,
+    )
+    groups = _normalize_problem_taxonomy_outline_groups(root_payload, parsed)
+    result = {"groups": groups}
+    with rt.lock:
+        _set_canvas_llm_cached_result(rt, meeting_id, cache_key, signature, result)
+    return copy.deepcopy(groups)
+
+
+def _select_problem_taxonomy_outline_scope_groups(
+    payload: ProblemTaxonomyGenerateInput,
+    outline_groups: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    parent_group_id = _safe_text(payload.parent_group_id)
+    parent_topic = _safe_text(payload.parent_topic)
+    if not parent_group_id:
+        return [group for group in outline_groups if not _safe_text(group.get("parent_group_id"))], True
+
+    direct = [
+        group
+        for group in outline_groups
+        if _safe_text(group.get("parent_group_id")) == parent_group_id
+    ]
+    if direct:
+        return direct, True
+
+    matched_parent = next(
+        (
+            group
+            for group in outline_groups
+            if _safe_text(group.get("group_id")) == parent_group_id
+        ),
+        None,
+    )
+    if matched_parent is None and parent_topic:
+        matched_parent = next(
+            (
+                group
+                for group in outline_groups
+                if _problem_taxonomy_topics_similar(parent_topic, group.get("topic"))
+            ),
+            None,
+        )
+    if matched_parent is None:
+        return [], False
+
+    matched_parent_id = _safe_text(matched_parent.get("group_id"))
+    return [
+        group
+        for group in outline_groups
+        if _safe_text(group.get("parent_group_id")) == matched_parent_id
+    ], True
 
 
 def _build_meeting_goal_local(topic: str) -> str:
@@ -11387,6 +11875,8 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
         {
             "payload": signature_payload,
             "utterance_snapshot_signature": _canvas_llm_signature(snapshot_rows),
+            "conclusion_policy": "section_body_compression_v1",
+            "taxonomy_policy": "outline_reveal_v6",
         }
     )
 
@@ -11398,32 +11888,55 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
         client, llm_ready, llm_note = _ensure_llm_ready(RT)
         if llm_ready:
             try:
-                taxonomy_context, context_warning = _build_problem_taxonomy_context(RT, payload, client, llm_ready)
-                parsed = _call_llm_json(
-                    RT,
-                    client,
-                    prompt=_build_problem_taxonomy_prompt(payload, taxonomy_context),
-                    stage="canvas_problem_taxonomy",
-                    temperature=0.15,
-                    max_tokens=2400,
-                )
+                root_payload = _problem_taxonomy_root_payload(payload)
+                taxonomy_context, context_warning = _build_problem_taxonomy_context(RT, root_payload, client, llm_ready)
                 if context_warning:
                     warning = context_warning
-                parsed_groups = parsed.get("groups") if isinstance(parsed, dict) else None
-                llm_groups = _normalize_problem_taxonomy_llm_groups(payload, parsed_groups)
-                if llm_groups:
-                    groups = llm_groups
+
+                outline_groups = _get_or_create_problem_taxonomy_outline_groups(
+                    RT,
+                    payload,
+                    client,
+                    taxonomy_context,
+                )
+                outline_scope_groups, outline_scope_resolved = _select_problem_taxonomy_outline_scope_groups(
+                    payload,
+                    outline_groups,
+                )
+                if outline_groups and outline_scope_resolved and outline_scope_groups:
+                    groups = copy.deepcopy(outline_scope_groups)
                     used_llm = True
                     RT.last_llm_parsed_json = {
-                        "stage": "canvas_problem_taxonomy",
+                        "stage": "canvas_problem_taxonomy_outline",
                         "groups": copy.deepcopy(groups),
+                        "outline_group_count": len(outline_groups),
                     }
                     RT.last_llm_parsed_at = _now_ts()
-                elif isinstance(parsed_groups, list):
-                    groups = []
-                    used_llm = True
                 else:
-                    warning = f"{warning} LLM JSON 형식이 예상과 달라 로컬 분류를 사용했습니다.".strip()
+                    fallback_context = taxonomy_context if not _safe_text(payload.parent_group_id) else _build_problem_taxonomy_context(RT, payload, client, llm_ready)[0]
+                    parsed = _call_llm_json(
+                        RT,
+                        client,
+                        prompt=_build_problem_taxonomy_prompt(payload, fallback_context),
+                        stage="canvas_problem_taxonomy",
+                        temperature=0.15,
+                        max_tokens=2400,
+                    )
+                    parsed_groups = parsed.get("groups") if isinstance(parsed, dict) else None
+                    llm_groups = _normalize_problem_taxonomy_llm_groups(payload, parsed_groups)
+                    if llm_groups:
+                        groups = llm_groups
+                        used_llm = True
+                        RT.last_llm_parsed_json = {
+                            "stage": "canvas_problem_taxonomy",
+                            "groups": copy.deepcopy(groups),
+                        }
+                        RT.last_llm_parsed_at = _now_ts()
+                    elif isinstance(parsed_groups, list):
+                        groups = []
+                        used_llm = True
+                    else:
+                        warning = f"{warning} LLM JSON 형식이 예상과 달라 로컬 분류를 사용했습니다.".strip()
             except Exception as exc:
                 warning = f"문제정의 분류 LLM 생성 실패: {exc}"
         elif not groups:
@@ -11433,6 +11946,7 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
 
         group_count_before_dedupe = len(groups)
         groups = _filter_problem_taxonomy_duplicate_groups(payload, groups)
+        groups = _dedupe_problem_taxonomy_conclusions(groups)
         skipped_group_count = group_count_before_dedupe - len(groups)
         if skipped_group_count > 0:
             dedupe_note = f"이미 생성된 분류와 겹치는 {skipped_group_count}개를 제외했습니다."
