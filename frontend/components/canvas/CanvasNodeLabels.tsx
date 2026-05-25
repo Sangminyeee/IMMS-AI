@@ -637,11 +637,20 @@ export function makeProblemTopicNodeLabel(
   childLoading: boolean,
   criteriaLoading: boolean,
   hasGroupingRationale: boolean,
+  editing: boolean,
+  draftTopic: string,
+  draftInsight: string,
+  draftConclusion: string,
   remoteEditing: boolean,
   onShowGroupingRationale: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onGenerateChildren: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onToggleChildren: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onEdit: (event: React.MouseEvent<HTMLButtonElement>) => void,
+  onCancelEdit: () => void,
+  onSaveEdit: () => void,
+  onDraftTopicChange: (value: string) => void,
+  onDraftInsightChange: (value: string) => void,
+  onDraftConclusionChange: (value: string) => void,
   onDelete: (event: React.MouseEvent<HTMLButtonElement>) => void,
   onDragOver: (event: React.DragEvent<HTMLDivElement>) => void,
   onDragLeave: () => void,
@@ -686,62 +695,113 @@ export function makeProblemTopicNodeLabel(
           {remoteEditing ? renderEditPresenceBadge() : null}
         </div>
       </div>
-      <strong className="mt-3 block line-clamp-2 text-[18px] font-semibold leading-6 text-black">
-        {group.topic || "문제정의 토픽"}
-      </strong>
-      {detailText ? (
-        <p className="mt-2 line-clamp-3 text-[13px] leading-5 text-[#4d4d4d]">
-          {detailText}
-        </p>
-      ) : null}
-      <div className="mt-4 flex flex-wrap gap-1.5 text-[11px] font-semibold">
-        <span className="rounded-full bg-[#f7ecfb] px-2.5 py-1 text-[#a13ab8]">근거 {sourceCount}</span>
-        {opinionCount > 0 ? (
-          <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-700">의견 {opinionCount}</span>
-        ) : null}
-        {childCount > 0 ? (
-          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
-            하위 {childCount}{childCollapsed ? " 접힘" : ""}
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-4 flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          className="nodrag nopan rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#a13ab8]/20 hover:bg-[#f7ecfb] hover:text-[#a13ab8] disabled:cursor-wait disabled:opacity-60"
-          disabled={criteriaLoading}
-          onClick={onShowGroupingRationale}
+      {editing ? (
+        <div
+          className="mt-3 space-y-2.5"
+          onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {criteriaLoading ? "확인 중" : hasGroupingRationale ? "기준 보기" : "묶은 기준"}
-        </button>
-        <button
-          type="button"
-          className="nodrag nopan rounded-[8px] border border-[#a13ab8]/20 bg-[#f7ecfb] px-2.5 py-1.5 text-xs font-semibold text-[#a13ab8] transition hover:bg-[#efdaf7] disabled:cursor-wait disabled:opacity-60"
-          disabled={childLoading}
-          onClick={onGenerateChildren}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {childLoading ? "생성 중" : "+ 세부"}
-        </button>
-        <button
-          type="button"
-          className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-          onClick={onEdit}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          수정
-        </button>
-        <button
-          type="button"
-          className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
-          onClick={onDelete}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          삭제
-        </button>
-      </div>
-      {dropTarget ? (
+          <label className="block text-[11px] font-semibold text-black/50">
+            제목
+            <input
+              value={draftTopic}
+              onChange={(event) => onDraftTopicChange(event.target.value)}
+              className="mt-1 w-full rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] font-semibold leading-5 text-black outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+            />
+          </label>
+          <label className="block text-[11px] font-semibold text-black/50">
+            Insight
+            <textarea
+              value={draftInsight}
+              onChange={(event) => onDraftInsightChange(event.target.value)}
+              className="mt-1 min-h-[72px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+            />
+          </label>
+          <label className="block text-[11px] font-semibold text-black/50">
+            결론
+            <textarea
+              value={draftConclusion}
+              onChange={(event) => onDraftConclusionChange(event.target.value)}
+              className="mt-1 min-h-[88px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+            />
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+              onClick={onCancelEdit}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] bg-[#a13ab8] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#8f2fa3]"
+              onClick={onSaveEdit}
+            >
+              저장
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <strong className="mt-3 block line-clamp-2 text-[18px] font-semibold leading-6 text-black">
+            {group.topic || "문제정의 토픽"}
+          </strong>
+          {detailText ? (
+            <p className="mt-2 line-clamp-3 text-[13px] leading-5 text-[#4d4d4d]">
+              {detailText}
+            </p>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-1.5 text-[11px] font-semibold">
+            <span className="rounded-full bg-[#f7ecfb] px-2.5 py-1 text-[#a13ab8]">근거 {sourceCount}</span>
+            {opinionCount > 0 ? (
+              <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-700">의견 {opinionCount}</span>
+            ) : null}
+            {childCount > 0 ? (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
+                하위 {childCount}{childCollapsed ? " 접힘" : ""}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#a13ab8]/20 hover:bg-[#f7ecfb] hover:text-[#a13ab8] disabled:cursor-wait disabled:opacity-60"
+              disabled={criteriaLoading}
+              onClick={onShowGroupingRationale}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {criteriaLoading ? "확인 중" : hasGroupingRationale ? "기준 보기" : "묶은 기준"}
+            </button>
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] border border-[#a13ab8]/20 bg-[#f7ecfb] px-2.5 py-1.5 text-xs font-semibold text-[#a13ab8] transition hover:bg-[#efdaf7] disabled:cursor-wait disabled:opacity-60"
+              disabled={childLoading}
+              onClick={onGenerateChildren}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {childLoading ? "생성 중" : "+ 세부"}
+            </button>
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+              onClick={onEdit}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              수정
+            </button>
+            <button
+              type="button"
+              className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+              onClick={onDelete}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              삭제
+            </button>
+          </div>
+        </>
+      )}
+      {!editing && dropTarget ? (
         <p className="mt-3 rounded-xl border border-[#a13ab8]/20 bg-[#f7ecfb] px-3 py-2 text-xs font-semibold leading-5 text-[#a13ab8]">
           개인 메모를 놓으면 이 문제정의 그룹의 의견으로 추가됩니다.
         </p>

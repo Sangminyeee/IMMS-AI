@@ -28,14 +28,18 @@ export function buildProblemExploreLayout(input: {
   problemGroups: CanvasProblemGroupLayoutModel[];
   selectedProblemGroupId: string;
   collapsedProblemGroupIds: Set<string>;
+  problemGroupHeightOverrides?: Record<string, number>;
 }): ProblemExploreLayout {
-  const { collapsedProblemGroupIds, problemGroups, selectedProblemGroupId } = input;
+  const { collapsedProblemGroupIds, problemGroupHeightOverrides = {}, problemGroups, selectedProblemGroupId } = input;
   const activeGroup =
     problemGroups.find((group) => group.group_id === selectedProblemGroupId) ||
     problemGroups[0] ||
     null;
   const problemGroupHeightById = new Map(
-    problemGroups.map((group) => [group.group_id, estimateProblemTopicNodeHeight(group)] as const),
+    problemGroups.map((group) => [
+      group.group_id,
+      Math.max(estimateProblemTopicNodeHeight(group), problemGroupHeightOverrides[group.group_id] || 0),
+    ] as const),
   );
   const childGroupsByParentId = new Map<string, CanvasProblemGroupLayoutModel[]>();
   problemGroups.forEach((group) => {
@@ -47,7 +51,7 @@ export function buildProblemExploreLayout(input: {
 
   const problemNodeWidth = 336;
   const problemNodeGapX = 72;
-  const problemLevelHeight = 272;
+  const problemLevelHeight = Math.max(272, Math.max(...problemGroupHeightById.values(), 0) + 96);
   const problemBaseX = 64;
   const problemBaseY = 56;
   const problemGroupIds = new Set(problemGroups.map((group) => group.group_id));

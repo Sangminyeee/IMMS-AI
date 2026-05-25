@@ -65,15 +65,24 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
   loadingProblemGroupIds: string[];
   nodePositions: CanvasNodePositionsByStage;
   onAttachPersonalNoteToProblemGroup: (groupId: string, noteId: string) => void;
+  onCancelProblemGroupEdit: () => void;
   onDeleteProblemGroup: (group: TGroup) => void;
   onDropProblemGroupChange: (groupId: string) => void;
   onGenerateProblemChildren: (group: TGroup) => void;
+  onProblemGroupDraftConclusionChange: (value: string) => void;
+  onProblemGroupDraftInsightChange: (value: string) => void;
+  onProblemGroupDraftTopicChange: (value: string) => void;
   onQuickEditProblemGroup: (group: TGroup) => void;
+  onSaveProblemGroupEdit: (groupId: string) => void;
   onShowProblemGroupingRationale: (group: TGroup) => void;
   onToggleProblemChildren: (groupId: string) => void;
   pendingProblemGroupLinkId: string;
   problemChildGenerationPendingId: string;
+  editingProblemGroupId: string;
   problemExploreLayout: ProblemExploreLayoutModel<TGroup>;
+  problemGroupDraftConclusion: string;
+  problemGroupDraftInsight: string;
+  problemGroupDraftTopic: string;
   problemGroupingRationaleById: Record<string, unknown>;
   problemGroupingRationalePendingId: string;
   problemGroups: TGroup[];
@@ -87,15 +96,24 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
     loadingProblemGroupIds,
     nodePositions,
     onAttachPersonalNoteToProblemGroup,
+    onCancelProblemGroupEdit,
     onDeleteProblemGroup,
     onDropProblemGroupChange,
     onGenerateProblemChildren,
+    onProblemGroupDraftConclusionChange,
+    onProblemGroupDraftInsightChange,
+    onProblemGroupDraftTopicChange,
     onQuickEditProblemGroup,
+    onSaveProblemGroupEdit,
     onShowProblemGroupingRationale,
     onToggleProblemChildren,
     pendingProblemGroupLinkId,
     problemChildGenerationPendingId,
+    editingProblemGroupId,
     problemExploreLayout,
+    problemGroupDraftConclusion,
+    problemGroupDraftInsight,
+    problemGroupDraftTopic,
     problemGroupingRationaleById,
     problemGroupingRationalePendingId,
     problemGroups,
@@ -117,7 +135,10 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
     const nodeId = `problem-${group.group_id}`;
     const sourceCount = getProblemGroupSourceCount(group);
     const opinionCount = (group.discussion_items || []).length;
-    const nodeHeight = problemGroupHeightById.get(group.group_id) || estimateProblemTopicNodeHeight(group);
+    const editing = editingProblemGroupId === group.group_id;
+    const nodeHeight = editing
+      ? Math.max(problemGroupHeightById.get(group.group_id) || estimateProblemTopicNodeHeight(group), 420)
+      : problemGroupHeightById.get(group.group_id) || estimateProblemTopicNodeHeight(group);
     const savedPosition = nodePositions["problem-definition"]?.[nodeId];
     const childCount = childCountByGroupId.get(group.group_id) || 0;
     const childCollapsed = collapsedProblemGroupIds.has(group.group_id);
@@ -134,7 +155,7 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
       targetPosition: Position.Top,
       className: "!border-0 !bg-transparent !p-0 !shadow-none",
       style: { width: problemNodeWidth, minHeight: nodeHeight, padding: 0 },
-      draggable: true,
+      draggable: !editing,
       data: {
         contentSignature: buildNodeContentSignature([
           "problem-topic",
@@ -157,6 +178,10 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
           problemChildGenerationPendingId === group.group_id,
           criteriaLoading,
           hasGroupingRationale,
+          editing,
+          editing ? problemGroupDraftTopic : "",
+          editing ? problemGroupDraftInsight : "",
+          editing ? problemGroupDraftConclusion : "",
           remoteProblemGroupEditPresence?.updated_at || "",
         ]),
         label: makeProblemTopicNodeLabel(
@@ -172,6 +197,10 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
           problemChildGenerationPendingId === group.group_id,
           criteriaLoading,
           hasGroupingRationale,
+          editing,
+          problemGroupDraftTopic,
+          problemGroupDraftInsight,
+          problemGroupDraftConclusion,
           Boolean(remoteProblemGroupEditPresence),
           (event) => {
             event.stopPropagation();
@@ -189,6 +218,11 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
             event.stopPropagation();
             onQuickEditProblemGroup(group);
           },
+          () => onCancelProblemGroupEdit(),
+          () => onSaveProblemGroupEdit(group.group_id),
+          onProblemGroupDraftTopicChange,
+          onProblemGroupDraftInsightChange,
+          onProblemGroupDraftConclusionChange,
           (event) => {
             event.stopPropagation();
             onDeleteProblemGroup(group);
@@ -233,6 +267,10 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
         group.status,
         group.insight_lens || "",
         group.conclusion || "",
+        editingProblemGroupId === group.group_id,
+        editingProblemGroupId === group.group_id ? problemGroupDraftTopic : "",
+        editingProblemGroupId === group.group_id ? problemGroupDraftInsight : "",
+        editingProblemGroupId === group.group_id ? problemGroupDraftConclusion : "",
         ...(group.linked_group_ids || []),
         ...(group.source_summary_items || []),
         ...(group.ideas || []).flatMap((idea) => [idea.id, idea.kind, idea.title, idea.body]),

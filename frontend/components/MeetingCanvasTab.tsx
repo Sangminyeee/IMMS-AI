@@ -2,7 +2,6 @@
 
 import "@xyflow/react/dist/style.css";
 import {
-  MarkerType,
   applyNodeChanges,
   type Edge,
   type Node,
@@ -17,7 +16,6 @@ import {
   getCanvasIdeaAssimilationWorkspaceJob,
   getCanvasProblemDiscussionWorkspaceJob,
   generateProblemGroupConclusion,
-  generateProblemGroupingRationale,
   generateProblemStructure,
   generateCanvasProblemTaxonomy,
   generateCanvasSummaryDocument,
@@ -39,6 +37,7 @@ import {
 } from "@/components/canvas/CanvasGraphLayouts";
 import { buildIdeationKeywordBubbleBlueprint } from "@/components/canvas/CanvasIdeationNodeDescriptors";
 import { buildProblemExploreCanvasBlueprint } from "@/components/canvas/CanvasProblemExploreNodeDescriptors";
+import { buildProblemExploreEdges } from "@/components/canvas/problemExploreEdges";
 import { buildProblemStructureCanvasBlueprint } from "@/components/canvas/CanvasProblemStructureNodeDescriptors";
 import {
   buildNodeContentSignature,
@@ -66,7 +65,6 @@ import {
   CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH,
   buildIdeationKeywordBubbles,
   buildStableIdeationBubbleVisuals,
-  isDuplicateProblemTaxonomyGroup,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
   buildProblemStructureNodesFromGroups,
@@ -98,6 +96,9 @@ import {
 import { useCanvasEndMeetingState } from "@/components/canvas/useCanvasEndMeetingState";
 import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
 import { useProblemStructureEditor } from "@/components/canvas/useProblemStructureEditor";
+import { useProblemChildGeneration } from "@/components/canvas/useProblemChildGeneration";
+import { useProblemGroupActions } from "@/components/canvas/useProblemGroupActions";
+import { useProblemGroupingRationale } from "@/components/canvas/useProblemGroupingRationale";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
@@ -850,12 +851,6 @@ function trimText(text: string, maxLength: number) {
   const clean = stripLeadingTimestamp(text || "").replace(/\s+/g, " ").trim();
   if (clean.length <= maxLength) return clean;
   return `${clean.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
-}
-
-function problemGroupStatusLabel(status: ProblemGroupStatus) {
-  if (status === "review") return "검토중";
-  if (status === "final") return "확정";
-  return "초안";
 }
 
 function normalizeCanvasItemStatus(raw: string | undefined): CanvasItemStatus {
@@ -2021,16 +2016,15 @@ export default function MeetingCanvasTab({
   const [problemGroupingRationaleOpenGroupId, setProblemGroupingRationaleOpenGroupId] = useState("");
   const [pendingProblemGroupLinkId, setPendingProblemGroupLinkId] = useState("");
   const [editingProblemGroupId, setEditingProblemGroupId] = useState("");
-  const [, setProblemGroupDraftTopic] = useState("");
-  const [, setProblemGroupDraftInsight] = useState("");
-  const [, setProblemGroupDraftConclusion] = useState("");
+  const [problemGroupDraftTopic, setProblemGroupDraftTopic] = useState("");
+  const [problemGroupDraftInsight, setProblemGroupDraftInsight] = useState("");
+  const [problemGroupDraftConclusion, setProblemGroupDraftConclusion] = useState("");
   const [draggingPersonalNoteId, setDraggingPersonalNoteId] = useState("");
   const [dropProblemGroupId, setDropProblemGroupId] = useState("");
   const [, setLeftPanelTab] = useState<LeftPanelTab>("detail");
   const [, setConclusionRefreshingGroupId] = useState("");
   const conclusionBatchBusy = false;
   const [problemDefinitionStagePending, setProblemDefinitionStagePending] = useState(false);
-  const [problemChildGenerationPendingId, setProblemChildGenerationPendingId] = useState("");
   const [summaryDocumentPending, setSummaryDocumentPending] = useState(false);
   const [loadingProblemGroupIds, setLoadingProblemGroupIds] = useState<string[]>([]);
   const [, setIdeaAssimilationStatus] = useState("");
@@ -4001,41 +3995,15 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const handleShowProblemGroupingRationale = useCallback(
-    async (group: ProblemGroupViewModel) => {
-      if (!meetingId) return;
-      const cached = problemGroupingRationaleById[group.group_id];
-      if (cached) {
-        setProblemGroupingRationaleOpenGroupId(group.group_id);
-        return;
-      }
-
-      setProblemGroupingRationalePendingId(group.group_id);
-      try {
-        const result = await generateProblemGroupingRationale(buildProblemGroupingRationalePayload(group));
-        const nextRationale: ProblemGroupingRationaleViewModel = {
-          groupId: result.group_id || group.group_id,
-          rationale: result.rationale || "이 분류를 묶은 기준을 찾지 못했습니다.",
-          basisItems: result.basis_items || [],
-          usedLlm: result.used_llm,
-          warning: result.warning || "",
-          generatedAt: result.generated_at,
-        };
-        setProblemGroupingRationaleById((prev) => ({
-          ...prev,
-          [group.group_id]: nextRationale,
-        }));
-        setProblemGroupingRationaleOpenGroupId(group.group_id);
-        setActivityMessage(result.warning || "문제정의 그룹의 묶은 기준을 확인했습니다.");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setActivityMessage(`묶은 기준 생성 실패: ${message}`);
-      } finally {
-        setProblemGroupingRationalePendingId("");
-      }
-    },
-    [buildProblemGroupingRationalePayload, meetingId, problemGroupingRationaleById],
-  );
+  const { handleShowProblemGroupingRationale } = useProblemGroupingRationale({
+    buildProblemGroupingRationalePayload,
+    meetingId,
+    problemGroupingRationaleById,
+    setActivityMessage,
+    setProblemGroupingRationaleById,
+    setProblemGroupingRationaleOpenGroupId,
+    setProblemGroupingRationalePendingId,
+  });
 
   const handleAttachPersonalNoteToProblemGroup = useCallback((groupId: string, noteId: string) => {
     const note = personalNotes.find((entry) => entry.id === noteId);
@@ -5409,123 +5377,43 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const handleGenerateProblemChildren = useCallback(
-    async (group: ProblemGroupViewModel) => {
-      if (!meetingId || problemChildGenerationPendingId) return;
+  const { handleGenerateProblemChildren, problemChildGenerationPendingId } = useProblemChildGeneration({
+    buildExistingGroupsPayload: buildProblemTaxonomyExistingGroupsPayload,
+    commitProblemGroupsSnapshot,
+    hydrateProblemGroups,
+    meetingId,
+    meetingTopicForAi,
+    problemGroups,
+    setActivityMessage,
+    setCollapsedProblemGroupIds,
+  });
 
-      setProblemChildGenerationPendingId(group.group_id);
-      try {
-        const result = await generateCanvasProblemTaxonomy({
-          meeting_id: meetingId,
-          meeting_topic: meetingTopicForAi,
-          parent_group_id: group.group_id,
-          parent_topic: group.topic,
-          parent_depth: group.depth || 0,
-          parent_evidence_utterance_ids: group.evidence_utterance_ids || [],
-          existing_group_ids: problemGroups.map((item) => item.group_id),
-          existing_groups: buildProblemTaxonomyExistingGroupsPayload(problemGroups),
-          max_groups: 5,
-        });
-        const existingIds = new Set(problemGroups.map((item) => item.group_id));
-        const generatedGroups = hydrateProblemGroups(result.groups || [], problemGroups);
-        const childGroups = generatedGroups
-          .filter((item) => !existingIds.has(item.group_id))
-          .filter((item) => !isDuplicateProblemTaxonomyGroup(item, problemGroups, group.group_id, group.topic))
-          .map((item) => ({
-            ...item,
-            parent_group_id: item.parent_group_id || group.group_id,
-            depth: Math.max(0, item.depth ?? (group.depth || 0) + 1),
-            status: "draft" as ProblemGroupStatus,
-          }));
-
-        if (childGroups.length === 0) {
-          setActivityMessage(
-            result.warning ||
-              (generatedGroups.length > 0
-                ? "이미 생성된 세부 분류와 겹쳐 새로 추가할 노드가 없습니다."
-                : "실제 발화 안에서 추가 세부 분류를 찾지 못했습니다."),
-          );
-          return;
-        }
-
-        setCollapsedProblemGroupIds((prev) => {
-          if (!prev.has(group.group_id)) return prev;
-          const next = new Set(prev);
-          next.delete(group.group_id);
-          return next;
-        });
-        commitProblemGroupsSnapshot(
-          [...problemGroups, ...childGroups],
-          result.warning || `"${group.topic}" 아래에 세부 분류 ${childGroups.length}개를 추가했습니다.`,
-          childGroups[0].group_id,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setActivityMessage(`세부 분류 생성 실패: ${message}`);
-      } finally {
-        setProblemChildGenerationPendingId("");
-      }
-    },
-    [
-      commitProblemGroupsSnapshot,
-      meetingId,
-      meetingTopicForAi,
-      problemChildGenerationPendingId,
-      problemGroups,
-    ],
-  );
-
-  const handleQuickEditProblemGroup = useCallback((group: ProblemGroupViewModel) => {
-    setSelectedProblemGroupId(group.group_id);
-    setSelectedNodeId(`problem-${group.group_id}`);
-    setLocalEditPresenceTarget({ targetType: "problem_group", targetId: group.group_id });
-    setEditingProblemGroupId(group.group_id);
-    setProblemGroupDraftTopic(group.topic);
-    setProblemGroupDraftInsight(group.insight_lens || "");
-    setProblemGroupDraftConclusion(group.conclusion);
-    setActivityMessage("문제정의 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
-  }, []);
-
-  const handleDeleteProblemGroup = useCallback(
-    (group: ProblemGroupViewModel) => {
-      const childIdsByParent = new Map<string, string[]>();
-      problemGroups.forEach((item) => {
-        if (!item.parent_group_id) return;
-        const ids = childIdsByParent.get(item.parent_group_id) || [];
-        ids.push(item.group_id);
-        childIdsByParent.set(item.parent_group_id, ids);
-      });
-      const removedIds = new Set<string>([group.group_id]);
-      const visit = (groupId: string) => {
-        (childIdsByParent.get(groupId) || []).forEach((childId) => {
-          if (removedIds.has(childId)) return;
-          removedIds.add(childId);
-          visit(childId);
-        });
-      };
-      visit(group.group_id);
-
-      const nextGroups = problemGroups.filter((item) => !removedIds.has(item.group_id));
-      commitProblemGroupsSnapshot(
-        nextGroups,
-        removedIds.size > 1 ? `문제정의 노드와 하위 ${removedIds.size - 1}개를 삭제했습니다.` : "문제정의 노드를 삭제했습니다.",
-        nextGroups[0]?.group_id || "",
-      );
-    },
-    [commitProblemGroupsSnapshot, problemGroups],
-  );
-
-  const handleToggleProblemChildren = useCallback((groupId: string) => {
-    setCollapsedProblemGroupIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
-      }
-      return next;
-    });
-  }, []);
+  const {
+    handleCancelProblemGroupEdit,
+    handleDeleteProblemGroup,
+    handleQuickEditProblemGroup,
+    handleSaveProblemGroupEdit,
+    handleSetProblemGroupStatus,
+    handleToggleProblemChildren,
+  } = useProblemGroupActions({
+    commitProblemGroupsSnapshot,
+    problemGroupDraftConclusion,
+    problemGroupDraftInsight,
+    problemGroupDraftTopic,
+    problemDefinitionPhase,
+    problemGroups,
+    selectedProblemGroupId,
+    setActivityMessage,
+    setCollapsedProblemGroupIds,
+    setEditingProblemGroupId,
+    setLocalEditPresenceTarget,
+    setProblemGroupDraftConclusion,
+    setProblemGroupDraftInsight,
+    setProblemGroupDraftTopic,
+    setProblemGroups,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+  });
 
   const syncProblemStructureNodesFromDefinition = useCallback(() => {
     const nextNodes = buildProblemStructureNodesFromGroups(problemGroups);
@@ -5676,9 +5564,10 @@ export default function MeetingCanvasTab({
       buildProblemExploreLayout({
         collapsedProblemGroupIds,
         problemGroups,
+        problemGroupHeightOverrides: editingProblemGroupId ? { [editingProblemGroupId]: 420 } : undefined,
         selectedProblemGroupId,
       }),
-    [collapsedProblemGroupIds, problemGroups, selectedProblemGroupId],
+    [collapsedProblemGroupIds, editingProblemGroupId, problemGroups, selectedProblemGroupId],
   );
 
   const graphBlueprint = useMemo(() => {
@@ -5728,12 +5617,17 @@ export default function MeetingCanvasTab({
         loadingProblemGroupIds,
         nodePositions,
         onAttachPersonalNoteToProblemGroup: handleAttachPersonalNoteToProblemGroup,
+        onCancelProblemGroupEdit: handleCancelProblemGroupEdit,
         onDeleteProblemGroup: handleDeleteProblemGroup,
         onDropProblemGroupChange: setDropProblemGroupId,
         onGenerateProblemChildren: (group) => {
           void handleGenerateProblemChildren(group);
         },
+        onProblemGroupDraftConclusionChange: setProblemGroupDraftConclusion,
+        onProblemGroupDraftInsightChange: setProblemGroupDraftInsight,
+        onProblemGroupDraftTopicChange: setProblemGroupDraftTopic,
         onQuickEditProblemGroup: handleQuickEditProblemGroup,
+        onSaveProblemGroupEdit: handleSaveProblemGroupEdit,
         onShowProblemGroupingRationale: (group) => {
           void handleShowProblemGroupingRationale(group);
         },
@@ -5741,6 +5635,10 @@ export default function MeetingCanvasTab({
         pendingProblemGroupLinkId,
         problemChildGenerationPendingId,
         problemExploreLayout,
+        editingProblemGroupId,
+        problemGroupDraftConclusion,
+        problemGroupDraftInsight,
+        problemGroupDraftTopic,
         problemGroupingRationaleById,
         problemGroupingRationalePendingId,
         problemGroups,
@@ -5769,7 +5667,9 @@ export default function MeetingCanvasTab({
     ideationBubbleLayoutRevision,
     collapsedProblemGroupIds,
     dropProblemGroupId,
+    editingProblemGroupId,
     handleAttachPersonalNoteToProblemGroup,
+    handleCancelProblemGroupEdit,
     handleDeleteProblemGroup,
     handleDeleteProblemStructureGroup,
     handleGenerateProblemChildren,
@@ -5788,6 +5688,7 @@ export default function MeetingCanvasTab({
     handleStartProblemStructureNodeEdit,
     handleUpdateProblemStructureGroupStatus,
     handleQuickEditProblemGroup,
+    handleSaveProblemGroupEdit,
     handleShowProblemGroupingRationale,
     handleToggleProblemChildren,
     loadingProblemGroupIds,
@@ -5797,6 +5698,9 @@ export default function MeetingCanvasTab({
     problemDefinitionMode,
     problemDefinitionPhase,
     problemExploreLayout,
+    problemGroupDraftConclusion,
+    problemGroupDraftInsight,
+    problemGroupDraftTopic,
     problemGroupingRationaleById,
     problemGroupingRationalePendingId,
     problemGroups,
@@ -8243,22 +8147,6 @@ export default function MeetingCanvasTab({
     setActivityMessage("개인 메모를 수정했습니다.");
   };
 
-  const handleSetProblemGroupStatus = (status: ProblemGroupStatus) => {
-    if (!selectedProblemGroup) return;
-
-    setProblemGroups((prev) =>
-      prev.map((group) =>
-        group.group_id === selectedProblemGroup.group_id
-          ? {
-              ...group,
-              status,
-            }
-          : group,
-      ),
-    );
-    setActivityMessage(`문제 정의 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
-  };
-
   useEffect(() => {
     if (stage !== "problem-definition") {
       autoProblemDefinitionRef.current = false;
@@ -8441,81 +8329,16 @@ export default function MeetingCanvasTab({
   const workspaceGridColumns = rightDrawerCollapsed
     ? "minmax(0, 1fr) clamp(3.5rem, 4.2vw, 4.5rem)"
     : `minmax(0, 1fr) ${rightDrawerExpandedWidth}`;
-  const problemSplitEdges = useMemo(() => {
-    if (stage !== "problem-definition" || problemDefinitionPhase === "structure") {
-      return { left: [] as Edge[], right: [] as Edge[] };
-    }
-
-    const problemGroupIds = new Set(problemGroups.map((group) => group.group_id));
-    const childGroupsByParentId = new Map<string, ProblemGroupViewModel[]>();
-    problemGroups.forEach((group) => {
-      const parentId = group.parent_group_id || "";
-      childGroupsByParentId.set(parentId, [...(childGroupsByParentId.get(parentId) || []), group]);
-    });
-    const rootProblemGroupCandidates = problemGroups.filter(
-      (group) => !group.parent_group_id || !problemGroupIds.has(group.parent_group_id),
-    );
-    const rootProblemGroups = rootProblemGroupCandidates.length > 0 ? rootProblemGroupCandidates : problemGroups;
-    const visibleProblemGroupIds = new Set<string>();
-    const visitVisible = (group: ProblemGroupViewModel, trail = new Set<string>()) => {
-      if (trail.has(group.group_id)) return;
-      const nextTrail = new Set(trail);
-      nextTrail.add(group.group_id);
-      visibleProblemGroupIds.add(group.group_id);
-      if (!collapsedProblemGroupIds.has(group.group_id)) {
-        (childGroupsByParentId.get(group.group_id) || []).forEach((child) => {
-          visitVisible(child, nextTrail);
-        });
-      }
-    };
-    rootProblemGroups.forEach((group) => {
-      visitVisible(group);
-    });
-
-    const hierarchyEdges = problemGroups
-      .filter(
-        (group) =>
-          Boolean(group.parent_group_id) &&
-          problemGroupIds.has(group.parent_group_id || "") &&
-          visibleProblemGroupIds.has(group.group_id) &&
-          visibleProblemGroupIds.has(group.parent_group_id || ""),
-      )
-      .map((group): Edge => ({
-        id: `problem-parent-edge::${group.parent_group_id}::${group.group_id}`,
-        source: `problem-${group.parent_group_id}`,
-        target: `problem-${group.group_id}`,
-        type: "smoothstep",
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#a3a3a3" },
-        interactionWidth: 0,
-        selectable: false,
-        style: { stroke: "#a3a3a3", strokeOpacity: 0.62, strokeWidth: 1.6 },
-      }));
-    const groupLinkEdges = problemGroups.flatMap((group) =>
-      (group.linked_group_ids || [])
-        .filter(
-          (linkedGroupId) =>
-            linkedGroupId !== group.group_id &&
-            problemGroupIds.has(linkedGroupId) &&
-            visibleProblemGroupIds.has(group.group_id) &&
-            visibleProblemGroupIds.has(linkedGroupId),
-        )
-        .map((linkedGroupId): Edge => ({
-          id: `problem-group-link::${group.group_id}::${linkedGroupId}`,
-          source: `problem-${group.group_id}`,
-          target: `problem-${linkedGroupId}`,
-          type: "smoothstep",
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#a13ab8" },
-          interactionWidth: 0,
-          selectable: false,
-          style: { stroke: "#a13ab8", strokeOpacity: 0.58, strokeWidth: 2, strokeDasharray: "5 5" },
-        })),
-    );
-
-    return {
-      left: [...hierarchyEdges, ...groupLinkEdges],
-      right: [] as Edge[],
-    };
-  }, [collapsedProblemGroupIds, problemDefinitionPhase, problemGroups, stage]);
+  const problemSplitEdges = useMemo(
+    () =>
+      buildProblemExploreEdges({
+        collapsedProblemGroupIds,
+        problemDefinitionPhase,
+        problemGroups,
+        stage,
+      }),
+    [collapsedProblemGroupIds, problemDefinitionPhase, problemGroups, stage],
+  );
   const ideationDragGhostItem = useMemo(
     () =>
       ideationDragGhost
