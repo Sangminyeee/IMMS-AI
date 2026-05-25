@@ -9,21 +9,6 @@ const MAX_LEFT_PANEL_RATIO = 0.28;
 const MIN_RIGHT_PANEL_RATIO = 0.14;
 const MAX_RIGHT_PANEL_RATIO = 0.3;
 
-type PlacementFeedbackState = {
-  id: string;
-  x: number;
-  y: number;
-  label: string;
-} | null;
-
-type CanvasPlacementPreviewState = {
-  x: number;
-  y: number;
-  label: string;
-  hint: string;
-  tone: string;
-} | null;
-
 type UseCanvasUiStateOptions = {
   solutionPaneMeasureKey: string;
 };
@@ -40,12 +25,9 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
   const [rightPanelRatio, setRightPanelRatio] = useState(DEFAULT_RIGHT_PANEL_RATIO);
   const [isDesktopLayout, setIsDesktopLayout] = useState(false);
   const [solutionRightPaneWidth, setSolutionRightPaneWidth] = useState(0);
-  const [placementFeedback, setPlacementFeedback] = useState<PlacementFeedbackState>(null);
-  const [canvasPlacementPreview, setCanvasPlacementPreview] = useState<CanvasPlacementPreviewState>(null);
 
   const resizeStateRef = useRef<{ side: "left" | "right"; startX: number; startRatio: number } | null>(null);
   const solutionRightPaneRef = useRef<HTMLElement | null>(null);
-  const placementFeedbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (rightDrawerCollapsed) return undefined;
@@ -164,10 +146,5 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
     startPanelResize,
     solutionRightPaneRef,
     solutionRightPaneWidth,
-    placementFeedback,
-    setPlacementFeedback,
-    placementFeedbackTimerRef,
-    canvasPlacementPreview,
-    setCanvasPlacementPreview,
   };
 }

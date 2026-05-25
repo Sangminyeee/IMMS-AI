@@ -13,10 +13,8 @@ import {
 import { memo, type ReactNode, type RefObject } from "react";
 import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary } from "@/lib/types";
 import {
-  CanvasPlacementPreviewOverlay,
   CanvasStageEmptyOverlay,
   CanvasStatusToast,
-  PlacementFeedbackOverlay,
   ProblemDefinitionPreparingOverlay,
   ProblemIdeaDragPreview,
   SummaryDocumentPendingOverlay,
@@ -40,20 +38,6 @@ type ConcreteProblemDefinitionMode = Exclude<ProblemDefinitionMode, "">;
 type ProblemDefinitionPhase = "explore" | "structure";
 type ProblemStructureMethod = "affinity" | "card-sorting";
 type SummaryDocumentSection = NonNullable<CanvasFinalSolutionSummary["sections"]>[number];
-
-type PlacementFeedback = {
-  x: number;
-  y: number;
-  label: string;
-};
-
-type CanvasPlacementPreview = {
-  x: number;
-  y: number;
-  label: string;
-  hint: string;
-  tone: string;
-};
 
 type ProblemIdeaDrag = {
   cardKind: "summary" | string;
@@ -111,19 +95,11 @@ type CanvasSurfaceProps = {
   activeProblemGroupingRationaleTitle: string;
   canvasStatusMessage: string;
   problemCanvasToolbarActions: ProblemCanvasToolbarActionId[];
-  canUseCanvasToolbar: boolean;
-  showClickWaiting: boolean;
-  hasSelectedProblemGroup: boolean;
-  pendingProblemGroupLinkId: string;
   selectedProblemStatus: ProblemGroupStatus | "";
-  placementFeedback: PlacementFeedback | null;
-  canvasPlacementPreview: CanvasPlacementPreview | null;
   problemIdeaDrag: ProblemIdeaDrag | null;
   problemIdeaDragPoint: ProblemIdeaDragPoint | null;
   ideationDragGhost: IdeationDragGhost | null;
   ideationDragGhostContent: ReactNode;
-  onCanvasMouseMove: (event: React.MouseEvent<HTMLDivElement>) => void;
-  onCanvasMouseLeave: () => void;
   onFlowInit: (instance: ReactFlowInstance<Node, Edge>) => void;
   onNodeClick: (event: React.MouseEvent, node: Node) => void;
   onPaneClick: (event: React.MouseEvent) => void;
@@ -292,19 +268,11 @@ export const CanvasSurface = memo(function CanvasSurface({
   activeProblemGroupingRationaleTitle,
   canvasStatusMessage,
   problemCanvasToolbarActions,
-  canUseCanvasToolbar,
-  showClickWaiting,
-  hasSelectedProblemGroup,
-  pendingProblemGroupLinkId,
   selectedProblemStatus,
-  placementFeedback,
-  canvasPlacementPreview,
   problemIdeaDrag,
   problemIdeaDragPoint,
   ideationDragGhost,
   ideationDragGhostContent,
-  onCanvasMouseMove,
-  onCanvasMouseLeave,
   onFlowInit,
   onNodeClick,
   onPaneClick,
@@ -333,11 +301,7 @@ export const CanvasSurface = memo(function CanvasSurface({
 }: CanvasSurfaceProps) {
   return (
     <section ref={canvasSurfaceRef} className="relative order-1 flex min-h-[min(72vh,720px)] flex-col overflow-hidden border-b border-black/10 bg-[#f9f9f9] shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:h-full xl:min-h-0 xl:border-b-0">
-      <div
-        className="relative min-h-0 w-full flex-1"
-        onMouseMove={onCanvasMouseMove}
-        onMouseLeave={onCanvasMouseLeave}
-      >
+      <div className="relative min-h-0 w-full flex-1">
         <CanvasFloatingStatusControls
           stage={stage}
           selectedProblemStatus={selectedProblemStatus}
@@ -404,10 +368,6 @@ export const CanvasSurface = memo(function CanvasSurface({
           />
         )}
       </div>
-
-      {placementFeedback ? <PlacementFeedbackOverlay feedback={placementFeedback} /> : null}
-
-      {canvasPlacementPreview ? <CanvasPlacementPreviewOverlay preview={canvasPlacementPreview} /> : null}
 
       {problemIdeaDrag && problemIdeaDragPoint ? (
         <ProblemIdeaDragPreview
@@ -490,18 +450,14 @@ export const CanvasSurface = memo(function CanvasSurface({
       {stage === "problem-definition" ? (
         <ProblemCanvasToolbar
           actions={problemCanvasToolbarActions}
-          showClickWaiting={showClickWaiting}
           getActionLabel={getProblemToolbarActionLabel}
           isActionActive={isProblemToolbarActionActive}
           isActionDisabled={(item) =>
-            !canUseCanvasToolbar ||
             problemDefinitionStagePending ||
-            ((item === "debug-regenerate" || item === "debug-refresh-chunks") && busy) ||
             (item === "structure-start" && problemGroupsCount === 0) ||
             (item === "structure-ai-group" &&
               (problemStructurePending || (problemStructureNodesCount === 0 && problemGroupsCount === 0))) ||
-            ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure") ||
-            (item === "problem-link" && !hasSelectedProblemGroup && !pendingProblemGroupLinkId)
+            ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure")
           }
           onAction={onProblemToolbarAction}
         />

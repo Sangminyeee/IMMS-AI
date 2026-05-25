@@ -10,25 +10,6 @@ function rectIntersectionArea(left: DOMRect, right: DOMRect) {
   return width * height;
 }
 
-export function getReactFlowCanvasRect(container: HTMLElement | null) {
-  if (!container) {
-    return null;
-  }
-
-  const flowElement = container.querySelector<HTMLElement>(".react-flow");
-  return (flowElement || container).getBoundingClientRect();
-}
-
-export function pointInRect(clientX: number, clientY: number, rect: DOMRect | null) {
-  return Boolean(
-    rect &&
-      clientX >= rect.left &&
-      clientX <= rect.right &&
-      clientY >= rect.top &&
-      clientY <= rect.bottom,
-  );
-}
-
 function getReactFlowNodeElement(nodeId: string) {
   if (typeof document === "undefined" || !nodeId) {
     return null;

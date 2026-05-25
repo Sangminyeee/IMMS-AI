@@ -76,7 +76,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
   onSaveProblemGroupEdit: (groupId: string) => void;
   onShowProblemGroupingRationale: (group: TGroup) => void;
   onToggleProblemChildren: (groupId: string) => void;
-  pendingProblemGroupLinkId: string;
   problemChildGenerationPendingId: string;
   editingProblemGroupId: string;
   problemExploreLayout: ProblemExploreLayoutModel<TGroup>;
@@ -107,7 +106,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
     onSaveProblemGroupEdit,
     onShowProblemGroupingRationale,
     onToggleProblemChildren,
-    pendingProblemGroupLinkId,
     problemChildGenerationPendingId,
     editingProblemGroupId,
     problemExploreLayout,
@@ -129,7 +127,7 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
   } = problemExploreLayout;
 
   const nodeDescriptors: CanvasNodeDescriptor[] = positionedProblemGroups.map(({ group, position, rootIndex }) => {
-    const selected = activeGroup?.group_id === group.group_id || pendingProblemGroupLinkId === group.group_id;
+    const selected = activeGroup?.group_id === group.group_id;
     const loading = loadingProblemGroupIds.includes(group.group_id);
     const dropTarget = dropProblemGroupId === group.group_id;
     const nodeId = `problem-${group.group_id}`;
@@ -167,7 +165,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
           selected,
           loading,
           dropTarget,
-          pendingProblemGroupLinkId === group.group_id,
           group.insight_lens,
           group.conclusion,
           ...(group.linked_group_ids || []),

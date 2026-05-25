@@ -107,14 +107,10 @@ export function useCanvasRuntimeState() {
 export function useCanvasFlowRefs() {
   const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
-  const ideationLeftFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
-  const ideationRightFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
 
   return {
     canvasSurfaceRef,
     flowRef,
-    ideationLeftFlowRef,
-    ideationRightFlowRef,
   };
 }
 

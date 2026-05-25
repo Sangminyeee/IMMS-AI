@@ -15,8 +15,6 @@ import {
 } from "@/components/canvas/CanvasNodeLabels";
 import {
   extractCanvasItemIdFromNodeId,
-  getReactFlowCanvasRect,
-  pointInRect,
   type ProblemSourceDropTarget,
 } from "@/components/canvas/canvasInteractionDom";
 import type {
@@ -51,14 +49,9 @@ type UseCanvasIdeationDragPreviewOptions = {
   ideationDragFrameRef: MutableRefObject<number | null>;
   ideationDropPreviewRef: MutableRefObject<IdeationDropPreviewState | null>;
   ideationDropTargetElementsRef: MutableRefObject<IdeationDropTargetElement[]>;
-  ideationLeftFlowRef: MutableRefObject<ReactFlowInstance<Node, Edge> | null>;
-  ideationLeftPaneRef: MutableRefObject<HTMLDivElement | null>;
-  ideationRightFlowRef: MutableRefObject<ReactFlowInstance<Node, Edge> | null>;
-  ideationRightPaneRef: MutableRefObject<HTMLDivElement | null>;
   pendingIdeationDragFrameRef: MutableRefObject<PendingIdeationDragFrame | null>;
   scheduleNodePreview: (nodeId: string, position: { x: number; y: number }) => void;
   selectedAgendaForDrop: string;
-  selectedCanvasItemId: string;
   setIdeationDragGhost: Dispatch<SetStateAction<IdeationDragGhostState>>;
   setIdeationDropPreview: Dispatch<SetStateAction<IdeationDropPreviewState | null>>;
   setNodes: Dispatch<SetStateAction<Node[]>>;
@@ -75,14 +68,9 @@ export function useCanvasIdeationDragPreview({
   ideationDragFrameRef,
   ideationDropPreviewRef,
   ideationDropTargetElementsRef,
-  ideationLeftFlowRef,
-  ideationLeftPaneRef,
-  ideationRightFlowRef,
-  ideationRightPaneRef,
   pendingIdeationDragFrameRef,
   scheduleNodePreview,
   selectedAgendaForDrop,
-  selectedCanvasItemId,
   setIdeationDragGhost,
   setIdeationDropPreview,
   setNodes,
@@ -133,20 +121,19 @@ export function useCanvasIdeationDragPreview({
     [flowRef, stableIdeationDragRef],
   );
 
-  const getIdeationDropPlaceholderPosition = useCallback(
-    (pane: "left" | "right", clientX: number, clientY: number, fallback: { x: number; y: number }) => {
-      const instance = pane === "left" ? ideationLeftFlowRef.current : ideationRightFlowRef.current;
-      if (!instance) {
+  const getCanvasDropPosition = useCallback(
+    (clientX: number, clientY: number, fallback: { x: number; y: number }) => {
+      if (!flowRef.current) {
         return fallback;
       }
 
-      const flowPosition = instance.screenToFlowPosition({ x: clientX, y: clientY });
+      const flowPosition = flowRef.current.screenToFlowPosition({ x: clientX, y: clientY });
       return {
         x: flowPosition.x - CANVAS_ITEM_NODE_WIDTH / 2,
         y: flowPosition.y - 64,
       };
     },
-    [ideationLeftFlowRef, ideationRightFlowRef],
+    [flowRef],
   );
 
   const collectIdeationDropTargetElements = useCallback((draggedNodeId: string): IdeationDropTargetElement[] => {
@@ -173,17 +160,8 @@ export function useCanvasIdeationDragPreview({
       );
   }, []);
 
-  const findIdeationLeftGroupDropTarget = useCallback(
+  const findDirectDropTarget = useCallback(
     (clientX: number, clientY: number, draggedItem: CanvasWorkspaceItem) => {
-      if (stage !== "ideation") {
-        return null;
-      }
-
-      const leftPane = ideationLeftPaneRef.current;
-      if (!leftPane) {
-        return null;
-      }
-
       const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
       const draggedDescendantIds = new Set(getCanvasItemDescendantIds(canvasItems, draggedItem.id));
       const candidates =
@@ -193,17 +171,18 @@ export function useCanvasIdeationDragPreview({
       let bestTarget: {
         nodeId: string;
         targetItem: CanvasWorkspaceItem;
-        targetNode: Node | null;
+        targetNode: Node;
         isCurrentRoot: boolean;
         distance: number;
       } | null = null;
 
       for (const { element, nodeId, itemId } of candidates) {
-        if (!leftPane.contains(element)) {
+        if (!nodeId.startsWith("canvas-item-")) {
           continue;
         }
         const targetItem = canvasItemById.get(itemId) || null;
-        if (!targetItem) {
+        const targetNode = flowNodeById.get(nodeId) || null;
+        if (!targetItem || !targetNode || targetItem.id === draggedItem.id || draggedDescendantIds.has(targetItem.id)) {
           continue;
         }
 
@@ -217,19 +196,10 @@ export function useCanvasIdeationDragPreview({
           continue;
         }
 
-        if (
-          targetItem.parent_topic_id ||
-          targetItem.agenda_id !== selectedAgendaForDrop ||
-          targetItem.id === draggedItem.id ||
-          draggedDescendantIds.has(targetItem.id)
-        ) {
-          continue;
-        }
-
         const target = {
           nodeId,
           targetItem,
-          targetNode: flowNodeById.get(nodeId) || null,
+          targetNode,
           isCurrentRoot: targetItem.id === draggedRootId,
           distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
         };
@@ -246,9 +216,6 @@ export function useCanvasIdeationDragPreview({
       collectIdeationDropTargetElements,
       flowNodeById,
       ideationDropTargetElementsRef,
-      ideationLeftPaneRef,
-      selectedAgendaForDrop,
-      stage,
     ],
   );
 
@@ -266,79 +233,36 @@ export function useCanvasIdeationDragPreview({
 
       const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
       const draggedDescendantIds = getCanvasItemDescendantIds(canvasItems, draggedItem.id);
-      const splitLeftDropTarget = findIdeationLeftGroupDropTarget(clientX, clientY, draggedItem);
-      const pointerInsideLeftPane = pointInRect(
-        clientX,
-        clientY,
-        getReactFlowCanvasRect(ideationLeftPaneRef.current),
-      );
-      const pointerInsideRightPane = pointInRect(
-        clientX,
-        clientY,
-        getReactFlowCanvasRect(ideationRightPaneRef.current),
-      );
+      const directDropTarget = findDirectDropTarget(clientX, clientY, draggedItem);
 
-      if (draggedItem.parent_topic_id && pointerInsideLeftPane) {
-        if (splitLeftDropTarget && splitLeftDropTarget.targetNode && !splitLeftDropTarget.isCurrentRoot) {
+      if (directDropTarget && !directDropTarget.isCurrentRoot) {
+        if (
+          draggedItem.parent_topic_id &&
+          !directDropTarget.targetItem.parent_topic_id &&
+          directDropTarget.targetItem.agenda_id === selectedAgendaForDrop
+        ) {
           return {
             draggedItemId,
-            targetId: splitLeftDropTarget.targetItem.id,
+            targetId: directDropTarget.targetItem.id,
             mode: "topic",
-            agendaId: splitLeftDropTarget.targetItem.agenda_id || draggedItem.agenda_id,
-            position: splitLeftDropTarget.targetNode.position,
+            agendaId: directDropTarget.targetItem.agenda_id || draggedItem.agenda_id,
+            position: directDropTarget.targetNode.position,
             label: "이 그룹으로 이동",
-            hint: `"${splitLeftDropTarget.targetItem.title || "그룹"}" 상세 캔버스로 이동합니다.`,
+            hint: `"${directDropTarget.targetItem.title || "그룹"}" 하위로 이동합니다.`,
           };
         }
 
-        return {
-          draggedItemId,
-          targetId: selectedAgendaForDrop || draggedItem.agenda_id,
-          mode: "detach",
-          agendaId: selectedAgendaForDrop || draggedItem.agenda_id,
-          position: getIdeationDropPlaceholderPosition("left", clientX, clientY, node.position),
-          label: "왼쪽에 추가",
-          hint: "마우스를 놓으면 현재 그룹분류의 1차 노드로 추가합니다.",
-        };
-      }
-
-      if (splitLeftDropTarget && splitLeftDropTarget.targetNode) {
-        if (!draggedItem.parent_topic_id && !splitLeftDropTarget.isCurrentRoot) {
-          return makeIdeationMergeDropPreview(
-            draggedItem,
-            splitLeftDropTarget.targetItem,
-            splitLeftDropTarget.targetNode.position,
-          );
-        }
-      }
-
-      if (!draggedItem.parent_topic_id && pointerInsideRightPane) {
-        const selectedRootIdForDrop = selectedCanvasItemId
-          ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
-          : "";
-        const selectedRootItemForDrop = selectedRootIdForDrop
-          ? canvasItemById.get(selectedRootIdForDrop) || null
-          : null;
-
         if (
-          selectedRootItemForDrop &&
-          selectedRootItemForDrop.id !== draggedItem.id &&
-          selectedRootItemForDrop.agenda_id === selectedAgendaForDrop
+          !draggedItem.parent_topic_id &&
+          !directDropTarget.targetItem.parent_topic_id &&
+          directDropTarget.targetItem.agenda_id === selectedAgendaForDrop
         ) {
           return makeIdeationMergeDropPreview(
             draggedItem,
-            selectedRootItemForDrop,
-            getIdeationDropPlaceholderPosition("right", clientX, clientY, node.position),
+            directDropTarget.targetItem,
+            directDropTarget.targetNode.position,
           );
         }
-      }
-
-      if (pointerInsideLeftPane || (!draggedItem.parent_topic_id && !pointerInsideRightPane)) {
-        return null;
-      }
-
-      if (draggedItem.parent_topic_id && pointerInsideRightPane) {
-        return null;
       }
 
       const candidateElements =
@@ -370,14 +294,14 @@ export function useCanvasIdeationDragPreview({
           clientX <= rect.right &&
           clientY >= rect.top &&
           clientY <= rect.bottom;
-        const canDropOnSplitGroup =
+        const canDropOnRootGroup =
           insideNodeRect &&
           Boolean(draggedItem.parent_topic_id) &&
           !targetItem.parent_topic_id &&
           targetItem.agenda_id === selectedAgendaForDrop &&
           targetItem.id !== draggedRootId &&
           !draggedDescendantIds.includes(targetItem.id);
-        if (canDropOnSplitGroup) {
+        if (canDropOnRootGroup) {
           const target = {
             nodeId,
             targetItem,
@@ -391,14 +315,14 @@ export function useCanvasIdeationDragPreview({
           }
           continue;
         }
-        const canMergeSplitGroups =
+        const canMergeRootGroups =
           insideNodeRect &&
           !draggedItem.parent_topic_id &&
           !targetItem.parent_topic_id &&
           targetItem.agenda_id === selectedAgendaForDrop &&
           targetItem.id !== draggedItem.id &&
           !draggedDescendantIds.includes(targetItem.id);
-        if (canMergeSplitGroups) {
+        if (canMergeRootGroups) {
           const target = {
             nodeId,
             targetItem,
@@ -469,7 +393,7 @@ export function useCanvasIdeationDragPreview({
             agendaId: targetItem.agenda_id || draggedItem.agenda_id,
             position: targetNode.position,
             label: "이 그룹으로 이동",
-            hint: `"${targetItem.title || "그룹"}" 상세 캔버스로 이동합니다.`,
+            hint: `"${targetItem.title || "그룹"}" 하위로 이동합니다.`,
           };
         }
 
@@ -525,20 +449,29 @@ export function useCanvasIdeationDragPreview({
         };
       }
 
+      if (draggedItem.parent_topic_id) {
+        return {
+          draggedItemId,
+          targetId: selectedAgendaForDrop || draggedItem.agenda_id,
+          mode: "detach",
+          agendaId: selectedAgendaForDrop || draggedItem.agenda_id,
+          position: getCanvasDropPosition(clientX, clientY, node.position),
+          label: "상위로 빼기",
+          hint: "마우스를 놓으면 단일 캔버스의 1차 노드로 이동합니다.",
+        };
+      }
+
       return null;
     },
     [
       canvasItemById,
       canvasItems,
       collectIdeationDropTargetElements,
-      findIdeationLeftGroupDropTarget,
+      findDirectDropTarget,
       flowNodeById,
-      getIdeationDropPlaceholderPosition,
+      getCanvasDropPosition,
       ideationDropTargetElementsRef,
-      ideationLeftPaneRef,
-      ideationRightPaneRef,
       selectedAgendaForDrop,
-      selectedCanvasItemId,
       stage,
     ],
   );

@@ -101,12 +101,9 @@ type UseProblemGroupRelationshipsOptions<
   setDraggingPersonalNoteId: Dispatch<SetStateAction<string>>;
   setDropProblemGroupId: Dispatch<SetStateAction<string>>;
   setLeftPanelTab: Dispatch<SetStateAction<"detail">>;
-  setPendingProblemGroupLinkId: Dispatch<SetStateAction<string>>;
   setProblemGroups: Dispatch<SetStateAction<TGroup[]>>;
-  setSelectedCanvasItemId: Dispatch<SetStateAction<string>>;
   setSelectedNodeId: Dispatch<SetStateAction<string>>;
   setSelectedProblemGroupId: Dispatch<SetStateAction<string>>;
-  setSelectedProblemSourceNodeId: Dispatch<SetStateAction<string>>;
 };
 
 export function useProblemGroupRelationships<
@@ -131,12 +128,9 @@ export function useProblemGroupRelationships<
   setDraggingPersonalNoteId,
   setDropProblemGroupId,
   setLeftPanelTab,
-  setPendingProblemGroupLinkId,
   setProblemGroups,
-  setSelectedCanvasItemId,
   setSelectedNodeId,
   setSelectedProblemGroupId,
-  setSelectedProblemSourceNodeId,
 }: UseProblemGroupRelationshipsOptions<TGroup, TWorkspace, TPatch>) {
   const handleAttachPersonalNoteToProblemGroup = useCallback(
     (groupId: string, noteId: string) => {
@@ -263,100 +257,7 @@ export function useProblemGroupRelationships<
     ],
   );
 
-  const handleCreateProblemGroupLink = useCallback(
-    (sourceGroupId: string, targetGroupId: string) => {
-      if (!sourceGroupId || !targetGroupId) return false;
-      if (sourceGroupId === targetGroupId) {
-        setPendingProblemGroupLinkId("");
-        setActivityMessage("같은 문제정의 그룹에는 연결할 수 없습니다.");
-        return true;
-      }
-
-      const sourceGroup = problemGroupById.get(sourceGroupId);
-      const targetGroup = problemGroupById.get(targetGroupId);
-      if (!sourceGroup || !targetGroup) {
-        setPendingProblemGroupLinkId("");
-        setActivityMessage("연결할 문제정의 그룹을 찾지 못했습니다.");
-        return true;
-      }
-
-      if ((sourceGroup.linked_group_ids || []).includes(targetGroupId)) {
-        setSelectedProblemGroupId(targetGroupId);
-        setPendingProblemGroupLinkId("");
-        setActivityMessage("이미 연결된 문제정의 그룹입니다.");
-        return true;
-      }
-
-      const nextProblemGroups = problemGroups.map((group) =>
-        group.group_id === sourceGroupId
-          ? ({
-              ...group,
-              linked_group_ids: [...new Set([...(group.linked_group_ids || []), targetGroupId])],
-            } as TGroup)
-          : group,
-      );
-
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage,
-        problemGroups: nextProblemGroups,
-        importedState: persistedSharedImportedState,
-      } as TWorkspace;
-      setProblemGroups(nextProblemGroups);
-      setSelectedProblemGroupId(targetGroupId);
-      setSelectedProblemSourceNodeId("");
-      setSelectedCanvasItemId("");
-      setPendingProblemGroupLinkId("");
-      setActivityMessage(`"${sourceGroup.topic}"와 "${targetGroup.topic}" 문제정의 그룹을 연결했습니다.`);
-
-      if (sharedSyncEnabled) {
-        if (meetingId) {
-          writeSharedWorkspaceSessionCache(
-            meetingId,
-            buildCurrentWorkspacePatchPayload({
-              problemGroups: nextProblemGroups,
-            }),
-          );
-        }
-        forceBroadcastSharedCanvas({
-          problemGroups: nextProblemGroups,
-        });
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            problem_groups: serializeSharedProblemGroups(nextProblemGroups),
-            imported_state: persistedSharedImportedState,
-          }).catch((error) => {
-            console.error("Failed to save problem group link:", error);
-          });
-        }
-      }
-
-      return true;
-    },
-    [
-      buildCurrentWorkspacePatchPayload,
-      forceBroadcastSharedCanvas,
-      latestSharedWorkspaceRef,
-      meetingId,
-      persistedSharedImportedState,
-      problemGroupById,
-      problemGroups,
-      serializeSharedProblemGroups,
-      sharedSyncEnabled,
-      stage,
-      writeSharedWorkspaceSessionCache,
-      setActivityMessage,
-      setPendingProblemGroupLinkId,
-      setProblemGroups,
-      setSelectedCanvasItemId,
-      setSelectedProblemGroupId,
-      setSelectedProblemSourceNodeId,
-    ],
-  );
-
   return {
     handleAttachPersonalNoteToProblemGroup,
-    handleCreateProblemGroupLink,
   };
 }

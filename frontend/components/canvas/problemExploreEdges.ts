@@ -3,7 +3,6 @@ import { MarkerType, type Edge } from "@xyflow/react";
 type ProblemExploreEdgeGroupModel = {
   group_id: string;
   parent_group_id?: string;
-  linked_group_ids?: string[];
 };
 
 type BuildProblemExploreEdgesOptions<TGroup extends ProblemExploreEdgeGroupModel> = {
@@ -68,29 +67,8 @@ export function buildProblemExploreEdges<TGroup extends ProblemExploreEdgeGroupM
       selectable: false,
       style: { stroke: "#a3a3a3", strokeOpacity: 0.62, strokeWidth: 1.6 },
     }));
-  const groupLinkEdges = problemGroups.flatMap((group) =>
-    (group.linked_group_ids || [])
-      .filter(
-        (linkedGroupId) =>
-          linkedGroupId !== group.group_id &&
-          problemGroupIds.has(linkedGroupId) &&
-          visibleProblemGroupIds.has(group.group_id) &&
-          visibleProblemGroupIds.has(linkedGroupId),
-      )
-      .map((linkedGroupId): Edge => ({
-        id: `problem-group-link::${group.group_id}::${linkedGroupId}`,
-        source: `problem-${group.group_id}`,
-        target: `problem-${linkedGroupId}`,
-        type: "smoothstep",
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#a13ab8" },
-        interactionWidth: 0,
-        selectable: false,
-        style: { stroke: "#a13ab8", strokeOpacity: 0.58, strokeWidth: 2, strokeDasharray: "5 5" },
-      })),
-  );
-
   return {
-    left: [...hierarchyEdges, ...groupLinkEdges],
+    left: hierarchyEdges,
     right: [] as Edge[],
   };
 }

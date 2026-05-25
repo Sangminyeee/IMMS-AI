@@ -29,9 +29,6 @@ type UseProblemStructureGenerationOptions<TProblemGroup extends ProblemStructure
   problemStructureRequestSeqRef: MutableRefObject<number>;
   selectedProblemGroupId: string;
   setActivityMessage: (message: string) => void;
-  setArmedCanvasTool: (value: null) => void;
-  setCanvasPlacementPreview: (value: null) => void;
-  setPendingProblemGroupLinkId: Dispatch<SetStateAction<string>>;
   setProblemDefinitionMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
   setProblemDefinitionPhase: Dispatch<SetStateAction<ProblemDefinitionPhase>>;
   setProblemGroupingRationaleOpenGroupId: Dispatch<SetStateAction<string>>;
@@ -59,9 +56,6 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
   problemStructureRequestSeqRef,
   selectedProblemGroupId,
   setActivityMessage,
-  setArmedCanvasTool,
-  setCanvasPlacementPreview,
-  setPendingProblemGroupLinkId,
   setProblemDefinitionMode,
   setProblemDefinitionPhase,
   setProblemGroupingRationaleOpenGroupId,
@@ -197,9 +191,6 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     const nextNodes = syncProblemStructureNodesFromDefinition();
     setProblemDefinitionPhase("structure");
     setProblemStructureSetupOpen(false);
-    setArmedCanvasTool(null);
-    setCanvasPlacementPreview(null);
-    setPendingProblemGroupLinkId("");
     setSelectedNodeId("");
     setSelectedProblemGroupId("");
     setProblemGroupingRationaleOpenGroupId("");
@@ -218,9 +209,6 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     problemStructureDraftMode,
     runProblemStructureGrouping,
     setActivityMessage,
-    setArmedCanvasTool,
-    setCanvasPlacementPreview,
-    setPendingProblemGroupLinkId,
     setProblemDefinitionMode,
     setProblemDefinitionPhase,
     setProblemGroupingRationaleOpenGroupId,

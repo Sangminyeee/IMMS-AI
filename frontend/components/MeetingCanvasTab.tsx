@@ -10,7 +10,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getCanvasWorkspaceState,
   getCanvasPersonalNotes,
-  confirmCanvasPlacement,
   getCanvasIdeaAssimilationWorkspaceJob,
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
@@ -38,12 +37,10 @@ import {
 import {
   buildUserMergedTopicTitle,
   getCanvasItemChangeSignature,
-  getCanvasItemTopLevelAncestorId,
   getTopicDescendantTopicIds,
   getTopicFlattenedIdeaChildIds,
   isTopicCanvasItem,
   makeIdeationDragGhostLabel,
-  makeIdeationMergeDropPreview,
 } from "@/components/canvas/CanvasNodeLabels";
 import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
@@ -89,12 +86,7 @@ import { useCanvasNodePreviewSync } from "@/components/canvas/useCanvasNodePrevi
 import { useCanvasNodeChanges } from "@/components/canvas/useCanvasNodeChanges";
 import { useCanvasIdeationDragPreview } from "@/components/canvas/useCanvasIdeationDragPreview";
 import { useCanvasNodeDragStartMove } from "@/components/canvas/useCanvasNodeDragStartMove";
-import {
-  extractCanvasItemIdFromNodeId,
-  findProblemSourceDropTarget,
-  getReactFlowCanvasRect,
-  pointInRect,
-} from "@/components/canvas/canvasInteractionDom";
+import { findProblemSourceDropTarget } from "@/components/canvas/canvasInteractionDom";
 import {
   buildMeetingStateSignature,
   buildSharedCanvasSignature,
@@ -164,20 +156,12 @@ export type MeetingAgenda = {
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ComposerTool = "note" | "comment" | "topic";
-type CanvasTool = ComposerTool | "group" | "problem-idea";
 type ProblemCanvasToolbarAction =
-  | "group"
-  | "problem-link"
-  | "debug-regenerate"
-  | "debug-refresh-chunks"
   | "structure-start"
   | "structure-back"
   | "structure-ai-group"
   | "structure-add-group"
-  | "structure-refresh"
-  | "note"
-  | "problem-idea"
-  | "adopt";
+  | "structure-refresh";
 type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
 const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
@@ -347,44 +331,6 @@ function stageLabel(stage: CanvasStage) {
 
 function shouldHideCanvasStatusMessage(message: string) {
   return /websocket|웹소켓|연결\s*안\s*됨|연결되지|오류|에러|실패/i.test(message);
-}
-
-function isComposerTool(tool: CanvasTool): tool is ComposerTool {
-  return tool === "note" || tool === "comment" || tool === "topic";
-}
-
-function toolLabel(tool: CanvasTool, stage?: CanvasStage) {
-  if (tool === "note") return stage === "problem-definition" ? "의견추가" : "추가";
-  if (tool === "problem-idea") return "아이디어 추가";
-  if (tool === "comment") return "댓글";
-  if (tool === "group") return stage === "problem-definition" ? "문제정의 그룹 추가" : "그룹";
-  return "주제";
-}
-
-function toolPreviewHint(tool: CanvasTool, stage?: CanvasStage) {
-  if (stage === "problem-definition") {
-    if (tool === "group") return "새 문제정의 그룹을 만들 위치";
-    if (tool === "problem-idea") return "문제정의 그룹에 아이디어를 추가할 위치";
-    if (tool === "comment") return "문제정의 댓글을 남길 위치";
-    return "문제 의견을 추가할 위치";
-  }
-  if (tool === "group") return "프로젝트 그룹을 만들 위치";
-  if (tool === "topic") return "새 주제를 만들 위치";
-  if (tool === "comment") return "코멘트를 남길 위치";
-  return "메모를 붙일 위치";
-}
-
-function toolPreviewTone(tool: CanvasTool, stage?: CanvasStage) {
-  if (stage === "problem-definition") {
-    if (tool === "group") return "border-violet-200 bg-violet-50/92 text-violet-700";
-    if (tool === "problem-idea") return "border-fuchsia-200 bg-fuchsia-50/92 text-fuchsia-700";
-    if (tool === "comment") return "border-sky-200 bg-sky-50/92 text-sky-700";
-    return "border-amber-200 bg-amber-50/92 text-amber-700";
-  }
-  if (tool === "group") return "border-emerald-200 bg-emerald-50/92 text-emerald-700";
-  if (tool === "topic") return "border-fuchsia-200 bg-fuchsia-50/92 text-fuchsia-700";
-  if (tool === "comment") return "border-sky-200 bg-sky-50/92 text-sky-700";
-  return "border-amber-200 bg-amber-50/92 text-amber-700";
 }
 
 function extractAgendaIdFromNodeId(nodeId: string) {
@@ -908,8 +854,6 @@ export default function MeetingCanvasTab({
   const captureProblemPhaseOverride: ProblemDefinitionPhase | "" =
     captureProblemPhaseParam === "explore" || captureProblemPhaseParam === "structure" ? captureProblemPhaseParam : "";
   const [stage, setStage] = useState<CanvasStage>("ideation");
-  const [, setComposerTool] = useState<ComposerTool>("note");
-  const [armedCanvasTool, setArmedCanvasTool] = useState<CanvasTool | null>(null);
   const [composerAgendaId, setComposerAgendaId] = useState("");
   const [composerTitle, setComposerTitle] = useState("");
   const [composerBody, setComposerBody] = useState("");
@@ -925,7 +869,6 @@ export default function MeetingCanvasTab({
   const [, setTopicCollapsedOverrides] = useState<Record<string, boolean>>({});
   const [focusedCanvasItemId, setFocusedCanvasItemId] = useState("");
   const [customGroups, setCustomGroups] = useState<CustomGroupViewModel[]>([]);
-  const [customGroupDraftTitle, setCustomGroupDraftTitle] = useState("");
   const [localEditPresenceTarget, setLocalEditPresenceTarget] = useState<LocalEditPresenceTarget | null>(null);
   const [remoteEditPresenceByKey, setRemoteEditPresenceByKey] = useState<Record<string, CanvasEditPresencePayload>>({});
   const [editingPersonalNoteId, setEditingPersonalNoteId] = useState("");
@@ -1000,7 +943,6 @@ export default function MeetingCanvasTab({
   const [problemGroupingRationaleById, setProblemGroupingRationaleById] = useState<Record<string, ProblemGroupingRationaleViewModel>>({});
   const [problemGroupingRationalePendingId, setProblemGroupingRationalePendingId] = useState("");
   const [problemGroupingRationaleOpenGroupId, setProblemGroupingRationaleOpenGroupId] = useState("");
-  const [pendingProblemGroupLinkId, setPendingProblemGroupLinkId] = useState("");
   const [editingProblemGroupId, setEditingProblemGroupId] = useState("");
   const [problemGroupDraftTopic, setProblemGroupDraftTopic] = useState("");
   const [problemGroupDraftInsight, setProblemGroupDraftInsight] = useState("");
@@ -1048,11 +990,6 @@ export default function MeetingCanvasTab({
     isDesktopLayout,
     startPanelResize,
     solutionRightPaneRef,
-    placementFeedback,
-    setPlacementFeedback,
-    placementFeedbackTimerRef,
-    canvasPlacementPreview,
-    setCanvasPlacementPreview,
   } = useCanvasUiState({
     solutionPaneMeasureKey: stage,
   });
@@ -1069,9 +1006,7 @@ export default function MeetingCanvasTab({
     handleBackToEndMeetingConfirm,
   } = useCanvasEndMeetingState();
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const { canvasSurfaceRef, flowRef, ideationLeftFlowRef, ideationRightFlowRef } = useCanvasFlowRefs();
-  const ideationLeftPaneRef = useRef<HTMLDivElement | null>(null);
-  const ideationRightPaneRef = useRef<HTMLDivElement | null>(null);
+  const { canvasSurfaceRef, flowRef } = useCanvasFlowRefs();
   const autoProblemDefinitionRef = useRef(false);
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
@@ -1685,13 +1620,11 @@ export default function MeetingCanvasTab({
     resetEndMeetingState();
     onMeetingGoalChange("");
     onMeetingGoalContextChange("");
-    setCustomGroupDraftTitle("");
     setEditingPersonalNoteId("");
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
     setSelectedProblemSourceNodeId("");
-    setArmedCanvasTool(null);
     setIdeaAssimilationStatus("");
     setProblemDiscussionStatus("");
     agendaDragPreviewRef.current = null;
@@ -1701,7 +1634,6 @@ export default function MeetingCanvasTab({
     setProblemIdeaDrag(null);
     setProblemIdeaDropPreview(null);
     setProblemIdeaDragPoint(null);
-    setPlacementFeedback(null);
     if (sharedSyncTimerRef.current) {
       window.clearTimeout(sharedSyncTimerRef.current);
       sharedSyncTimerRef.current = null;
@@ -1727,10 +1659,6 @@ export default function MeetingCanvasTab({
     dragIdByNodeIdRef.current = {};
     lastRemoteNodePreviewSeqRef.current = {};
     remoteNodePreviewTargetsRef.current.clear();
-    if (placementFeedbackTimerRef.current) {
-      window.clearTimeout(placementFeedbackTimerRef.current);
-      placementFeedbackTimerRef.current = null;
-    }
     if (problemDiscussionFlushTimerRef.current) {
       window.clearTimeout(problemDiscussionFlushTimerRef.current);
       problemDiscussionFlushTimerRef.current = null;
@@ -1750,7 +1678,6 @@ export default function MeetingCanvasTab({
     onMeetingGoalContextChange,
     pendingIdeationDragFrameRef,
     pendingNodePreviewsRef,
-    placementFeedbackTimerRef,
     problemIdeaDragRef,
     problemIdeaPointerDragRef,
     remoteNodePreviewFrameRef,
@@ -1758,7 +1685,6 @@ export default function MeetingCanvasTab({
     resetEndMeetingState,
     resetMeetingGoalState,
     setAgendaDragPreview,
-    setPlacementFeedback,
     setProblemIdeaDrag,
     setProblemIdeaDragPoint,
     setProblemIdeaDropPreview,
@@ -1900,7 +1826,6 @@ export default function MeetingCanvasTab({
     setAgendaOverrides({});
     setCanvasItems([]);
     setCustomGroups([]);
-    setCustomGroupDraftTitle("");
     setIdeaCreateStack(0);
     setNodePositions({});
     setImportedState(null);
@@ -2632,7 +2557,7 @@ export default function MeetingCanvasTab({
     setProblemGroupingRationalePendingId,
   });
 
-  const { handleAttachPersonalNoteToProblemGroup, handleCreateProblemGroupLink } = useProblemGroupRelationships({
+  const { handleAttachPersonalNoteToProblemGroup } = useProblemGroupRelationships({
     buildCurrentWorkspacePatchPayload,
     forceBroadcastSharedCanvas,
     latestSharedWorkspaceRef,
@@ -2650,12 +2575,9 @@ export default function MeetingCanvasTab({
     setDraggingPersonalNoteId,
     setDropProblemGroupId,
     setLeftPanelTab,
-    setPendingProblemGroupLinkId,
     setProblemGroups,
-    setSelectedCanvasItemId,
     setSelectedNodeId,
     setSelectedProblemGroupId,
-    setSelectedProblemSourceNodeId,
   });
 
   const getProblemIdeaDropPreviewFromPoint = useCallback(
@@ -3480,9 +3402,6 @@ export default function MeetingCanvasTab({
     problemStructureRequestSeqRef,
     selectedProblemGroupId,
     setActivityMessage,
-    setArmedCanvasTool,
-    setCanvasPlacementPreview,
-    setPendingProblemGroupLinkId,
     setProblemDefinitionMode,
     setProblemDefinitionPhase,
     setProblemGroupingRationaleOpenGroupId,
@@ -3570,7 +3489,6 @@ export default function MeetingCanvasTab({
           void handleShowProblemGroupingRationale(group);
         },
         onToggleProblemChildren: handleToggleProblemChildren,
-        pendingProblemGroupLinkId,
         problemChildGenerationPendingId,
         problemExploreLayout,
         editingProblemGroupId,
@@ -3631,7 +3549,6 @@ export default function MeetingCanvasTab({
     handleToggleProblemChildren,
     loadingProblemGroupIds,
     nodePositions,
-    pendingProblemGroupLinkId,
     problemChildGenerationPendingId,
     problemDefinitionMode,
     problemDefinitionPhase,
@@ -3935,648 +3852,25 @@ export default function MeetingCanvasTab({
     setActivityMessage("개인 메모에 저장했습니다.");
   };
 
-  const canUseCanvasToolbar = stage === "problem-definition";
   const isProblemDefinitionExploreStage = stage === "problem-definition" && problemDefinitionPhase !== "structure";
-  const visibleCanvasTools = useMemo<CanvasTool[]>(
-    () =>
-      stage === "problem-definition"
-        ? ["group"]
-        : [],
-    [stage],
-  );
   const problemCanvasToolbarActions: ProblemCanvasToolbarAction[] =
     problemDefinitionPhase === "structure"
       ? ["structure-back", "structure-ai-group", "structure-add-group", "structure-refresh"]
       : ["structure-start"];
 
   const problemToolbarActionLabel = (action: ProblemCanvasToolbarAction) => {
-    if (action === "group") return "문제정의 그룹 추가";
-    if (action === "problem-link") return "문제정의 그룹 연결";
-    if (action === "debug-regenerate") return "디버그 재생성";
-    if (action === "debug-refresh-chunks") return "요약 캐시 재생성";
     if (action === "structure-start") return "구조화 시작";
     if (action === "structure-back") return "정의 1단계";
     if (action === "structure-ai-group") return problemStructurePending ? "AI 묶는 중" : "AI 묶기";
     if (action === "structure-add-group") return "그룹 추가";
-    if (action === "structure-refresh") return "다시 가져오기";
-    if (action === "note") return "의견추가";
-    if (action === "problem-idea") return "아이디어 추가";
-    return "채택";
+    return "다시 가져오기";
   };
 
   const isProblemToolbarActionActive = (action: ProblemCanvasToolbarAction) => {
-    if (action === "debug-regenerate" || action === "debug-refresh-chunks") return problemDefinitionStagePending;
     if (action === "structure-start") return problemDefinitionPhase === "structure" || problemStructureSetupOpen;
     if (action === "structure-ai-group") return problemStructurePending;
-    if (action === "problem-link") return Boolean(pendingProblemGroupLinkId);
-    if (action === "adopt") return selectedProblemGroup?.status === "final";
-    return armedCanvasTool === action;
+    return false;
   };
-
-  const armCanvasTool = (tool: CanvasTool) => {
-    if (!canUseCanvasToolbar || !visibleCanvasTools.includes(tool)) {
-      setActivityMessage("현재 단계에서는 이 도구를 사용할 수 없습니다.");
-      return;
-    }
-    setPendingProblemGroupLinkId("");
-    if (isComposerTool(tool)) {
-      setComposerTool(tool);
-    }
-    const isDisarming = armedCanvasTool === tool;
-    setArmedCanvasTool(isDisarming ? null : tool);
-    setCanvasPlacementPreview((prev) =>
-      !prev || isDisarming
-        ? null
-        : {
-            ...prev,
-            label: toolLabel(tool, stage),
-            hint: toolPreviewHint(tool, stage),
-            tone: toolPreviewTone(tool, stage),
-          },
-    );
-    setActivityMessage(
-      isDisarming
-        ? "보드 클릭 도구를 해제했습니다."
-        : stage === "problem-definition" && tool === "group"
-          ? "문제정의 그룹 도구를 선택했습니다. 보드를 클릭하면 새 문제정의 그룹이 생성됩니다."
-          : stage === "problem-definition" && tool === "problem-idea"
-            ? "아이디어 추가 도구를 선택했습니다. 문제정의 그룹을 클릭하면 아이디어 카드가 추가됩니다."
-          : `${toolLabel(tool, stage)} 도구를 선택했습니다. 보드를 클릭하면 문제정의 의견 노드가 생성됩니다.`,
-    );
-  };
-
-  useEffect(() => {
-    if (!canUseCanvasToolbar || !armedCanvasTool || !visibleCanvasTools.includes(armedCanvasTool)) {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-    }
-  }, [armedCanvasTool, canUseCanvasToolbar, setCanvasPlacementPreview, visibleCanvasTools]);
-
-  useEffect(() => {
-    if (stage !== "problem-definition") {
-      setPendingProblemGroupLinkId("");
-    }
-  }, [stage]);
-
-  const updateCanvasPlacementPreview = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!canUseCanvasToolbar || !armedCanvasTool || !visibleCanvasTools.includes(armedCanvasTool) || !canvasSurfaceRef.current) {
-        setCanvasPlacementPreview(null);
-        return;
-      }
-
-      const rect = canvasSurfaceRef.current.getBoundingClientRect();
-      const previewWidth = 232;
-      const previewHeight = 112;
-      const x = Math.max(0, Math.min(clientX - rect.left, Math.max(rect.width - previewWidth, 0)));
-      const y = Math.max(0, Math.min(clientY - rect.top, Math.max(rect.height - previewHeight, 0)));
-
-      setCanvasPlacementPreview({
-        x,
-        y,
-        label: toolLabel(armedCanvasTool, stage),
-        hint: toolPreviewHint(armedCanvasTool, stage),
-        tone: toolPreviewTone(armedCanvasTool, stage),
-      });
-    },
-    [armedCanvasTool, canvasSurfaceRef, canUseCanvasToolbar, setCanvasPlacementPreview, stage, visibleCanvasTools],
-  );
-
-  const clearCanvasPlacementPreview = useCallback(() => {
-    setCanvasPlacementPreview(null);
-  }, [setCanvasPlacementPreview]);
-
-  const handleCanvasPlacementStart = useCallback(
-    async (tool: CanvasTool, clientX: number, clientY: number, agendaId?: string, pointId?: string) => {
-      if (!flowRef.current || !canvasSurfaceRef.current) {
-        return;
-      }
-
-      if (stage === "ideation" && (tool === "note" || tool === "comment")) {
-        const rightPaneRect = getReactFlowCanvasRect(ideationRightPaneRef.current);
-        if (!pointInRect(clientX, clientY, rightPaneRect)) {
-          setArmedCanvasTool(null);
-          setCanvasPlacementPreview(null);
-          setActivityMessage("메모와 댓글은 오른쪽 상세 캔버스에서 추가해 주세요.");
-          return;
-        }
-      }
-
-      const canvasRect = canvasSurfaceRef.current.getBoundingClientRect();
-      const uiX = Math.max(0, Math.min(clientX - canvasRect.left, canvasRect.width));
-      const uiY = Math.max(0, Math.min(clientY - canvasRect.top, canvasRect.height));
-      const flowPosition = flowRef.current.screenToFlowPosition({ x: clientX, y: clientY });
-
-      if (stage === "problem-definition") {
-        const now = new Date().toISOString();
-        const makeUserProblemGroup = (groupId: string): ProblemGroupViewModel => ({
-          group_id: groupId,
-          topic: `문제정의 그룹 ${problemGroups.length + 1}`,
-          insight_lens: "",
-          insight_user_edited: false,
-          keywords: [],
-          agenda_ids: [],
-          agenda_titles: [],
-          ideas: [],
-          discussion_items: [],
-          source_summary_items: [],
-          conclusion: "직접 추가한 문제정의 그룹입니다. 관련 의견을 드래그해서 편입해 주세요.",
-          conclusion_user_edited: false,
-          status: "draft",
-          source_signature: `user:${groupId}`,
-          source_agenda_signatures: {},
-          source_idea_signatures: {},
-        });
-
-        let nextProblemGroupsSnapshot: ProblemGroupViewModel[] = problemGroups;
-        let nextNodePositionsSnapshot: CanvasNodePositionsByStage = nodePositions;
-        const clickedProblemGroupId =
-          pointId?.startsWith("problem-") && !pointId.startsWith("problem-discussion-")
-            ? pointId.slice("problem-".length)
-            : "";
-        const clickedDiscussionGroupId =
-          pointId?.startsWith("problem-discussion-")
-            ? problemGroups.find((group) =>
-                (group.discussion_items || []).some(
-                  (item) => `problem-discussion-${item.id}` === pointId,
-                ),
-              )?.group_id || ""
-            : "";
-        let nextSelectedGroupId =
-          clickedProblemGroupId ||
-          clickedDiscussionGroupId ||
-          selectedProblemGroupId ||
-          problemGroups[0]?.group_id ||
-          "";
-        let nextSelectedNodeId = "";
-        let nextSelectedProblemSourceNodeId = "";
-        let nextLeftPanelTab: LeftPanelTab = "detail";
-
-        if (tool === "group") {
-          const groupId = `user-problem-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextGroup = makeUserProblemGroup(groupId);
-          nextProblemGroupsSnapshot = [nextGroup, ...problemGroups];
-          nextNodePositionsSnapshot = {
-            ...nodePositions,
-            "problem-definition": {
-              ...(nodePositions["problem-definition"] || {}),
-              [`problem-${groupId}`]: {
-                x: flowPosition.x,
-                y: flowPosition.y,
-              },
-            },
-          };
-          nextSelectedGroupId = groupId;
-          nextSelectedNodeId = `problem-${groupId}`;
-          setEditingProblemGroupId(groupId);
-          setProblemGroupDraftTopic(nextGroup.topic);
-          setProblemGroupDraftInsight("");
-          setProblemGroupDraftConclusion(nextGroup.conclusion);
-          setActivityMessage("새 문제정의 그룹을 추가했습니다. 다른 의견 노드를 드래그해서 편입할 수 있습니다.");
-        } else if (tool === "problem-idea") {
-          let workingGroups = problemGroups;
-          if (!nextSelectedGroupId) {
-            const groupId = `user-problem-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-            const nextGroup = makeUserProblemGroup(groupId);
-            workingGroups = [nextGroup, ...problemGroups];
-            nextSelectedGroupId = groupId;
-            nextNodePositionsSnapshot = {
-              ...nodePositions,
-              "problem-definition": {
-                ...(nodePositions["problem-definition"] || {}),
-                [`problem-${groupId}`]: {
-                  x: Math.max(80, flowPosition.x - 560),
-                  y: flowPosition.y,
-                },
-              },
-            };
-          }
-
-          const targetGroup = workingGroups.find((group) => group.group_id === nextSelectedGroupId);
-          const ideaId = `user-problem-idea-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextIdea = {
-            id: ideaId,
-            kind: "idea",
-            title: `아이디어 ${(targetGroup?.ideas.length || 0) + 1}`,
-            body: "문제정의 그룹에 추가할 아이디어를 입력해 주세요.",
-          };
-
-          nextProblemGroupsSnapshot = workingGroups.map((group) =>
-            group.group_id === nextSelectedGroupId
-              ? {
-                  ...group,
-                  ideas: [
-                    ...(group.ideas || []),
-                    nextIdea,
-                  ],
-                }
-              : group,
-          );
-          nextSelectedNodeId = `problem-${nextSelectedGroupId}`;
-          nextSelectedProblemSourceNodeId = ideaId;
-          nextLeftPanelTab = "detail";
-          setActivityMessage("아이디어 카드를 문제정의 그룹에 추가했습니다.");
-        } else {
-          let workingGroups = problemGroups;
-          if (!nextSelectedGroupId) {
-            const groupId = `user-problem-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-            const nextGroup = makeUserProblemGroup(groupId);
-            workingGroups = [nextGroup, ...problemGroups];
-            nextSelectedGroupId = groupId;
-            nextNodePositionsSnapshot = {
-              ...nodePositions,
-              "problem-definition": {
-                ...(nodePositions["problem-definition"] || {}),
-                [`problem-${groupId}`]: {
-                  x: Math.max(80, flowPosition.x - 560),
-                  y: flowPosition.y,
-                },
-              },
-            };
-          }
-
-          const discussionId = `user-problem-note-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextDiscussion: ProblemDiscussionViewModel = {
-            id: discussionId,
-            parent_group_id: nextSelectedGroupId,
-            title: tool === "comment" ? "댓글" : "문제 의견",
-            body:
-              tool === "comment"
-                ? "문제정의 단계에서 남길 댓글을 입력해 주세요."
-                : "문제정의에 반영할 의견을 입력해 주세요.",
-            keywords: [],
-            key_evidence: [],
-            refined_utterances: [],
-            evidence_utterance_ids: [],
-            ignored_utterance_ids: [],
-            ai_pending: false,
-            ai_generated: false,
-            user_edited: true,
-            created_by: "user",
-            created_at: now,
-          };
-
-          nextProblemGroupsSnapshot = workingGroups.map((group) =>
-            group.group_id === nextSelectedGroupId
-              ? {
-                  ...group,
-                  discussion_items: [
-                    ...(group.discussion_items || []),
-                    nextDiscussion,
-                  ],
-                }
-              : group,
-          );
-          nextNodePositionsSnapshot = {
-            ...nextNodePositionsSnapshot,
-            "problem-definition": {
-              ...(nextNodePositionsSnapshot["problem-definition"] || {}),
-              [`problem-discussion-${discussionId}`]: {
-                x: flowPosition.x,
-                y: flowPosition.y,
-              },
-            },
-          };
-          nextSelectedNodeId = `problem-discussion-${discussionId}`;
-          setActivityMessage(`${toolLabel(tool, stage)} 노드를 문제정의 단계에 추가했습니다.`);
-        }
-
-        latestSharedWorkspaceRef.current = {
-          ...latestSharedWorkspaceRef.current,
-          stage,
-          problemGroups: nextProblemGroupsSnapshot,
-          nodePositions: nextNodePositionsSnapshot,
-          importedState: persistedSharedImportedState,
-        };
-
-        setArmedCanvasTool(null);
-        setCanvasPlacementPreview(null);
-        setProblemGroups(nextProblemGroupsSnapshot);
-        setNodePositions(nextNodePositionsSnapshot);
-        setSelectedProblemGroupId(nextSelectedGroupId);
-        setSelectedProblemSourceNodeId(nextSelectedProblemSourceNodeId);
-        setSelectedCanvasItemId("");
-        setSelectedNodeId(nextSelectedNodeId);
-        setLeftPanelTab(nextLeftPanelTab);
-        setPlacementFeedback({
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          x: uiX,
-          y: uiY,
-          label: toolLabel(tool, stage),
-        });
-        if (placementFeedbackTimerRef.current) {
-          window.clearTimeout(placementFeedbackTimerRef.current);
-        }
-        placementFeedbackTimerRef.current = window.setTimeout(() => {
-          setPlacementFeedback(null);
-          placementFeedbackTimerRef.current = null;
-        }, 1500);
-
-        if (sharedSyncEnabled) {
-          writeSharedWorkspaceSessionCache(
-            meetingId,
-            buildCurrentWorkspacePatchPayload({
-              problemGroups: nextProblemGroupsSnapshot,
-              nodePositions: nextNodePositionsSnapshot,
-            }),
-          );
-          forceBroadcastSharedCanvas({
-            problemGroups: nextProblemGroupsSnapshot,
-            nodePositions: nextNodePositionsSnapshot,
-          });
-          if (meetingId) {
-            void saveCanvasWorkspacePatch({
-              meeting_id: meetingId,
-              problem_groups: buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot),
-              node_positions: nextNodePositionsSnapshot,
-              imported_state: persistedSharedImportedState,
-            }).catch((error) => {
-              console.error("Failed to save shared problem-definition tool placement:", error);
-            });
-          }
-        }
-        return;
-      }
-
-      if (tool === "group") {
-        const now = new Date().toISOString();
-        const draftTitle = customGroupDraftTitle.trim() || `그룹 분류 ${customGroups.length + 1}`;
-        const nextGroup: CustomGroupViewModel = {
-          id: `project-group-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
-          title: draftTitle,
-          description: "프로젝트에서 직접 추가한 그룹 분류입니다.",
-          keywords: [],
-          color: "",
-          created_by: userId,
-          created_at: now,
-        };
-        const nextNodeId = `agenda-${nextGroup.id}`;
-        const nextCustomGroupsSnapshot = [nextGroup, ...customGroups];
-        const nextNodePositionsSnapshot: CanvasNodePositionsByStage = normalizeCanvasNodePositionsForComputedIdeation({
-          ...nodePositions,
-          ideation: {
-            ...(nodePositions.ideation || {}),
-            [nextNodeId]: {
-              x: flowPosition.x,
-              y: flowPosition.y,
-            },
-          },
-        });
-
-        pendingNodePlacementsRef.current[nextNodeId] = {
-          x: flowPosition.x,
-          y: flowPosition.y,
-        };
-        latestSharedWorkspaceRef.current = {
-          ...latestSharedWorkspaceRef.current,
-          stage,
-          customGroups: nextCustomGroupsSnapshot,
-          nodePositions: nextNodePositionsSnapshot,
-          importedState: persistedSharedImportedState,
-        };
-
-        setArmedCanvasTool(null);
-        setCanvasPlacementPreview(null);
-        setCustomGroups(nextCustomGroupsSnapshot);
-        setNodePositions(nextNodePositionsSnapshot);
-        setSelectedAgendaId(nextGroup.id);
-        setSelectedCanvasItemId("");
-        setSelectedProblemGroupId("");
-        setSelectedNodeId(nextNodeId);
-        setCustomGroupDraftTitle("");
-        setLeftPanelTab("detail");
-        setPlacementFeedback({
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          x: uiX,
-          y: uiY,
-          label: toolLabel(tool),
-        });
-        if (placementFeedbackTimerRef.current) {
-          window.clearTimeout(placementFeedbackTimerRef.current);
-        }
-        placementFeedbackTimerRef.current = window.setTimeout(() => {
-          setPlacementFeedback(null);
-          placementFeedbackTimerRef.current = null;
-        }, 1500);
-        setActivityMessage("보드 위치에 프로젝트 그룹 분류를 생성했습니다. 이름을 바로 수정할 수 있습니다.");
-
-        if (sharedSyncEnabled) {
-          writeSharedWorkspaceSessionCache(
-            meetingId,
-            buildCurrentWorkspacePatchPayload({
-              customGroups: nextCustomGroupsSnapshot,
-              nodePositions: nextNodePositionsSnapshot,
-            }),
-          );
-          forceBroadcastSharedCanvas({
-            customGroups: nextCustomGroupsSnapshot,
-            nodePositions: nextNodePositionsSnapshot,
-          });
-          if (meetingId) {
-            void saveCanvasWorkspacePatch({
-              meeting_id: meetingId,
-              custom_groups: serializeCustomGroups(nextCustomGroupsSnapshot),
-              node_positions: nextNodePositionsSnapshot,
-              imported_state: persistedSharedImportedState,
-            }).catch((error) => {
-              console.error("Failed to save shared project group placement:", error);
-            });
-          }
-        }
-
-        try {
-          await confirmCanvasPlacement({
-            tool,
-            ui_x: uiX,
-            ui_y: uiY,
-            flow_x: flowPosition.x,
-            flow_y: flowPosition.y,
-            title: draftTitle,
-            body: "",
-          });
-        } catch (error) {
-          console.error("Failed to confirm project group placement:", error);
-        }
-        return;
-      }
-
-      if (!isComposerTool(tool)) {
-        setActivityMessage("현재 단계에서는 이 도구를 사용할 수 없습니다.");
-        return;
-      }
-
-      const clickedCanvasItemId = extractCanvasItemIdFromNodeId(pointId || "");
-      const clickedCanvasItem = clickedCanvasItemId
-        ? canvasItemById.get(clickedCanvasItemId) || null
-        : null;
-      const selectedRootItemId = selectedCanvasItemId
-        ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
-        : "";
-      const selectedRootItem = selectedRootItemId
-        ? canvasItemById.get(selectedRootItemId) || null
-        : null;
-      const parentItemForPlacement =
-        stage === "ideation" && tool !== "topic"
-          ? clickedCanvasItem || selectedRootItem
-          : null;
-
-      if (stage === "ideation" && tool !== "topic" && !parentItemForPlacement) {
-        setActivityMessage("먼저 왼쪽 그룹을 선택한 뒤 오른쪽 캔버스에 메모나 댓글을 추가해 주세요.");
-        setArmedCanvasTool(null);
-        setCanvasPlacementPreview(null);
-        return;
-      }
-
-      const nextAgendaId =
-        agendaId ||
-        parentItemForPlacement?.agenda_id ||
-        selectedAgendaId ||
-        agendaModels[0]?.id ||
-        "";
-      const nextParentItemId = parentItemForPlacement?.id || "";
-      const draftTitle = `${toolLabel(tool)} ${canvasItems.filter((item) => item.kind === tool).length + 1}`;
-      const nextItemId = `item-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-      const nextNodeId = `canvas-item-${nextItemId}`;
-      const draftBody =
-        tool === "topic"
-          ? "새 주제를 정리해 주세요."
-          : tool === "comment"
-            ? "코멘트 내용을 입력해 주세요."
-            : "메모 내용을 입력해 주세요.";
-      const nextItem: CanvasItemViewModel = {
-        id: nextItemId,
-        agenda_id: nextAgendaId,
-        point_id: pointId || "",
-        kind: tool,
-        status: "discussion",
-        title: draftTitle,
-        keywords: [],
-        key_evidence: [],
-        refined_utterances: [],
-        evidence_utterance_ids: [],
-        ignored_utterance_ids: [],
-        parent_topic_id: nextParentItemId,
-        parent_topic_source: nextParentItemId ? "user" : "",
-        parent_topic_locked: Boolean(nextParentItemId),
-        child_item_ids: [],
-        topic_collapsed: tool === "topic" ? false : undefined,
-        created_by: "user",
-        manual_position: false,
-        ai_generated: false,
-        user_edited: true,
-        body: draftBody,
-      };
-      const nextCanvasItemsSnapshot: CanvasItemViewModel[] = [
-        nextItem,
-        ...canvasItems.map((item) =>
-          item.id === nextParentItemId
-            ? {
-                ...item,
-                child_item_ids: [...new Set([...(item.child_item_ids || []), nextItemId])],
-              }
-            : item,
-        ),
-      ];
-      const nextNodePositionsSnapshot = normalizeCanvasNodePositionsForComputedIdeation(nodePositions);
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage,
-        canvasItems: nextCanvasItemsSnapshot,
-        nodePositions: nextNodePositionsSnapshot,
-        importedState: persistedSharedImportedState,
-      };
-
-      if (nextAgendaId) {
-        setSelectedAgendaId(nextAgendaId);
-      }
-      setComposerTool(tool);
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setCanvasItems(nextCanvasItemsSnapshot);
-      setSelectedCanvasItemId(nextItemId);
-      setSelectedNodeId(nextNodeId);
-      setLeftPanelTab("detail");
-      setPlacementFeedback({
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        x: uiX,
-        y: uiY,
-        label: toolLabel(tool),
-      });
-      if (placementFeedbackTimerRef.current) {
-        window.clearTimeout(placementFeedbackTimerRef.current);
-      }
-      placementFeedbackTimerRef.current = window.setTimeout(() => {
-        setPlacementFeedback(null);
-        placementFeedbackTimerRef.current = null;
-      }, 1500);
-
-      setActivityMessage("보드 위치에 공용 canvas 아이템을 생성했습니다.");
-
-      if (sharedSyncEnabled) {
-        writeSharedWorkspaceSessionCache(
-          meetingId,
-          buildCurrentWorkspacePatchPayload({
-            canvasItems: nextCanvasItemsSnapshot,
-            nodePositions: nextNodePositionsSnapshot,
-          }),
-        );
-        forceBroadcastSharedCanvas({
-          canvasItems: nextCanvasItemsSnapshot,
-        });
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            canvas_items: serializeSharedCanvasItems(nextCanvasItemsSnapshot),
-            imported_state: persistedSharedImportedState,
-          }).catch((error) => {
-            console.error("Failed to save shared canvas item placement:", error);
-          });
-        }
-      }
-
-      try {
-        await confirmCanvasPlacement({
-          tool,
-          ui_x: uiX,
-          ui_y: uiY,
-          flow_x: flowPosition.x,
-          flow_y: flowPosition.y,
-          agenda_id: nextAgendaId || undefined,
-          point_id: pointId || undefined,
-          title: draftTitle,
-          body: "",
-        });
-      } catch (error) {
-        console.error("Failed to confirm canvas placement:", error);
-      }
-    },
-    [
-      agendaModels,
-      buildCurrentWorkspacePatchPayload,
-      canvasItemById,
-      canvasItems,
-      customGroupDraftTitle,
-      customGroups,
-      forceBroadcastSharedCanvas,
-      meetingId,
-      nodePositions,
-      persistedSharedImportedState,
-      placementFeedbackTimerRef,
-      canvasSurfaceRef,
-      problemGroups,
-      selectedAgendaId,
-      selectedCanvasItemId,
-      selectedProblemGroupId,
-      flowRef,
-      pendingNodePlacementsRef,
-      setCanvasPlacementPreview,
-      setNodePositions,
-      setPlacementFeedback,
-      sharedSyncEnabled,
-      stage,
-      userId,
-    ],
-  );
 
   const onNodesChange = useCanvasNodeChanges({
     applyingRemoteSharedSyncRef,
@@ -4607,14 +3901,9 @@ export default function MeetingCanvasTab({
     ideationDragFrameRef,
     ideationDropPreviewRef,
     ideationDropTargetElementsRef,
-    ideationLeftFlowRef,
-    ideationLeftPaneRef,
-    ideationRightFlowRef,
-    ideationRightPaneRef,
     pendingIdeationDragFrameRef,
     scheduleNodePreview,
     selectedAgendaForDrop,
-    selectedCanvasItemId,
     setIdeationDragGhost,
     setIdeationDropPreview,
     setNodes,
@@ -4732,39 +4021,12 @@ export default function MeetingCanvasTab({
     if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
       const canvasItemId = node.id.slice("canvas-item-".length);
       const draggedItem = canvasItemById.get(canvasItemId) || null;
-      const droppedOnRightPane = pointInRect(
-        event.clientX,
-        event.clientY,
-        getReactFlowCanvasRect(ideationRightPaneRef.current),
-      );
-      let dropPreview =
+      const dropPreview =
         resolveIdeationDropPreview(event.clientX, event.clientY, dragNode) ||
         (activeIdeationDropPreview?.draggedItemId === canvasItemId ? activeIdeationDropPreview : null);
       let topicToExpandId = "";
       let ideationMoveMessage = "";
       let nextSelectedIdeationItemId = canvasItemId;
-
-      if (draggedItem && !draggedItem.parent_topic_id && droppedOnRightPane) {
-        const selectedRootIdForDrop = selectedCanvasItemId
-          ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
-          : "";
-        const selectedRootItemForDrop = selectedRootIdForDrop
-          ? canvasItemById.get(selectedRootIdForDrop) || null
-          : null;
-
-        if (selectedRootItemForDrop && selectedRootItemForDrop.id !== draggedItem.id) {
-          dropPreview = makeIdeationMergeDropPreview(
-            draggedItem,
-            selectedRootItemForDrop,
-            dragNode.position,
-          );
-        } else {
-          if (draggedItem.agenda_id) {
-            setSelectedAgendaId(draggedItem.agenda_id);
-          }
-          ideationMoveMessage = `"${draggedItem.title || "그룹"}" 상세 캔버스를 열었습니다.`;
-        }
-      }
 
       if (draggedItem && dropPreview?.mode === "topic-merge") {
         const draggedTopic = isTopicCanvasItem(draggedItem) ? draggedItem : null;
@@ -5163,7 +4425,7 @@ export default function MeetingCanvasTab({
             : item,
         );
         nextSelectedIdeationItemId = canvasItemId;
-        ideationMoveMessage = `"${draggedItem.title || "노드"}"를 왼쪽 캔버스의 1차 노드로 추가했습니다.`;
+        ideationMoveMessage = `"${draggedItem.title || "노드"}"를 1차 노드로 이동했습니다.`;
       }
 
       const nextStagePositions = {
@@ -5254,7 +4516,7 @@ export default function MeetingCanvasTab({
           "problem-definition": nextStagePositions,
         };
         setSelectedNodeId(node.id);
-        setActivityMessage("의견 노드는 오른쪽 캔버스의 아이디어/맥락 카드 위에 놓을 때만 연결됩니다.");
+        setActivityMessage("의견 노드는 캔버스의 아이디어/맥락 카드 위에 놓을 때만 연결됩니다.");
       }
     }
 
@@ -5525,16 +4787,6 @@ export default function MeetingCanvasTab({
       if (canvasItem?.agenda_id) {
         setSelectedAgendaId(canvasItem.agenda_id);
       }
-      if (
-        armedCanvasTool &&
-        stage === "ideation" &&
-        (armedCanvasTool === "note" || armedCanvasTool === "comment") &&
-        canvasItem &&
-        !canvasItem.parent_topic_id
-      ) {
-        setActivityMessage("메모와 댓글은 오른쪽 상세 캔버스에서 추가해 주세요.");
-        return;
-      }
     } else {
       setSelectedCanvasItemId("");
     }
@@ -5549,10 +4801,6 @@ export default function MeetingCanvasTab({
       node.id.startsWith("problem-") && !node.id.startsWith("problem-discussion-")
         ? node.id.slice("problem-".length)
         : "";
-    if (pendingProblemGroupLinkId && clickedProblemGroupId) {
-      handleCreateProblemGroupLink(pendingProblemGroupLinkId, clickedProblemGroupId);
-      return;
-    }
     if (problemSourceInfo) {
       setSelectedProblemGroupId(problemSourceInfo.groupId);
       setSelectedProblemSourceNodeId(problemSourceInfo.sourceNodeId);
@@ -5577,50 +4825,15 @@ export default function MeetingCanvasTab({
     if (agendaId) {
       setSelectedAgendaId(agendaId);
     }
-    if (armedCanvasTool) {
-      void handleCanvasPlacementStart(
-        armedCanvasTool,
-        event.clientX,
-        event.clientY,
-        agendaId || selectedAgendaId || agendaModels[0]?.id,
-        node.id,
-      );
-    }
   };
 
-  const handleCanvasPaneClick = (
-    event: React.MouseEvent,
-    pane: "default" | "ideation-left" | "ideation-right" | "problem-left" | "problem-right" = "default",
-  ) => {
-    if (stage === "ideation" && pane === "ideation-right" && !armedCanvasTool) {
-      return;
+  const handleCanvasPaneClick = () => {
+    closeRightDrawer();
+    if (stage === "ideation") {
+      setSelectedCanvasItemId("");
+      setSelectedNodeId("");
+      setLeftPanelTab("detail");
     }
-
-    if (!armedCanvasTool) {
-      closeRightDrawer();
-      if (stage === "ideation" && pane === "ideation-left") {
-        setSelectedCanvasItemId("");
-        setSelectedNodeId("");
-        setLeftPanelTab("detail");
-      }
-      return;
-    }
-    if (
-      stage === "ideation" &&
-      pane !== "ideation-right" &&
-      (armedCanvasTool === "note" || armedCanvasTool === "comment")
-    ) {
-      setCanvasPlacementPreview(null);
-      setActivityMessage("메모와 댓글은 오른쪽 상세 캔버스에서 추가해 주세요.");
-      return;
-    }
-    setSelectedCanvasItemId("");
-    void handleCanvasPlacementStart(
-      armedCanvasTool,
-      event.clientX,
-      event.clientY,
-      selectedAgendaId || agendaModels[0]?.id,
-    );
   };
 
   const handleFlowInitStable = useStableEvent((instance: ReactFlowInstance<Node, Edge>) => {
@@ -5634,34 +4847,12 @@ export default function MeetingCanvasTab({
   const handleNodeDragStopStable = useStableEvent(onNodeDragStop);
 
   const handleProblemToolbarAction = (action: ProblemCanvasToolbarAction) => {
-    if (action === "debug-regenerate") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setPendingProblemGroupLinkId("");
-      void handleDebugRegenerateProblemDefinition();
-      return;
-    }
-
-    if (action === "debug-refresh-chunks") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setPendingProblemGroupLinkId("");
-      void handleRefreshProblemChunkSummaries();
-      return;
-    }
-
     if (action === "structure-start") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setPendingProblemGroupLinkId("");
       handleOpenProblemStructureSetup();
       return;
     }
 
     if (action === "structure-back") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setPendingProblemGroupLinkId("");
       handleBackToProblemDefinitionExplore();
       return;
     }
@@ -5678,39 +4869,7 @@ export default function MeetingCanvasTab({
 
     if (action === "structure-refresh") {
       handleRefreshProblemStructureNodes();
-      return;
     }
-
-    if (action === "problem-link") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      if (pendingProblemGroupLinkId) {
-        setPendingProblemGroupLinkId("");
-        setActivityMessage("문제정의 그룹 연결을 취소했습니다.");
-        return;
-      }
-      if (!selectedProblemGroup) {
-        setActivityMessage("먼저 왼쪽 캔버스에서 연결을 시작할 문제정의 그룹을 선택해 주세요.");
-        return;
-      }
-      setPendingProblemGroupLinkId(selectedProblemGroup.group_id);
-      setActivityMessage("연결할 다른 문제정의 그룹을 왼쪽 캔버스에서 클릭해 주세요.");
-      return;
-    }
-
-    if (action === "adopt") {
-      setArmedCanvasTool(null);
-      setCanvasPlacementPreview(null);
-      setPendingProblemGroupLinkId("");
-      if (!selectedProblemGroup) {
-        setActivityMessage("채택할 문제정의 그룹을 먼저 선택해 주세요.");
-        return;
-      }
-      handleSetProblemGroupStatus("final");
-      return;
-    }
-
-    armCanvasTool(action);
   };
 
   return (
@@ -5791,13 +4950,7 @@ export default function MeetingCanvasTab({
             activeProblemGroupingRationaleTitle={activeProblemGroupingRationaleGroup?.topic || ""}
             canvasStatusMessage={canvasStatusMessage}
             problemCanvasToolbarActions={problemCanvasToolbarActions}
-            canUseCanvasToolbar={canUseCanvasToolbar}
-            showClickWaiting={Boolean(armedCanvasTool || pendingProblemGroupLinkId)}
-            hasSelectedProblemGroup={Boolean(selectedProblemGroup)}
-            pendingProblemGroupLinkId={pendingProblemGroupLinkId}
             selectedProblemStatus={selectedProblemGroup?.status || ""}
-            placementFeedback={placementFeedback}
-            canvasPlacementPreview={canvasPlacementPreview}
             problemIdeaDrag={problemIdeaDrag}
             problemIdeaDragPoint={problemIdeaDragPoint}
             ideationDragGhost={ideationDragGhost}
@@ -5813,13 +4966,6 @@ export default function MeetingCanvasTab({
                   )
                 : null
             }
-            onCanvasMouseMove={(event) => {
-              if (!armedCanvasTool) {
-                return;
-              }
-              updateCanvasPlacementPreview(event.clientX, event.clientY);
-            }}
-            onCanvasMouseLeave={clearCanvasPlacementPreview}
             onFlowInit={handleFlowInitStable}
             onNodeClick={handleCanvasNodeClickStable}
             onPaneClick={handleCanvasPaneClickStable}

@@ -7,18 +7,11 @@ type ProblemDefinitionModeId = "" | "manual" | "ai";
 type ConcreteProblemDefinitionMode = Exclude<ProblemDefinitionModeId, "">;
 
 export type ProblemCanvasToolbarActionId =
-  | "group"
-  | "problem-link"
-  | "debug-regenerate"
-  | "debug-refresh-chunks"
   | "structure-start"
   | "structure-back"
   | "structure-ai-group"
   | "structure-add-group"
-  | "structure-refresh"
-  | "note"
-  | "problem-idea"
-  | "adopt";
+  | "structure-refresh";
 
 type ProblemStructureSetupModalProps = {
   draftMethod: ProblemStructureMethodId;
@@ -41,7 +34,6 @@ type ProblemStructureFloatingToolbarProps = {
 
 type ProblemCanvasToolbarProps = {
   actions: ProblemCanvasToolbarActionId[];
-  showClickWaiting: boolean;
   getActionLabel: (action: ProblemCanvasToolbarActionId) => string;
   isActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
   isActionDisabled: (action: ProblemCanvasToolbarActionId) => boolean;
@@ -236,7 +228,6 @@ export const ProblemStructureFloatingToolbar = memo(function ProblemStructureFlo
 
 export const ProblemCanvasToolbar = memo(function ProblemCanvasToolbar({
   actions,
-  showClickWaiting,
   getActionLabel,
   isActionActive,
   isActionDisabled,
@@ -260,11 +251,6 @@ export const ProblemCanvasToolbar = memo(function ProblemCanvasToolbar({
             <span>{getActionLabel(item)}</span>
           </button>
         ))}
-        {showClickWaiting ? (
-          <span className="hidden shrink-0 rounded-full bg-[#eff0f6] px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] sm:inline-flex">
-            클릭 대기
-          </span>
-        ) : null}
       </div>
     </div>
   );

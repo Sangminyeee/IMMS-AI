@@ -2,20 +2,6 @@
 
 import { memo } from "react";
 
-type PlacementFeedback = {
-  x: number;
-  y: number;
-  label: string;
-};
-
-type CanvasPlacementPreview = {
-  x: number;
-  y: number;
-  label: string;
-  hint: string;
-  tone: string;
-};
-
 type CanvasStageEmptyOverlayProps = {
   eyebrow: string;
   message: string;
@@ -28,49 +14,6 @@ type ProblemIdeaDragPreviewProps = {
   cardKind: "summary" | string;
   title: string;
 };
-
-export const PlacementFeedbackOverlay = memo(function PlacementFeedbackOverlay({ feedback }: { feedback: PlacementFeedback }) {
-  return (
-    <div
-      className="pointer-events-none absolute z-[9] -translate-x-1/2 -translate-y-1/2"
-      style={{ left: feedback.x, top: feedback.y }}
-    >
-      <div className="rounded-full bg-[#10243f] px-3 py-1.5 text-xs font-semibold text-white shadow-lg shadow-slate-300/80">
-        {feedback.label} 생성됨
-      </div>
-    </div>
-  );
-});
-
-export const CanvasPlacementPreviewOverlay = memo(function CanvasPlacementPreviewOverlay({
-  preview,
-}: {
-  preview: CanvasPlacementPreview;
-}) {
-  return (
-    <div
-      className="pointer-events-none absolute z-[9]"
-      style={{ left: preview.x, top: preview.y }}
-    >
-      <div className={`w-[232px] rounded-[24px] border px-4 py-3 shadow-lg backdrop-blur ${preview.tone}`}>
-        <div className="flex items-center justify-between gap-3">
-          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold">
-            {preview.label}
-          </span>
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">
-            Preview
-          </span>
-        </div>
-        <p className="mt-3 text-sm font-semibold">
-          {preview.hint}
-        </p>
-        <p className="mt-1 text-xs leading-5 opacity-75">
-          클릭하면 이 위치에 공용 아이템이 생성됩니다.
-        </p>
-      </div>
-    </div>
-  );
-});
 
 export const ProblemIdeaDragPreview = memo(function ProblemIdeaDragPreview({
   x,
