@@ -3,7 +3,6 @@
 import "@xyflow/react/dist/style.css";
 import {
   MarkerType,
-  Position,
   applyNodeChanges,
   type Edge,
   type Node,
@@ -40,6 +39,7 @@ import {
 } from "@/components/canvas/CanvasGraphLayouts";
 import { buildIdeationKeywordBubbleBlueprint } from "@/components/canvas/CanvasIdeationNodeDescriptors";
 import { buildProblemExploreCanvasBlueprint } from "@/components/canvas/CanvasProblemExploreNodeDescriptors";
+import { buildProblemStructureCanvasBlueprint } from "@/components/canvas/CanvasProblemStructureNodeDescriptors";
 import {
   buildNodeContentSignature,
   type CanvasNodeData,
@@ -69,6 +69,23 @@ import {
   isDuplicateProblemTaxonomyGroup,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
+  buildProblemStructureNodesFromGroups,
+  buildProblemStructureStatePayload,
+  buildSummaryDocumentSourceSignature,
+  createDefaultProblemStructureState,
+  getSummaryEligibleStructureGroups,
+  hydrateProblemStructureState,
+  normalizeProblemStructureGroupsFromResponse,
+  problemDefinitionModeLabel,
+  problemStructureMethodLabel,
+  pruneProblemStructureGroups,
+  type ProblemDefinitionMode,
+  type ProblemDefinitionPhase,
+  type ProblemStructureGroupViewModel,
+  type ProblemStructureMethod,
+  type ProblemStructureNodeViewModel,
+} from "@/components/canvas/problemStructureModel";
+import {
   useCanvasDragRefs,
   useCanvasFlowRefs,
   useCanvasNodeSyncRefs,
@@ -80,6 +97,7 @@ import {
 } from "@/components/canvas/useCanvasRuntimeState";
 import { useCanvasEndMeetingState } from "@/components/canvas/useCanvasEndMeetingState";
 import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
+import { useProblemStructureEditor } from "@/components/canvas/useProblemStructureEditor";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
@@ -139,16 +157,12 @@ type ProblemCanvasToolbarAction =
 type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
 type CanvasItemStatus = "discussion" | "confirmed" | "closed";
-type ProblemDefinitionMode = "" | "manual" | "ai";
-type ProblemDefinitionPhase = "explore" | "structure";
-type ProblemStructureMethod = "affinity" | "card-sorting";
 const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const NODE_PREVIEW_SYNC_THROTTLE_MS = 64;
 const NODE_PREVIEW_ANIMATION_LERP = 0.38;
 const NODE_PREVIEW_SETTLE_DISTANCE = 0.75;
-const PROBLEM_STRUCTURE_NODE_DRAG_MIME = "application/x-imms-problem-structure-node";
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
 function clampNumber(value: number, min: number, max: number) {
@@ -183,31 +197,6 @@ type ProblemGroupingRationaleViewModel = {
   usedLlm: boolean;
   warning?: string;
   generatedAt?: string;
-};
-
-type ProblemStructureNodeViewModel = {
-  id: string;
-  sourceGroupId: string;
-  title: string;
-  body: string;
-  status: ProblemGroupStatus;
-  depth: number;
-};
-
-type ProblemStructureGroupViewModel = {
-  id: string;
-  title: string;
-  nodeIds: string[];
-  rationale: string;
-  status: ProblemGroupStatus;
-  createdBy: "ai" | "user";
-};
-
-type ProblemStructureDragState = {
-  nodeId: string;
-  overGroupId: string;
-  overNodeId: string;
-  mode: "group" | "node" | "";
 };
 
 type ProblemDiscussionViewModel = CanvasProblemDiscussionItem;
@@ -735,14 +724,6 @@ function makeEditPresenceKey(targetType: CanvasEditPresencePayload["target_type"
   return `${targetType}:${targetId}:${noteId}`;
 }
 
-function renderEditPresenceBadge(label = "수정중") {
-  return (
-    <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-      {label}
-    </span>
-  );
-}
-
 type MeetingCanvasTabProps = {
   userId: string;
   meetingId: string;
@@ -877,31 +858,10 @@ function problemGroupStatusLabel(status: ProblemGroupStatus) {
   return "초안";
 }
 
-function problemGroupStatusTone(status: ProblemGroupStatus) {
-  if (status === "review") return "bg-fuchsia-100 text-fuchsia-700";
-  if (status === "final") return "bg-emerald-100 text-emerald-700";
-  return "bg-slate-100 text-slate-600";
-}
-
-function problemStructureMethodLabel(method: ProblemStructureMethod) {
-  return method === "card-sorting" ? "Card Sorting" : "Affinity Diagram";
-}
-
-function problemDefinitionModeLabel(mode: ProblemDefinitionMode) {
-  if (mode === "ai") return "AI 초안";
-  if (mode === "manual") return "직접 구성";
-  return "미선택";
-}
-
 function normalizeCanvasItemStatus(raw: string | undefined): CanvasItemStatus {
   if (raw === "confirmed" || raw === "final") return "confirmed";
   if (raw === "closed") return "closed";
   return "discussion";
-}
-
-function normalizeProblemGroupStatus(raw: string | undefined): ProblemGroupStatus {
-  if (raw === "review" || raw === "final") return raw;
-  return "draft";
 }
 
 function normalizeIdeationSuggestionStatus(raw: string | undefined) {
@@ -1005,223 +965,6 @@ function buildProblemGroupDisplayCards(group: ProblemGroupViewModel): ProblemGro
   }
 
   return [...summaryCards, ...personalCards];
-}
-
-function makeProblemStructureNode(group: ProblemGroupViewModel): ProblemStructureNodeViewModel {
-  const body =
-    group.conclusion ||
-    group.insight_lens ||
-    (group.source_summary_items || []).find(Boolean) ||
-    "정의 1단계에서 가져온 노드입니다.";
-  return {
-    id: group.group_id,
-    sourceGroupId: group.group_id,
-    title: group.topic || "문제정의 노드",
-    body: stripLeadingTimestamp(body),
-    status: group.status,
-    depth: Math.max(0, group.depth || 0),
-  };
-}
-
-function buildProblemStructureNodesFromGroups(groups: ProblemGroupViewModel[]) {
-  return groups.map(makeProblemStructureNode);
-}
-
-function makeProblemStructureGroup(index: number, createdBy: "ai" | "user" = "user"): ProblemStructureGroupViewModel {
-  const id = `structure-group-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`;
-  return {
-    id,
-    title: `구조화 그룹 ${index + 1}`,
-    nodeIds: [],
-    rationale: "",
-    status: "draft",
-    createdBy,
-  };
-}
-
-function makeProblemStructurePairGroupTitle(
-  sourceNode: ProblemStructureNodeViewModel,
-  targetNode: ProblemStructureNodeViewModel,
-) {
-  const sourceTitle = sourceNode.title.trim();
-  const targetTitle = targetNode.title.trim();
-  if (!sourceTitle && !targetTitle) return "새 구조화 그룹";
-  return [targetTitle, sourceTitle]
-    .filter(Boolean)
-    .map((title) => (title.length > 14 ? `${title.slice(0, 14)}...` : title))
-    .join(" + ");
-}
-
-function pruneProblemStructureGroups(
-  groups: ProblemStructureGroupViewModel[],
-  nodes: ProblemStructureNodeViewModel[],
-) {
-  const validNodeIds = new Set(nodes.map((node) => node.id));
-  return groups.map((group) => ({
-    ...group,
-    nodeIds: group.nodeIds.filter((nodeId) => validNodeIds.has(nodeId)),
-  }));
-}
-
-function normalizeProblemStructureGroupsFromResponse(
-  groups: Array<{
-    id?: string;
-    title?: string;
-    node_ids?: string[];
-    rationale?: string;
-    status?: string;
-    created_by?: string;
-  }>,
-  nodes: ProblemStructureNodeViewModel[],
-): ProblemStructureGroupViewModel[] {
-  const validNodeIds = new Set(nodes.map((node) => node.id));
-  const usedNodeIds = new Set<string>();
-  const usedGroupIds = new Set<string>();
-
-  return groups
-    .map((group, index) => {
-      const nodeIds = (group.node_ids || []).filter((nodeId) => {
-        if (!validNodeIds.has(nodeId) || usedNodeIds.has(nodeId)) {
-          return false;
-        }
-        usedNodeIds.add(nodeId);
-        return true;
-      });
-      if (nodeIds.length === 0) {
-        return null;
-      }
-      const baseId = group.id || `structure-ai-group-${index + 1}`;
-      let id = baseId;
-      let suffix = 2;
-      while (usedGroupIds.has(id)) {
-        id = `${baseId}-${suffix}`;
-        suffix += 1;
-      }
-      usedGroupIds.add(id);
-      return {
-        id,
-        title: group.title?.trim() || `AI 구조화 그룹 ${index + 1}`,
-        nodeIds,
-        rationale: group.rationale?.trim() || "",
-        status: normalizeProblemGroupStatus(group.status),
-        createdBy: group.created_by === "user" ? "user" : "ai",
-      } satisfies ProblemStructureGroupViewModel;
-    })
-    .filter((group): group is ProblemStructureGroupViewModel => Boolean(group));
-}
-
-function buildProblemStructureStatePayload(input: {
-  phase: ProblemDefinitionPhase;
-  method: ProblemStructureMethod;
-  mode: ProblemDefinitionMode;
-  nodes: ProblemStructureNodeViewModel[];
-  groups: ProblemStructureGroupViewModel[];
-}): CanvasProblemStructureState {
-  return {
-    phase: input.phase,
-    method: input.method,
-    mode: input.mode,
-    nodes: input.nodes.map((node) => ({
-      id: node.id,
-      source_group_id: node.sourceGroupId,
-      title: node.title,
-      body: node.body,
-      status: node.status,
-      depth: node.depth,
-    })),
-    groups: input.groups.map((group) => ({
-      id: group.id,
-      title: group.title,
-      node_ids: group.nodeIds,
-      rationale: group.rationale,
-      status: group.status,
-      created_by: group.createdBy,
-    })),
-  };
-}
-
-function createDefaultProblemStructureState(): CanvasProblemStructureState {
-  return buildProblemStructureStatePayload({
-    phase: "explore",
-    method: "affinity",
-    mode: "",
-    nodes: [],
-    groups: [],
-  });
-}
-
-function hydrateProblemStructureState(
-  raw: CanvasProblemStructureState | null | undefined,
-  fallbackProblemGroups: ProblemGroupViewModel[] = [],
-): {
-  phase: ProblemDefinitionPhase;
-  method: ProblemStructureMethod;
-  mode: ProblemDefinitionMode;
-  nodes: ProblemStructureNodeViewModel[];
-  groups: ProblemStructureGroupViewModel[];
-} {
-  const phase: ProblemDefinitionPhase = raw?.phase === "structure" ? "structure" : "explore";
-  const method: ProblemStructureMethod = raw?.method === "card-sorting" ? "card-sorting" : "affinity";
-  const mode: ProblemDefinitionMode = raw?.mode === "ai" || raw?.mode === "manual" ? raw.mode : "";
-  const nodes = (raw?.nodes || [])
-    .map((node) => ({
-      id: node.id?.trim() || "",
-      sourceGroupId: node.source_group_id?.trim() || node.id?.trim() || "",
-      title: node.title?.trim() || "문제정의 노드",
-      body: node.body?.trim() || "정의 1단계에서 가져온 노드입니다.",
-      status: normalizeProblemGroupStatus(node.status),
-      depth: Math.max(0, Number(node.depth || 0)),
-    }))
-    .filter((node) => node.id && node.title);
-  const fallbackNodes = nodes.length > 0 ? nodes : buildProblemStructureNodesFromGroups(fallbackProblemGroups);
-  const validNodeIds = new Set(fallbackNodes.map((node) => node.id));
-  const groups = (raw?.groups || [])
-    .map((group) => ({
-      id: group.id?.trim() || "",
-      title: group.title?.trim() || "구조화 그룹",
-      nodeIds: (group.node_ids || []).filter((nodeId) => validNodeIds.has(nodeId)),
-      rationale: group.rationale?.trim() || "",
-      status: normalizeProblemGroupStatus(group.status),
-      createdBy: group.created_by === "ai" ? ("ai" as const) : ("user" as const),
-    }))
-    .filter((group) => group.id && (group.title || group.nodeIds.length > 0));
-
-  return {
-    phase: fallbackNodes.length > 0 ? phase : "explore",
-    method,
-    mode,
-    nodes: fallbackNodes,
-    groups: pruneProblemStructureGroups(groups, fallbackNodes),
-  };
-}
-
-function getSummaryEligibleStructureGroups(groups: ProblemStructureGroupViewModel[]) {
-  return groups.filter((group) => group.status === "final" || group.status === "review");
-}
-
-function buildSummaryDocumentSourceSignature(
-  groups: ProblemStructureGroupViewModel[],
-  nodes: ProblemStructureNodeViewModel[],
-) {
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  return JSON.stringify(
-    getSummaryEligibleStructureGroups(groups).map((group) => ({
-      id: group.id,
-      title: group.title,
-      status: group.status,
-      rationale: group.rationale,
-      nodeIds: group.nodeIds,
-      nodes: group.nodeIds.map((nodeId) => {
-        const node = nodeById.get(nodeId);
-        return {
-          id: nodeId,
-          sourceGroupId: node?.sourceGroupId || "",
-          title: node?.title || "",
-          body: node?.body || "",
-        };
-      }),
-    })),
-  );
 }
 
 function buildSummaryDocumentFromResponse(input: {
@@ -2220,12 +1963,42 @@ export default function MeetingCanvasTab({
   const [problemStructureNodes, setProblemStructureNodes] = useState<ProblemStructureNodeViewModel[]>([]);
   const [problemStructureGroups, setProblemStructureGroups] = useState<ProblemStructureGroupViewModel[]>([]);
   const [problemStructurePending, setProblemStructurePending] = useState(false);
-  const [problemStructureDrag, setProblemStructureDrag] = useState<ProblemStructureDragState | null>(null);
-  const [editingProblemStructureGroupId, setEditingProblemStructureGroupId] = useState("");
-  const [problemStructureGroupDraftTitle, setProblemStructureGroupDraftTitle] = useState("");
-  const [problemStructureGroupDraftRationale, setProblemStructureGroupDraftRationale] = useState("");
-  const [editingProblemStructureNodeId, setEditingProblemStructureNodeId] = useState("");
-  const [problemStructureNodeDraftTitle, setProblemStructureNodeDraftTitle] = useState("");
+  const {
+    clearProblemStructureDrag,
+    editingProblemStructureGroupId,
+    editingProblemStructureNodeId,
+    handleAddProblemStructureGroup,
+    handleCancelProblemStructureGroupEdit,
+    handleCancelProblemStructureNodeEdit,
+    handleDeleteProblemStructureGroup,
+    handleProblemStructureGroupDragOver,
+    handleProblemStructureGroupDrop,
+    handleProblemStructureNodeDragEnd,
+    handleProblemStructureNodeDragOver,
+    handleProblemStructureNodeDragStart,
+    handleProblemStructureNodeDrop,
+    handleRemoveProblemStructureNode,
+    handleSaveProblemStructureGroupEdit,
+    handleSaveProblemStructureNodeEdit,
+    handleStartProblemStructureGroupEdit,
+    handleStartProblemStructureNodeEdit,
+    handleUpdateProblemStructureGroupStatus,
+    problemStructureDrag,
+    problemStructureGroupDraftRationale,
+    problemStructureGroupDraftTitle,
+    problemStructureNodeDraftTitle,
+    resetProblemStructureEditorState,
+    setProblemStructureGroupDraftRationale,
+    setProblemStructureGroupDraftTitle,
+    setProblemStructureNodeDraftTitle,
+  } = useProblemStructureEditor({
+    problemStructureGroups,
+    problemStructureNodes,
+    setActivityMessage,
+    setLocalEditPresenceTarget,
+    setProblemStructureGroups,
+    setProblemStructureNodes,
+  });
   const [finalSummaryDocument, setFinalSummaryDocument] = useState<CanvasFinalSolutionSummary>(() =>
     createEmptyFinalSolutionSummary(),
   );
@@ -3152,12 +2925,7 @@ export default function MeetingCanvasTab({
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
     setProblemStructurePending(false);
-    setProblemStructureDrag(null);
-    setEditingProblemStructureGroupId("");
-    setProblemStructureGroupDraftTitle("");
-    setProblemStructureGroupDraftRationale("");
-    setEditingProblemStructureNodeId("");
-    setProblemStructureNodeDraftTitle("");
+    resetProblemStructureEditorState();
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
@@ -3179,12 +2947,7 @@ export default function MeetingCanvasTab({
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
     setProblemStructurePending(false);
-    setProblemStructureDrag(null);
-    setEditingProblemStructureGroupId("");
-    setProblemStructureGroupDraftTitle("");
-    setProblemStructureGroupDraftRationale("");
-    setEditingProblemStructureNodeId("");
-    setProblemStructureNodeDraftTitle("");
+    resetProblemStructureEditorState();
     setProblemDefinitionStagePending(false);
     setSummaryDocumentPending(false);
     setSelectedProblemGroupId("");
@@ -3315,11 +3078,7 @@ export default function MeetingCanvasTab({
         setProblemStructureNodes(displayProblemStructure.nodes);
         setProblemStructureGroups(displayProblemStructure.groups);
         setProblemStructurePending(false);
-        setEditingProblemStructureGroupId("");
-        setProblemStructureGroupDraftTitle("");
-        setProblemStructureGroupDraftRationale("");
-        setEditingProblemStructureNodeId("");
-        setProblemStructureNodeDraftTitle("");
+        resetProblemStructureEditorState();
         analysisSignatureAtImportRef.current = nextImportedState
           ? buildMeetingStateSignature(nextImportedState)
           : "";
@@ -3399,11 +3158,7 @@ export default function MeetingCanvasTab({
         setProblemStructureNodes([]);
         setProblemStructureGroups([]);
         setProblemStructurePending(false);
-        setEditingProblemStructureGroupId("");
-        setProblemStructureGroupDraftTitle("");
-        setProblemStructureGroupDraftRationale("");
-        setEditingProblemStructureNodeId("");
-        setProblemStructureNodeDraftTitle("");
+        resetProblemStructureEditorState();
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           meeting_goal: "",
           meeting_goal_context: "",
@@ -3455,6 +3210,7 @@ export default function MeetingCanvasTab({
     meetingId,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
+    resetProblemStructureEditorState,
     setMeetingGoalDrafts,
     setNodePositions,
     userId,
@@ -3477,11 +3233,7 @@ export default function MeetingCanvasTab({
     setSelectedCanvasItemId("");
     setSelectedNodeId("");
     setEditingProblemGroupId("");
-    setEditingProblemStructureGroupId("");
-    setProblemStructureGroupDraftTitle("");
-    setProblemStructureGroupDraftRationale("");
-    setEditingProblemStructureNodeId("");
-    setProblemStructureNodeDraftTitle("");
+    resetProblemStructureEditorState();
     setCollapsedProblemGroupIds(new Set());
     setProblemGroupingRationaleById({});
     setProblemGroupingRationalePendingId("");
@@ -3490,7 +3242,7 @@ export default function MeetingCanvasTab({
     setEditingPersonalNoteId("");
     setLeftPanelTab("detail");
     setActivityMessage("새 오디오 전사를 기준으로 canvas를 초기화했습니다.");
-  }, [audioImportRevision, setNodePositions]);
+  }, [audioImportRevision, resetProblemStructureEditorState, setNodePositions]);
 
   useEffect(() => {
     if (problemGroups.length === 0) {
@@ -5919,261 +5671,6 @@ export default function MeetingCanvasTab({
     setActivityMessage(`정의 1단계의 현재 노드 ${nextNodes.length}개를 다시 가져왔습니다.`);
   }, [syncProblemStructureNodesFromDefinition]);
 
-  const handleAddProblemStructureGroup = useCallback(() => {
-    const nextGroup = makeProblemStructureGroup(problemStructureGroups.length);
-    setProblemStructureGroups((prev) => [...prev, nextGroup]);
-    setLocalEditPresenceTarget({ targetType: "problem_structure_group", targetId: nextGroup.id });
-    setEditingProblemStructureGroupId(nextGroup.id);
-    setProblemStructureGroupDraftTitle(nextGroup.title);
-    setProblemStructureGroupDraftRationale(nextGroup.rationale);
-    setActivityMessage("정의 2단계 구조화 그룹을 추가했습니다. 제목과 이유를 수정한 뒤 저장해 주세요.");
-  }, [problemStructureGroups.length]);
-
-  const clearProblemStructureGroupEdit = useCallback(() => {
-    setLocalEditPresenceTarget(null);
-    setEditingProblemStructureGroupId("");
-    setProblemStructureGroupDraftTitle("");
-    setProblemStructureGroupDraftRationale("");
-  }, []);
-
-  const clearProblemStructureNodeEdit = useCallback(() => {
-    setLocalEditPresenceTarget(null);
-    setEditingProblemStructureNodeId("");
-    setProblemStructureNodeDraftTitle("");
-  }, []);
-
-  const handleDeleteProblemStructureGroup = useCallback((groupId: string) => {
-    setProblemStructureGroups((prev) => prev.filter((group) => group.id !== groupId));
-    if (editingProblemStructureGroupId === groupId) {
-      clearProblemStructureGroupEdit();
-    }
-    setActivityMessage("구조화 그룹을 삭제했습니다. 포함된 노드는 묶지 않은 노드로 돌아갑니다.");
-  }, [clearProblemStructureGroupEdit, editingProblemStructureGroupId]);
-
-  const handleAssignProblemStructureNode = useCallback((nodeId: string, groupId: string) => {
-    setProblemStructureGroups((prev) =>
-      prev.map((group) => {
-        const withoutNode = group.nodeIds.filter((item) => item !== nodeId);
-        if (group.id !== groupId) {
-          return {
-            ...group,
-            nodeIds: withoutNode,
-          };
-        }
-        return {
-          ...group,
-          nodeIds: [...withoutNode, nodeId],
-          createdBy: "user",
-        };
-      }),
-    );
-  }, []);
-
-  const handleCreateProblemStructurePairGroup = useCallback(
-    (sourceNodeId: string, targetNodeId: string) => {
-      if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return;
-      const sourceNode = problemStructureNodeById.get(sourceNodeId);
-      const targetNode = problemStructureNodeById.get(targetNodeId);
-      if (!sourceNode || !targetNode) return;
-
-      setProblemStructureGroups((prev) => {
-        const nextGroup = {
-          ...makeProblemStructureGroup(prev.length, "user"),
-          title: makeProblemStructurePairGroupTitle(sourceNode, targetNode),
-          nodeIds: [targetNodeId, sourceNodeId],
-        };
-        return [
-          ...prev.map((group) => ({
-            ...group,
-            nodeIds: group.nodeIds.filter((nodeId) => nodeId !== sourceNodeId && nodeId !== targetNodeId),
-          })),
-          nextGroup,
-        ];
-      });
-      setActivityMessage(`"${sourceNode.title}"와 "${targetNode.title}"로 새 구조화 그룹을 만들었습니다.`);
-    },
-    [problemStructureNodeById],
-  );
-
-  const getProblemStructureDraggedNodeId = useCallback(
-    (event: React.DragEvent<HTMLElement>) =>
-      event.dataTransfer.getData(PROBLEM_STRUCTURE_NODE_DRAG_MIME) ||
-      event.dataTransfer.getData("text/plain") ||
-      problemStructureDrag?.nodeId ||
-      "",
-    [problemStructureDrag?.nodeId],
-  );
-
-  const handleProblemStructureNodeDragStart = useCallback((event: React.DragEvent<HTMLElement>, nodeId: string) => {
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("input, textarea, select, button")) {
-      event.preventDefault();
-      return;
-    }
-
-    event.stopPropagation();
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(PROBLEM_STRUCTURE_NODE_DRAG_MIME, nodeId);
-    event.dataTransfer.setData("text/plain", nodeId);
-    setProblemStructureDrag({ nodeId, overGroupId: "", overNodeId: "", mode: "" });
-  }, []);
-
-  const handleProblemStructureNodeDragEnd = useCallback(() => {
-    setProblemStructureDrag(null);
-  }, []);
-
-  const handleProblemStructureGroupDragOver = useCallback((event: React.DragEvent<HTMLElement>, groupId: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    setProblemStructureDrag((prev) => {
-      if (!prev?.nodeId) return prev;
-      if (prev.mode === "group" && prev.overGroupId === groupId && !prev.overNodeId) return prev;
-      return { ...prev, mode: "group", overGroupId: groupId, overNodeId: "" };
-    });
-  }, []);
-
-  const handleProblemStructureNodeDragOver = useCallback((event: React.DragEvent<HTMLElement>, targetNodeId: string) => {
-    setProblemStructureDrag((prev) => {
-      if (!prev?.nodeId || prev.nodeId === targetNodeId) return prev;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = "move";
-      if (prev.mode === "node" && prev.overNodeId === targetNodeId) return prev;
-      return { ...prev, mode: "node", overNodeId: targetNodeId, overGroupId: "" };
-    });
-  }, []);
-
-  const handleProblemStructureGroupDrop = useCallback(
-    (event: React.DragEvent<HTMLElement>, groupId: string) => {
-      const draggedNodeId = getProblemStructureDraggedNodeId(event);
-      if (!draggedNodeId) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      handleAssignProblemStructureNode(draggedNodeId, groupId);
-      setProblemStructureDrag(null);
-
-      if (!groupId) {
-        setActivityMessage("구조화 노드를 묶지 않은 노드로 이동했습니다.");
-        return;
-      }
-
-      const targetGroup = problemStructureGroups.find((group) => group.id === groupId);
-      setActivityMessage(`구조화 노드를 "${targetGroup?.title || "선택한 그룹"}"에 추가했습니다.`);
-    },
-    [getProblemStructureDraggedNodeId, handleAssignProblemStructureNode, problemStructureGroups],
-  );
-
-  const handleProblemStructureNodeDrop = useCallback(
-    (event: React.DragEvent<HTMLElement>, targetNodeId: string) => {
-      const draggedNodeId = getProblemStructureDraggedNodeId(event);
-      if (!draggedNodeId || draggedNodeId === targetNodeId) {
-        setProblemStructureDrag(null);
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      handleCreateProblemStructurePairGroup(draggedNodeId, targetNodeId);
-      setProblemStructureDrag(null);
-    },
-    [getProblemStructureDraggedNodeId, handleCreateProblemStructurePairGroup],
-  );
-
-  const handleStartProblemStructureGroupEdit = useCallback((group: ProblemStructureGroupViewModel) => {
-    setLocalEditPresenceTarget({ targetType: "problem_structure_group", targetId: group.id });
-    setEditingProblemStructureGroupId(group.id);
-    setProblemStructureGroupDraftTitle(group.title);
-    setProblemStructureGroupDraftRationale(group.rationale || "");
-  }, []);
-
-  const handleRemoveProblemStructureNode = useCallback((nodeId: string) => {
-    setProblemStructureNodes((prev) => prev.filter((node) => node.id !== nodeId));
-    setProblemStructureGroups((prev) =>
-      prev.map((group) => ({
-        ...group,
-        nodeIds: group.nodeIds.filter((item) => item !== nodeId),
-      })),
-    );
-    if (editingProblemStructureNodeId === nodeId) {
-      clearProblemStructureNodeEdit();
-    }
-    setActivityMessage("정의 2단계 구조화 레이어에서 노드를 제외했습니다.");
-  }, [clearProblemStructureNodeEdit, editingProblemStructureNodeId]);
-
-  const handleCancelProblemStructureGroupEdit = useCallback(() => {
-    clearProblemStructureGroupEdit();
-  }, [clearProblemStructureGroupEdit]);
-
-  const handleSaveProblemStructureGroupEdit = useCallback(
-    (groupId: string) => {
-      const targetGroup = problemStructureGroups.find((group) => group.id === groupId);
-      if (!targetGroup) {
-        clearProblemStructureGroupEdit();
-        return;
-      }
-
-      const nextTitle = problemStructureGroupDraftTitle.trim() || targetGroup.title;
-      const nextRationale = problemStructureGroupDraftRationale.trim() || targetGroup.rationale || "";
-      setProblemStructureGroups((prev) =>
-        prev.map((group) =>
-          group.id === groupId
-            ? {
-                ...group,
-                title: nextTitle,
-                rationale: nextRationale,
-                createdBy: "user",
-              }
-            : group,
-        ),
-      );
-      clearProblemStructureGroupEdit();
-      setActivityMessage("구조화 그룹 텍스트를 수정했습니다.");
-    },
-    [
-      clearProblemStructureGroupEdit,
-      problemStructureGroupDraftRationale,
-      problemStructureGroupDraftTitle,
-      problemStructureGroups,
-    ],
-  );
-
-  const handleStartProblemStructureNodeEdit = useCallback((node: ProblemStructureNodeViewModel) => {
-    setLocalEditPresenceTarget({ targetType: "problem_structure_node", targetId: node.id });
-    setEditingProblemStructureNodeId(node.id);
-    setProblemStructureNodeDraftTitle(node.title);
-  }, []);
-
-  const handleCancelProblemStructureNodeEdit = useCallback(() => {
-    clearProblemStructureNodeEdit();
-  }, [clearProblemStructureNodeEdit]);
-
-  const handleSaveProblemStructureNodeEdit = useCallback(
-    (nodeId: string) => {
-      const targetNode = problemStructureNodeById.get(nodeId);
-      if (!targetNode) {
-        clearProblemStructureNodeEdit();
-        return;
-      }
-
-      const nextTitle = problemStructureNodeDraftTitle.trim() || targetNode.title;
-      setProblemStructureNodes((prev) =>
-        prev.map((node) => (node.id === nodeId ? { ...node, title: nextTitle } : node)),
-      );
-      clearProblemStructureNodeEdit();
-      setActivityMessage("구조화 노드 제목을 수정했습니다.");
-    },
-    [clearProblemStructureNodeEdit, problemStructureNodeById, problemStructureNodeDraftTitle],
-  );
-
-  const handleUpdateProblemStructureGroupStatus = useCallback((groupId: string, status: ProblemGroupStatus) => {
-    setProblemStructureGroups((prev) =>
-      prev.map((group) => (group.id === groupId ? { ...group, status, createdBy: "user" } : group)),
-    );
-    setActivityMessage(`구조화 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
-  }, []);
-
   const problemExploreLayout = useMemo(
     () =>
       buildProblemExploreLayout({
@@ -6187,352 +5684,41 @@ export default function MeetingCanvasTab({
   const graphBlueprint = useMemo(() => {
     if (stage === "problem-definition") {
       if (problemDefinitionPhase === "structure") {
-        const structureNodes =
-          problemStructureNodes.length > 0
-            ? problemStructureNodes
-            : buildProblemStructureNodesFromGroups(problemGroups);
-        const nodeById = new Map(structureNodes.map((node) => [node.id, node]));
-        const assignedNodeIds = new Set(
-          problemStructureGroups.flatMap((group) => group.nodeIds.filter((nodeId) => nodeById.has(nodeId))),
-        );
-        const ungroupedNodes = structureNodes.filter((node) => !assignedNodeIds.has(node.id));
-        const columns = [
-          {
-            id: "__ungrouped__",
-            title: "아직 묶지 않은 노드",
-            rationale: "정의 1단계에서 가져온 모든 노드가 먼저 여기에 놓입니다.",
-            nodeIds: ungroupedNodes.map((node) => node.id),
-            status: "draft" as const,
-            createdBy: "user" as const,
-            fixed: true,
-          },
-          ...problemStructureGroups.map((group) => ({
-            ...group,
-            fixed: false,
-          })),
-        ];
-        const isCardSorting = problemStructureMethod === "card-sorting";
-        const columnWidth = isCardSorting ? 344 : 376;
-        const columnGap = isCardSorting ? 28 : 44;
-        const baseX = 44;
-        const baseY = isCardSorting ? 48 : 64;
-        const structureDescriptors: CanvasNodeDescriptor[] = columns.map((column, index) => {
-          const isUngrouped = column.id === "__ungrouped__";
-          const columnNodes = column.nodeIds
-            .map((nodeId) => nodeById.get(nodeId))
-            .filter((node): node is ProblemStructureNodeViewModel => Boolean(node));
-          const nodeId = isUngrouped ? "problem-structure-ungrouped" : `problem-structure-${column.id}`;
-          const columnDropGroupId = isUngrouped ? "" : column.id;
-          const isColumnDropTarget =
-            problemStructureDrag?.mode === "group" &&
-            problemStructureDrag.overGroupId === columnDropGroupId;
-          const isGroupEditing = !isUngrouped && editingProblemStructureGroupId === column.id;
-          const remoteGroupEditPresence = !isUngrouped
-            ? remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_group", column.id)] || null
-            : null;
-          const savedPosition = !isCardSorting ? nodePositions["problem-definition"]?.[nodeId] : undefined;
-          const nodeHeight = Math.max(260, 184 + Math.max(1, columnNodes.length) * 92);
-          const position = savedPosition || {
-            x: baseX + index * (columnWidth + columnGap),
-            y: baseY + (!isCardSorting && index % 2 === 1 ? 34 : 0),
-          };
-          const rationaleLabel = isCardSorting ? "그룹 설명 / 이유 카드" : "묶은 이유";
-
-          return {
-            id: nodeId,
-            position,
-            positionSource: savedPosition ? "persisted" : "computed",
-            sourcePosition: Position.Right,
-            targetPosition: Position.Left,
-            className: "!border-0 !bg-transparent !p-0 !shadow-none",
-            style: { width: columnWidth, minHeight: nodeHeight, padding: 0 },
-            draggable: !isCardSorting,
-            data: {
-              contentSignature: buildNodeContentSignature([
-                "problem-structure",
-                problemStructureMethod,
-                problemDefinitionMode,
-                column.id,
-                column.title,
-                column.rationale,
-                column.status || "",
-                isGroupEditing,
-                isGroupEditing ? problemStructureGroupDraftTitle : "",
-                isGroupEditing ? problemStructureGroupDraftRationale : "",
-                remoteGroupEditPresence?.updated_at || "",
-                columnNodes.length,
-                ...columnNodes.flatMap((node) => [
-                  node.id,
-                  node.title,
-                  node.status,
-                  node.depth,
-                  editingProblemStructureNodeId === node.id,
-                  editingProblemStructureNodeId === node.id ? problemStructureNodeDraftTitle : "",
-                  remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)]?.updated_at || "",
-                ]),
-                ...problemStructureGroups.map((group) => `${group.id}:${group.nodeIds.join(",")}`),
-                problemStructureDrag?.nodeId,
-                problemStructureDrag?.mode,
-                problemStructureDrag?.overGroupId,
-                problemStructureDrag?.overNodeId,
-              ]),
-              label: (
-                <div
-                  className={`nopan box-border min-w-0 rounded-[14px] border bg-white p-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)] ${
-                    isUngrouped
-                      ? "border-dashed border-black/20"
-                      : isCardSorting
-                        ? "border-[#a13ab8]/20"
-                        : "border-black/10"
-                  } ${isColumnDropTarget ? "ring-2 ring-[#a13ab8]/35 ring-offset-2" : ""}`}
-                  onDragOver={(event) => handleProblemStructureGroupDragOver(event, columnDropGroupId)}
-                  onDrop={(event) => handleProblemStructureGroupDrop(event, columnDropGroupId)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <span className="inline-flex items-center rounded-[8px] bg-[#f7ecfb] px-2.5 py-1 text-[11px] font-semibold text-[#a13ab8]">
-                        {isUngrouped ? "Pool" : problemStructureMethodLabel(problemStructureMethod)}
-                      </span>
-                      {isUngrouped ? (
-                        <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
-                          {column.title}
-                        </strong>
-                      ) : isGroupEditing ? (
-                        <input
-                          value={problemStructureGroupDraftTitle}
-                          onChange={(event) => setProblemStructureGroupDraftTitle(event.target.value)}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          className="nodrag nopan mt-3 block w-full rounded-[8px] border border-[#a13ab8]/30 bg-white px-3 py-2 text-[17px] font-semibold leading-6 text-black outline-none transition focus:border-[#a13ab8]/60"
-                        />
-                      ) : (
-                        <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
-                          {column.title || "구조화 그룹"}
-                        </strong>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="rounded-[8px] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                        {columnNodes.length}개
-                      </span>
-                      {!isUngrouped ? (
-                        isGroupEditing ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={handleCancelProblemStructureGroupEdit}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
-                            >
-                              취소
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSaveProblemStructureGroupEdit(column.id)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
-                            >
-                              저장
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleStartProblemStructureGroupEdit(column)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-                            >
-                              수정
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteProblemStructureGroup(column.id)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
-                            >
-                              삭제
-                            </button>
-                          </>
-                        )
-                      ) : null}
-                    </div>
-                  </div>
-                  {remoteGroupEditPresence ? (
-                    <div className="mt-3 flex items-center gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900">
-                      {renderEditPresenceBadge()}
-                      <span>다른 참가자가 이 구조화 그룹을 수정 중입니다.</span>
-                    </div>
-                  ) : null}
-                  {!isUngrouped ? (
-                    <label className="mt-3 block">
-                      <span className="mb-1 block text-[11px] font-semibold text-[#777]">그룹 상태</span>
-                      <select
-                        value={column.status || "draft"}
-                        onChange={(event) =>
-                          handleUpdateProblemStructureGroupStatus(column.id, event.target.value as ProblemGroupStatus)
-                        }
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className={`nodrag nopan w-full rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2 py-1.5 text-xs font-semibold outline-none transition focus:border-[#a13ab8]/40 ${problemGroupStatusTone(column.status || "draft")}`}
-                      >
-                        {(["draft", "review", "final"] as ProblemGroupStatus[]).map((status) => (
-                          <option key={`${column.id}-status-${status}`} value={status}>
-                            {problemGroupStatusLabel(status)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-
-                  {isUngrouped ? (
-                    <p className="mt-3 rounded-[10px] bg-[#f5f6f8] px-3 py-2 text-xs leading-5 text-[#4d4d4d]">
-                      그룹을 만든 뒤 노드를 드래그해 넣거나, 노드끼리 겹쳐 새 그룹을 만들 수 있습니다.
-                    </p>
-                  ) : (
-                    <div className={`mt-3 rounded-[10px] ${isCardSorting ? "border border-[#a13ab8]/10 bg-[#f7ecfb]" : "bg-[#f5f6f8]"} p-3`}>
-                      <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#a13ab8]">
-                        {rationaleLabel}
-                      </label>
-                      {isGroupEditing ? (
-                        <textarea
-                          value={problemStructureGroupDraftRationale}
-                          onChange={(event) => setProblemStructureGroupDraftRationale(event.target.value)}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          placeholder={column.createdBy === "ai" ? "AI가 왜 묶었는지 나중에 여기에 표시합니다." : "이 그룹으로 묶은 이유를 적어둘 수 있습니다."}
-                          className="nodrag nopan mt-2 min-h-[68px] w-full resize-none rounded-[8px] border border-[#a13ab8]/30 bg-white px-3 py-2 text-xs leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/60"
-                        />
-                      ) : (
-                        <p className="mt-2 min-h-[44px] rounded-[8px] border border-transparent bg-white/70 px-3 py-2 text-xs leading-5 text-[#333]">
-                          {column.rationale ||
-                            (column.createdBy === "ai"
-                              ? "AI가 왜 묶었는지 나중에 여기에 표시합니다."
-                              : "수정을 눌러 이 그룹으로 묶은 이유를 적어둘 수 있습니다.")}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="mt-3 space-y-2">
-                    {columnNodes.length > 0 ? (
-                      columnNodes.map((node) => {
-                        const isDraggingNode = problemStructureDrag?.nodeId === node.id;
-                        const isNodeDropTarget =
-                          problemStructureDrag?.mode === "node" &&
-                          problemStructureDrag.overNodeId === node.id &&
-                          problemStructureDrag.nodeId !== node.id;
-                        const isNodeEditing = editingProblemStructureNodeId === node.id;
-                        const remoteNodeEditPresence =
-                          remoteEditPresenceByKey[makeEditPresenceKey("problem_structure_node", node.id)] || null;
-                        return (
-                          <div
-                            key={`${column.id}-${node.id}`}
-                            draggable={!isNodeEditing}
-                            onDragStart={(event) => handleProblemStructureNodeDragStart(event, node.id)}
-                            onDragEnd={handleProblemStructureNodeDragEnd}
-                            onDragOver={(event) => handleProblemStructureNodeDragOver(event, node.id)}
-                            onDrop={(event) => handleProblemStructureNodeDrop(event, node.id)}
-                            className={`nodrag nopan rounded-[10px] border bg-white px-3 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition ${
-                              isNodeEditing ? "cursor-default" : "cursor-grab active:cursor-grabbing"
-                            } ${
-                              isNodeDropTarget
-                                ? "border-[#a13ab8] ring-2 ring-[#a13ab8]/20"
-                                : "border-black/10 hover:border-[#a13ab8]/25"
-                              } ${isDraggingNode ? "opacity-55" : ""}`}
-                          >
-                            <div className="flex items-start gap-2">
-                              {isNodeEditing ? (
-                                <textarea
-                                  value={problemStructureNodeDraftTitle}
-                                  onChange={(event) => setProblemStructureNodeDraftTitle(event.target.value)}
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  aria-label="구조화 노드 제목"
-                                  rows={2}
-                                  className="nodrag nopan block min-h-[44px] flex-1 resize-none rounded-[8px] border border-[#a13ab8]/30 bg-white px-2 py-1.5 text-sm font-semibold leading-5 text-black outline-none transition focus:border-[#a13ab8]/60"
-                                />
-                              ) : (
-                                <strong className="block min-h-[44px] flex-1 px-1 py-1 text-sm font-semibold leading-5 text-black">
-                                  {node.title || "구조화 노드"}
-                                </strong>
-                              )}
-                              {isNodeEditing ? (
-                                <div className="flex shrink-0 flex-col gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={handleCancelProblemStructureNodeEdit}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
-                                  >
-                                    취소
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSaveProblemStructureNodeEdit(node.id)}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    className="nodrag nopan rounded-[8px] bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
-                                  >
-                                    저장
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="flex shrink-0 items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStartProblemStructureNodeEdit(node)}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
-                                  >
-                                    수정
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveProblemStructureNode(node.id)}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    aria-label="구조화 노드 제외"
-                                    className="nodrag nopan flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-rose-200 bg-white text-[16px] font-semibold leading-none text-rose-600 transition hover:bg-rose-50"
-                                  >
-                                    ×
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                            {remoteNodeEditPresence ? (
-                              <div className="mt-2 flex items-center gap-2 rounded-[8px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold leading-4 text-amber-900">
-                                {renderEditPresenceBadge()}
-                                <span>다른 참가자가 이 노드를 수정 중입니다.</span>
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <p className="rounded-[10px] border border-dashed border-black/10 bg-[#f9f9f9] px-3 py-4 text-center text-xs leading-5 text-[#777]">
-                        {isUngrouped ? "모든 노드가 그룹에 들어갔습니다." : "아직 이 그룹에 들어온 노드가 없습니다."}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ),
-            },
-          };
+        return buildProblemStructureCanvasBlueprint({
+          editingProblemStructureGroupId,
+          editingProblemStructureNodeId,
+          fallbackProblemGroups: problemGroups,
+          nodePositions,
+          onCancelProblemStructureGroupEdit: handleCancelProblemStructureGroupEdit,
+          onCancelProblemStructureNodeEdit: handleCancelProblemStructureNodeEdit,
+          onDeleteProblemStructureGroup: handleDeleteProblemStructureGroup,
+          onProblemStructureGroupDragOver: handleProblemStructureGroupDragOver,
+          onProblemStructureGroupDrop: handleProblemStructureGroupDrop,
+          onProblemStructureGroupDraftRationaleChange: setProblemStructureGroupDraftRationale,
+          onProblemStructureGroupDraftTitleChange: setProblemStructureGroupDraftTitle,
+          onProblemStructureNodeDragEnd: handleProblemStructureNodeDragEnd,
+          onProblemStructureNodeDragOver: handleProblemStructureNodeDragOver,
+          onProblemStructureNodeDragStart: handleProblemStructureNodeDragStart,
+          onProblemStructureNodeDrop: handleProblemStructureNodeDrop,
+          onProblemStructureNodeDraftTitleChange: setProblemStructureNodeDraftTitle,
+          onRemoveProblemStructureNode: handleRemoveProblemStructureNode,
+          onSaveProblemStructureGroupEdit: handleSaveProblemStructureGroupEdit,
+          onSaveProblemStructureNodeEdit: handleSaveProblemStructureNodeEdit,
+          onStartProblemStructureGroupEdit: handleStartProblemStructureGroupEdit,
+          onStartProblemStructureNodeEdit: handleStartProblemStructureNodeEdit,
+          onUpdateProblemStructureGroupStatus: handleUpdateProblemStructureGroupStatus,
+          problemDefinitionMode,
+          problemDefinitionPhase,
+          problemStructureDrag,
+          problemStructureGroupDraftRationale,
+          problemStructureGroupDraftTitle,
+          problemStructureGroups,
+          problemStructureMethod,
+          problemStructureNodeDraftTitle,
+          problemStructureNodes,
+          remoteEditPresenceByKey,
+          stage,
         });
-
-        return {
-          layoutSignature: buildNodeContentSignature([
-            stage,
-            problemDefinitionPhase,
-            problemStructureMethod,
-            problemDefinitionMode,
-            ...structureNodes.flatMap((node) => [node.id, node.title, node.status, node.depth]),
-            ...problemStructureGroups.flatMap((group) => [
-              group.id,
-              group.title,
-              group.rationale,
-              group.status,
-              group.createdBy,
-              ...group.nodeIds,
-            ]),
-          ]),
-          nodeDescriptors: structureDescriptors,
-        };
       }
 
       return buildProblemExploreCanvasBlueprint({
@@ -6624,6 +5810,9 @@ export default function MeetingCanvasTab({
     problemStructureNodeDraftTitle,
     problemStructureNodes,
     remoteEditPresenceByKey,
+    setProblemStructureGroupDraftRationale,
+    setProblemStructureGroupDraftTitle,
+    setProblemStructureNodeDraftTitle,
   ]);
 
   useEffect(() => {
@@ -7032,7 +6221,7 @@ export default function MeetingCanvasTab({
       if (nextStage !== "problem-definition") {
         setProblemStructureSetupOpen(false);
         setProblemStructurePending(false);
-        setProblemStructureDrag(null);
+        clearProblemStructureDrag();
         setStage(nextStage);
         return;
       }
@@ -7050,13 +6239,14 @@ export default function MeetingCanvasTab({
       setProblemDefinitionPhase("explore");
       setProblemStructureSetupOpen(false);
       setProblemStructurePending(false);
-      setProblemStructureDrag(null);
+      clearProblemStructureDrag();
       await handleGenerateProblemDefinition();
       setLeftPanelTab("detail");
       return;
     },
     [
       busy,
+      clearProblemStructureDrag,
       conclusionBatchBusy,
       finalSummaryDocument.markdown,
       finalSummaryDocument.sections,
