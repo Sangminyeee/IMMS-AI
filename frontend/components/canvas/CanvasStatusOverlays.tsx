@@ -8,42 +8,6 @@ type CanvasStageEmptyOverlayProps = {
   tone: "problem" | "summary";
 };
 
-type ProblemIdeaDragPreviewProps = {
-  x: number;
-  y: number;
-  cardKind: "summary" | string;
-  title: string;
-};
-
-export const ProblemIdeaDragPreview = memo(function ProblemIdeaDragPreview({
-  x,
-  y,
-  cardKind,
-  title,
-}: ProblemIdeaDragPreviewProps) {
-  return (
-    <div
-      className="pointer-events-none fixed z-[80] w-[260px] -translate-x-1/2 -translate-y-1/2 rounded-[16px] border border-violet-200 bg-white/95 px-4 py-3 shadow-[0_18px_42px_rgba(15,23,42,0.20)] backdrop-blur"
-      style={{
-        left: x,
-        top: y,
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700">
-          {cardKind === "summary" ? "요약/토픽" : "아이디어"}
-        </span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-          이동 중
-        </span>
-      </div>
-      <p className="mt-2 line-clamp-2 text-sm font-semibold leading-5 text-slate-900">
-        {title || "이동 중인 카드"}
-      </p>
-    </div>
-  );
-});
-
 export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
   eyebrow,
   message,

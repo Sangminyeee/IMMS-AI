@@ -10,11 +10,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getCanvasWorkspaceState,
   getCanvasPersonalNotes,
-  getCanvasIdeaAssimilationWorkspaceJob,
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
   startCanvasProblemDiscussionWorkspace,
-  startCanvasTopicSummaryWorkspace,
   extractCanvasIdeationKeywords,
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
@@ -34,14 +32,7 @@ import {
   type CanvasNodeData,
   type CanvasNodeDescriptor,
 } from "@/components/canvas/CanvasGraphTypes";
-import {
-  buildUserMergedTopicTitle,
-  getCanvasItemChangeSignature,
-  getTopicDescendantTopicIds,
-  getTopicFlattenedIdeaChildIds,
-  isTopicCanvasItem,
-  makeIdeationDragGhostLabel,
-} from "@/components/canvas/CanvasNodeLabels";
+import { getCanvasItemChangeSignature } from "@/components/canvas/CanvasNodeLabels";
 import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
@@ -62,11 +53,9 @@ import {
   type ProblemStructureNodeViewModel,
 } from "@/components/canvas/problemStructureModel";
 import {
-  useCanvasDragRefs,
   useCanvasFlowRefs,
   useCanvasNodeSyncRefs,
   useCanvasRuntimeState,
-  type ProblemIdeaDropPreviewState,
 } from "@/components/canvas/useCanvasRuntimeState";
 import { useCanvasEndMeetingState } from "@/components/canvas/useCanvasEndMeetingState";
 import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
@@ -84,9 +73,6 @@ import { useSharedCanvasIncomingSync } from "@/components/canvas/useSharedCanvas
 import { useCanvasPersistence } from "@/components/canvas/useCanvasPersistence";
 import { useCanvasNodePreviewSync } from "@/components/canvas/useCanvasNodePreviewSync";
 import { useCanvasNodeChanges } from "@/components/canvas/useCanvasNodeChanges";
-import { useCanvasIdeationDragPreview } from "@/components/canvas/useCanvasIdeationDragPreview";
-import { useCanvasNodeDragStartMove } from "@/components/canvas/useCanvasNodeDragStartMove";
-import { findProblemSourceDropTarget } from "@/components/canvas/canvasInteractionDom";
 import {
   buildMeetingStateSignature,
   buildSharedCanvasSignature,
@@ -98,13 +84,10 @@ import {
   normalizeIdeationSuggestionStatus,
   normalizeRefinedUtterances,
   readSharedWorkspaceSessionCache,
-  readTopicCollapseOverrides,
   serializeCustomGroups,
-  serializeSharedCanvasItems,
   summarizeNodePositionsForDebug,
   summarizeRenderedNodesForDebug,
   writeSharedWorkspaceSessionCache,
-  writeTopicCollapseOverrides,
   type AgendaOverride,
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
@@ -164,7 +147,6 @@ type ProblemCanvasToolbarAction =
   | "structure-refresh";
 type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
-const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
@@ -232,18 +214,8 @@ type AgendaViewModel = {
 };
 
 type ProblemGroupDisplayCard = {
-  id: string;
-  title: string;
-  body: string;
-  kind: string;
   sourceNodeId: string;
-  sourceNodeKind: "topic" | "idea" | "summary";
   attachable: boolean;
-  cardKind: "summary" | "idea";
-  sourceIndex: number;
-  draggable: boolean;
-  ideaId?: string;
-  summaryText?: string;
 };
 
 type IdeationKeywordBubble = {
@@ -340,19 +312,6 @@ function extractAgendaIdFromNodeId(nodeId: string) {
   return "";
 }
 
-function extractProblemSourceCanvasNodeInfo(nodeId: string) {
-  if (!nodeId.startsWith("problem-source::")) return null;
-  const [, encodedGroupId = "", encodedSourceNodeId = ""] = nodeId.split("::");
-  try {
-    return {
-      groupId: decodeURIComponent(encodedGroupId),
-      sourceNodeId: decodeURIComponent(encodedSourceNodeId),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function stripLeadingTimestamp(text: string) {
   return text
     .replace(
@@ -366,91 +325,21 @@ function makeProblemSummarySourceNodeId(groupId: string, index: number) {
   return `${groupId}-summary-${index}`;
 }
 
-function makeProblemSummaryTitle(index: number) {
-  return `아이디어${index + 1}`;
-}
-
-function getProblemSummarySourceNodeKind(index: number): "topic" | "summary" {
-  return index === 0 ? "topic" : "summary";
-}
-
-type ProblemSummaryEntry = {
-  value: string;
-  originSourceNodeId: string;
-};
-
-function buildProblemSummaryEntries(group: ProblemGroupViewModel): ProblemSummaryEntry[] {
-  return (group.source_summary_items || []).map((value, index) => ({
-    value,
-    originSourceNodeId: makeProblemSummarySourceNodeId(group.group_id, index),
-  }));
-}
-
-function remapProblemSummaryDiscussionTargets(
-  groupId: string,
-  discussionItems: ProblemDiscussionViewModel[] | undefined,
-  nextSummaryEntries: ProblemSummaryEntry[],
-) {
-  const summaryTargetMap = new Map<string, {
-    nodeId: string;
-    label: string;
-    kind: "topic" | "summary";
-  }>();
-
-  nextSummaryEntries.forEach((entry, index) => {
-    summaryTargetMap.set(entry.originSourceNodeId, {
-      nodeId: makeProblemSummarySourceNodeId(groupId, index),
-      label: makeProblemSummaryTitle(index),
-      kind: getProblemSummarySourceNodeKind(index),
-    });
-  });
-
-  return (discussionItems || []).map((item) => {
-    const target = item.target_node_id ? summaryTargetMap.get(item.target_node_id) : undefined;
-    if (!target) return item;
-
-    return {
-      ...item,
-      target_node_id: target.nodeId,
-      target_node_label: target.label,
-      target_node_kind: target.kind,
-    };
-  });
-}
-
 function buildProblemGroupDisplayCards(group: ProblemGroupViewModel): ProblemGroupDisplayCard[] {
-  const summaryCards = (group.source_summary_items || []).map((item, index) => {
+  const summaryCards = (group.source_summary_items || []).map((_, index) => {
     const sourceNodeId = makeProblemSummarySourceNodeId(group.group_id, index);
     const hasAttachedDiscussion = (group.discussion_items || []).some(
       (discussion) => discussion.target_node_id === sourceNodeId,
     );
 
     return {
-      id: sourceNodeId,
-      title: makeProblemSummaryTitle(index),
-      body: stripLeadingTimestamp(item) || "아직 요약된 아이디어가 없습니다.",
-      kind: "summary",
       sourceNodeId,
-      sourceNodeKind: getProblemSummarySourceNodeKind(index),
       attachable: index === 0 || hasAttachedDiscussion,
-      cardKind: "summary" as const,
-      sourceIndex: index,
-      draggable: true,
-      summaryText: item,
     };
   });
   const personalCards = (group.ideas || []).map((idea, index) => ({
-    id: idea.id || `${group.group_id}-idea-${index}`,
-    title: idea.title || `메모${index + 1}`,
-    body: idea.body || "메모 내용 없음",
-    kind: idea.kind || "memo",
     sourceNodeId: idea.id || `${group.group_id}-idea-${index}`,
-    sourceNodeKind: "idea" as const,
     attachable: true,
-    cardKind: "idea" as const,
-    sourceIndex: index,
-    draggable: Boolean(idea.id),
-    ideaId: idea.id,
   }));
 
   if (summaryCards.length === 0 && personalCards.length === 0) {
@@ -866,7 +755,6 @@ export default function MeetingCanvasTab({
   const [personalNotes, setPersonalNotes] = useState<PersonalNote[]>([]);
   const [agendaOverrides, setAgendaOverrides] = useState<Record<string, AgendaOverride>>({});
   const [canvasItems, setCanvasItems] = useState<CanvasItemViewModel[]>([]);
-  const [, setTopicCollapsedOverrides] = useState<Record<string, boolean>>({});
   const [focusedCanvasItemId, setFocusedCanvasItemId] = useState("");
   const [customGroups, setCustomGroups] = useState<CustomGroupViewModel[]>([]);
   const [localEditPresenceTarget, setLocalEditPresenceTarget] = useState<LocalEditPresenceTarget | null>(null);
@@ -954,9 +842,7 @@ export default function MeetingCanvasTab({
   const [problemDefinitionStagePending, setProblemDefinitionStagePending] = useState(false);
   const [summaryDocumentPending, setSummaryDocumentPending] = useState(false);
   const [loadingProblemGroupIds, setLoadingProblemGroupIds] = useState<string[]>([]);
-  const [, setIdeaAssimilationStatus] = useState("");
   const [, setProblemDiscussionStatus] = useState("");
-  const [, setIdeaCreateStack] = useState(0);
   const [sharedSyncEnabled, setSharedSyncEnabled] = useState(true);
   const [importOverrideActive, setImportOverrideActive] = useState(false);
   const {
@@ -964,19 +850,6 @@ export default function MeetingCanvasTab({
     setNodePositions,
     nodes,
     setNodes,
-    agendaDragPreview,
-    setAgendaDragPreview,
-    ideationDropPreview,
-    setIdeationDropPreview,
-    setIdeationNodeDragActive,
-    ideationDragGhost,
-    setIdeationDragGhost,
-    problemIdeaDrag,
-    setProblemIdeaDrag,
-    problemIdeaDropPreview,
-    setProblemIdeaDropPreview,
-    problemIdeaDragPoint,
-    setProblemIdeaDragPoint,
   } = useCanvasRuntimeState();
   const {
     rightDrawerCollapsed,
@@ -1025,11 +898,6 @@ export default function MeetingCanvasTab({
     lastRemoteNodePreviewSeqRef,
     remoteNodePreviewTargetsRef,
     remoteNodePreviewFrameRef,
-    pendingIdeationDragFrameRef,
-    ideationDragFrameRef,
-    pendingNodePlacementsRef,
-    hoveredProblemDropTargetElementRef,
-    ideationDropTargetElementsRef,
     ideationBubbleUpdateTickRef,
   } = useCanvasNodeSyncRefs();
   const remoteEditPresenceTimersRef = useRef<Record<string, number>>({});
@@ -1131,13 +999,6 @@ export default function MeetingCanvasTab({
     },
     [],
   );
-  const {
-    agendaDragPreviewRef,
-    ideationDropPreviewRef,
-    stableIdeationDragRef,
-    problemIdeaDragRef,
-    problemIdeaPointerDragRef,
-  } = useCanvasDragRefs<ProblemGroupDisplayCard>();
   const analysisSignatureAtImportRef = useRef("");
   const initialLayoutLogDoneRef = useRef(false);
   const processedProblemUtteranceIdsRef = useRef<Set<string>>(new Set());
@@ -1269,13 +1130,8 @@ export default function MeetingCanvasTab({
 
     return [...hydratedBaseModels, ...customAgendaModels];
   }, [effectiveState, agendas, transcripts, agendaOverrides, customGroups]);
-  const selectedAgendaForDrop = selectedAgendaId || agendaModels[0]?.id || "";
   const canvasItemById = useMemo(
     () => new Map(canvasItems.map((item) => [item.id, item] as const)),
-    [canvasItems],
-  );
-  const canvasItemIndexById = useMemo(
-    () => new Map(canvasItems.map((item, index) => [item.id, index] as const)),
     [canvasItems],
   );
   const flowNodeById = useMemo(
@@ -1613,8 +1469,6 @@ export default function MeetingCanvasTab({
     setImportOverrideActive(false);
     setAgendaOverrides({});
     setCanvasItems([]);
-    setTopicCollapsedOverrides({});
-    setIdeaCreateStack(0);
     setCustomGroups([]);
     resetMeetingGoalState();
     resetEndMeetingState();
@@ -1625,15 +1479,7 @@ export default function MeetingCanvasTab({
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
     setSelectedProblemSourceNodeId("");
-    setIdeaAssimilationStatus("");
     setProblemDiscussionStatus("");
-    agendaDragPreviewRef.current = null;
-    setAgendaDragPreview(null);
-    problemIdeaDragRef.current = null;
-    problemIdeaPointerDragRef.current = null;
-    setProblemIdeaDrag(null);
-    setProblemIdeaDropPreview(null);
-    setProblemIdeaDragPoint(null);
     if (sharedSyncTimerRef.current) {
       window.clearTimeout(sharedSyncTimerRef.current);
       sharedSyncTimerRef.current = null;
@@ -1646,11 +1492,6 @@ export default function MeetingCanvasTab({
       window.cancelAnimationFrame(remoteNodePreviewFrameRef.current);
       remoteNodePreviewFrameRef.current = null;
     }
-    if (ideationDragFrameRef.current !== null) {
-      window.cancelAnimationFrame(ideationDragFrameRef.current);
-      ideationDragFrameRef.current = null;
-    }
-    pendingIdeationDragFrameRef.current = null;
     liveNodePositionsRef.current = {};
     pendingNodePreviewsRef.current = {};
     lastNodePreviewFlushAtRef.current = 0;
@@ -1664,9 +1505,7 @@ export default function MeetingCanvasTab({
       problemDiscussionFlushTimerRef.current = null;
     }
   }, [
-    agendaDragPreviewRef,
     dragIdByNodeIdRef,
-    ideationDragFrameRef,
     lastNodePreviewFlushAtRef,
     lastRemoteNodePreviewSeqRef,
     liveNodePositionsRef,
@@ -1676,23 +1515,12 @@ export default function MeetingCanvasTab({
     nodePreviewSeqRef,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
-    pendingIdeationDragFrameRef,
     pendingNodePreviewsRef,
-    problemIdeaDragRef,
-    problemIdeaPointerDragRef,
     remoteNodePreviewFrameRef,
     remoteNodePreviewTargetsRef,
     resetEndMeetingState,
     resetMeetingGoalState,
-    setAgendaDragPreview,
-    setProblemIdeaDrag,
-    setProblemIdeaDragPoint,
-    setProblemIdeaDropPreview,
   ]);
-
-  useEffect(() => {
-    setTopicCollapsedOverrides(readTopicCollapseOverrides(meetingId, userId));
-  }, [meetingId, userId]);
 
   useEffect(() => {
     latestSharedWorkspaceRef.current = {
@@ -1735,15 +1563,8 @@ export default function MeetingCanvasTab({
       window.cancelAnimationFrame(remoteNodePreviewFrameRef.current);
       remoteNodePreviewFrameRef.current = null;
     }
-    if (ideationDragFrameRef.current !== null) {
-      window.cancelAnimationFrame(ideationDragFrameRef.current);
-      ideationDragFrameRef.current = null;
-    }
-    pendingIdeationDragFrameRef.current = null;
   }, [
-    ideationDragFrameRef,
     lastRemoteNodePreviewSeqRef,
-    pendingIdeationDragFrameRef,
     remoteNodePreviewFrameRef,
     remoteNodePreviewTargetsRef,
     stage,
@@ -1826,7 +1647,6 @@ export default function MeetingCanvasTab({
     setAgendaOverrides({});
     setCanvasItems([]);
     setCustomGroups([]);
-    setIdeaCreateStack(0);
     setNodePositions({});
     setImportedState(null);
     setStage("ideation");
@@ -1954,7 +1774,6 @@ export default function MeetingCanvasTab({
         setAgendaOverrides(nextAgendaOverrides);
         setCanvasItems(nextCanvasItems);
         setCustomGroups(nextCustomGroups);
-        setIdeaCreateStack(saved.idea_create_stack || 0);
         setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
         onMeetingGoalChange(nextMeetingGoal);
         onMeetingGoalContextChange(nextMeetingGoalContext);
@@ -2036,7 +1855,6 @@ export default function MeetingCanvasTab({
         setAgendaOverrides({});
         setCanvasItems([]);
         setCustomGroups([]);
-        setIdeaCreateStack(0);
         setSharedSyncEnabled(true);
         setNodePositions({});
         setImportedState(null);
@@ -2115,7 +1933,6 @@ export default function MeetingCanvasTab({
 
     setAgendaOverrides({});
     setCanvasItems([]);
-    setIdeaCreateStack(0);
     setImportedState(null);
     setImportOverrideActive(false);
     setProblemGroups([]);
@@ -2346,64 +2163,6 @@ export default function MeetingCanvasTab({
     workspaceLoadedRef,
   });
 
-  const applyServerIdeaWorkspace = useCallback(
-    (workspace: CanvasWorkspaceStateResponse | undefined | null) => {
-      if (!workspace || workspace.meeting_id !== meetingId) return;
-
-      const nextCanvasItems = hydrateCanvasItems(workspace.canvas_items || []);
-      const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(workspace.node_positions || {});
-      const nextMeetingGoal = typeof workspace.meeting_goal === "string" ? workspace.meeting_goal : meetingGoalDraft;
-      const nextMeetingGoalContext =
-        typeof workspace.meeting_goal_context === "string" ? workspace.meeting_goal_context : meetingGoalContextDraft;
-
-      setCanvasItems(nextCanvasItems);
-      setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
-      onMeetingGoalChange(nextMeetingGoal);
-      onMeetingGoalContextChange(nextMeetingGoalContext);
-      setIdeaCreateStack(workspace.idea_create_stack || 0);
-      setNodePositions(nextNodePositions);
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        meetingGoal: nextMeetingGoal,
-        meetingGoalContext: nextMeetingGoalContext,
-        canvasItems: nextCanvasItems,
-        nodePositions: nextNodePositions,
-        importedState: persistedSharedImportedState,
-      };
-
-      if (sharedSyncEnabled) {
-        writeSharedWorkspaceSessionCache(
-          meetingId,
-          buildCurrentWorkspacePatchPayload({
-            meetingGoal: nextMeetingGoal,
-            meetingGoalContext: nextMeetingGoalContext,
-            canvasItems: nextCanvasItems,
-            nodePositions: nextNodePositions,
-          }),
-        );
-        forceBroadcastSharedCanvas({
-          meetingGoal: nextMeetingGoal,
-          meetingGoalContext: nextMeetingGoalContext,
-          canvasItems: nextCanvasItems,
-          nodePositions: nextNodePositions,
-        });
-      }
-    },
-    [
-      buildCurrentWorkspacePatchPayload,
-      forceBroadcastSharedCanvas,
-      meetingGoalContextDraft,
-      meetingGoalDraft,
-      meetingId,
-      onMeetingGoalChange,
-      onMeetingGoalContextChange,
-      persistedSharedImportedState,
-      setMeetingGoalDrafts,
-      setNodePositions,
-      sharedSyncEnabled,
-    ],
-  );
-
   const applyServerProblemWorkspace = useCallback(
     (workspace: CanvasWorkspaceStateResponse | undefined | null) => {
       if (!workspace || workspace.meeting_id !== meetingId) return;
@@ -2466,68 +2225,6 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const refreshCanvasTopicSummary = useCallback(
-    async (topicItemId: string) => {
-      if (!meetingId || !topicItemId) return;
-
-      setIdeaAssimilationStatus("AI가 topic 제목과 content를 생성 중");
-      try {
-        const started = await startCanvasTopicSummaryWorkspace({
-          meeting_id: meetingId,
-          meeting_topic: meetingTopicForAi,
-          topic_item_id: topicItemId,
-        });
-        console.info("[canvas topic summary]", {
-          label: "start response",
-          status: started.status,
-          jobId: started.job_id,
-          topicItemId,
-          detail: started.detail || "",
-          warning: started.warning || "",
-        });
-        applyServerIdeaWorkspace(started.workspace);
-
-        if (started.status !== "processing" || !started.job_id) {
-          setIdeaAssimilationStatus(started.detail || "AI topic 정리 상태를 확인했습니다.");
-          return;
-        }
-
-        let finalResult = started;
-        for (let attempt = 0; attempt < 90; attempt += 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, 900));
-          finalResult = await getCanvasIdeaAssimilationWorkspaceJob(meetingId, started.job_id);
-          if (finalResult.status !== "processing") {
-            applyServerIdeaWorkspace(finalResult.workspace);
-            break;
-          }
-        }
-
-        console.info("[canvas topic summary]", {
-          label: "final response",
-          status: finalResult.status,
-          jobId: finalResult.job_id,
-          topicItemId,
-          detail: finalResult.detail || "",
-          warning: finalResult.warning || "",
-        });
-        setIdeaAssimilationStatus(
-          finalResult.status === "completed"
-            ? "AI topic 정리 반영됨"
-            : finalResult.detail || "AI topic 정리 응답 대기 중",
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[canvas topic summary]", {
-          label: "request failed",
-          topicItemId,
-          errorDetail: message,
-        });
-        setIdeaAssimilationStatus(`AI topic 정리 실패: ${message}`);
-      }
-    },
-    [applyServerIdeaWorkspace, meetingId, meetingTopicForAi],
-  );
-
   useEffect(() => {
     const evidenceIds = new Set<string>();
     problemGroups.forEach((group) => {
@@ -2579,395 +2276,6 @@ export default function MeetingCanvasTab({
     setSelectedNodeId,
     setSelectedProblemGroupId,
   });
-
-  const getProblemIdeaDropPreviewFromPoint = useCallback(
-    (clientX: number, clientY: number): ProblemIdeaDropPreviewState | null => {
-      const activeProblemIdeaDrag = problemIdeaDragRef.current || problemIdeaDrag;
-      if (!activeProblemIdeaDrag || typeof document === "undefined") return null;
-
-      const elementAtPoint = document.elementFromPoint(clientX, clientY);
-      const groupElement = elementAtPoint?.closest("[data-problem-group-drop-id]") as HTMLElement | null;
-      const targetGroupId = groupElement?.dataset.problemGroupDropId || "";
-      if (!targetGroupId || !groupElement) return null;
-
-      const targetGroup = problemGroupById.get(targetGroupId);
-      if (!targetGroup) return null;
-
-      const cardElement = elementAtPoint?.closest("[data-problem-card-source-node-id]") as HTMLElement | null;
-      const cardGroupElement = cardElement?.closest("[data-problem-group-drop-id]") as HTMLElement | null;
-      const card =
-        cardElement && cardGroupElement === groupElement
-          ? buildProblemGroupDisplayCards(targetGroup).find(
-              (item) => item.sourceNodeId === cardElement.dataset.problemCardSourceNodeId,
-            )
-          : undefined;
-
-      const visibleTargetCards = buildProblemGroupDisplayCards(targetGroup).filter(
-        (item) =>
-          item.cardKind === activeProblemIdeaDrag.cardKind &&
-          !(
-            activeProblemIdeaDrag.sourceGroupId === targetGroupId &&
-            item.sourceNodeId === activeProblemIdeaDrag.sourceNodeId
-          ),
-      );
-      let insertIndex = visibleTargetCards.length;
-      const cardElements = Array.from(
-        groupElement.querySelectorAll<HTMLElement>("[data-problem-card-source-node-id]"),
-      );
-      const targetCardEntries = visibleTargetCards
-        .map((item) => ({
-          item,
-          element: cardElements.find((candidate) => candidate.dataset.problemCardSourceNodeId === item.sourceNodeId),
-        }))
-        .filter((entry): entry is { item: ProblemGroupDisplayCard; element: HTMLElement } => Boolean(entry.element));
-
-      if (targetCardEntries.length > 0) {
-        const nearest = targetCardEntries.reduce((best, entry) => {
-          const rect = entry.element.getBoundingClientRect();
-          const sameRow = clientY >= rect.top - 12 && clientY <= rect.bottom + 12;
-          const rowPenalty = sameRow ? 0 : Math.abs(clientY - (rect.top + rect.height / 2)) * 2;
-          const centerX = rect.left + rect.width / 2;
-          const centerY = rect.top + rect.height / 2;
-          const distance = Math.hypot(clientX - centerX, clientY - centerY) + rowPenalty;
-          return !best || distance < best.distance
-            ? {
-                ...entry,
-                rect,
-                distance,
-              }
-            : best;
-        }, null as null | {
-          item: ProblemGroupDisplayCard;
-          element: HTMLElement;
-          rect: DOMRect;
-          distance: number;
-        });
-
-        if (nearest) {
-          const targetIndex = visibleTargetCards.findIndex((item) => item.sourceNodeId === nearest.item.sourceNodeId);
-          const sameRow = clientY >= nearest.rect.top - 12 && clientY <= nearest.rect.bottom + 12;
-          const insertAfter = sameRow
-            ? clientX > nearest.rect.left + nearest.rect.width / 2
-            : clientY > nearest.rect.top + nearest.rect.height / 2;
-          insertIndex = targetIndex + (insertAfter ? 1 : 0);
-        }
-      } else if (card && card.cardKind !== activeProblemIdeaDrag.cardKind) {
-        insertIndex = activeProblemIdeaDrag.cardKind === "idea" && card.cardKind === "summary" ? 0 : visibleTargetCards.length;
-      } else if (card) {
-        const targetIndex = visibleTargetCards.findIndex((item) => item.sourceNodeId === card.sourceNodeId);
-        if (targetIndex >= 0 && cardElement) {
-          const rect = cardElement.getBoundingClientRect();
-          const insertAfter =
-            clientY > rect.top + rect.height / 2 ||
-            clientX > rect.left + rect.width / 2;
-          insertIndex = targetIndex + (insertAfter ? 1 : 0);
-        }
-      }
-
-      return {
-        targetGroupId,
-        cardKind: activeProblemIdeaDrag.cardKind,
-        insertIndex,
-      };
-    },
-    [problemGroupById, problemIdeaDrag, problemIdeaDragRef],
-  );
-
-  const updateProblemIdeaDragPoint = useCallback((clientX: number, clientY: number) => {
-    if (!clientX && !clientY) return;
-    setProblemIdeaDragPoint((current) =>
-      current?.x === clientX && current.y === clientY
-        ? current
-        : {
-            x: clientX,
-            y: clientY,
-          },
-    );
-  }, [setProblemIdeaDragPoint]);
-
-  const beginProblemCardDrag = useCallback(
-    (groupId: string, card: ProblemGroupDisplayCard, clientX: number, clientY: number) => {
-      const nextDrag = {
-        sourceGroupId: groupId,
-        sourceNodeId: card.sourceNodeId,
-        sourceNodeKind: card.sourceNodeKind,
-        cardKind: card.cardKind,
-        sourceIndex: card.sourceIndex,
-        title: card.title,
-        ideaId: card.ideaId,
-        summaryText: card.summaryText,
-      };
-      problemIdeaDragRef.current = nextDrag;
-      setProblemIdeaDrag(nextDrag);
-      setProblemIdeaDropPreview({
-        targetGroupId: groupId,
-        cardKind: card.cardKind,
-        insertIndex: card.sourceIndex,
-      });
-      updateProblemIdeaDragPoint(clientX, clientY);
-    },
-    [problemIdeaDragRef, setProblemIdeaDrag, setProblemIdeaDropPreview, updateProblemIdeaDragPoint],
-  );
-
-  const handleProblemIdeaDragEnd = useCallback(() => {
-    problemIdeaPointerDragRef.current = null;
-    setProblemIdeaDrag(null);
-    setProblemIdeaDropPreview(null);
-    setProblemIdeaDragPoint(null);
-  }, [problemIdeaPointerDragRef, setProblemIdeaDrag, setProblemIdeaDragPoint, setProblemIdeaDropPreview]);
-
-  const handleProblemIdeaDrop = useCallback(
-    (
-      groupId: string,
-      event: React.DragEvent<HTMLDivElement>,
-      dropPreviewOverride?: ProblemIdeaDropPreviewState | null,
-    ) => {
-      const activeProblemIdeaDrag = problemIdeaDragRef.current || problemIdeaDrag;
-      const draggedSourceNodeId =
-        activeProblemIdeaDrag?.sourceNodeId || event.dataTransfer.getData("application/x-imms-problem-card");
-      if (!draggedSourceNodeId || !activeProblemIdeaDrag) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const targetGroupId = groupId;
-      const effectiveDropPreview = dropPreviewOverride ?? problemIdeaDropPreview;
-      const previewInsertIndex =
-        effectiveDropPreview?.targetGroupId === targetGroupId &&
-        effectiveDropPreview.cardKind === activeProblemIdeaDrag.cardKind
-          ? effectiveDropPreview.insertIndex
-          : undefined;
-      const sourceGroup = problemGroupById.get(activeProblemIdeaDrag.sourceGroupId);
-      const targetGroup = problemGroupById.get(targetGroupId);
-      if (!sourceGroup || !targetGroup) {
-        handleProblemIdeaDragEnd();
-        return;
-      }
-
-      const sameGroup = sourceGroup.group_id === targetGroup.group_id;
-      let nextProblemGroupsSnapshot: ProblemGroupViewModel[] | null = null;
-      let nextSelectedSourceNodeId = draggedSourceNodeId;
-      let activityMessage = "";
-
-      if (activeProblemIdeaDrag.cardKind === "idea") {
-        const draggedIdeaId =
-          activeProblemIdeaDrag.ideaId || event.dataTransfer.getData("application/x-imms-problem-idea");
-        const movedIdea = sourceGroup.ideas.find((idea) => idea.id === draggedIdeaId);
-        if (!draggedIdeaId || !movedIdea) {
-          handleProblemIdeaDragEnd();
-          return;
-        }
-
-        const remainingTargetIdeas = sameGroup
-          ? targetGroup.ideas.filter((idea) => idea.id !== draggedIdeaId)
-          : targetGroup.ideas;
-        const safeInsertIndex = Math.max(
-          0,
-          Math.min(previewInsertIndex ?? remainingTargetIdeas.length, remainingTargetIdeas.length),
-        );
-        const nextTargetIdeas = [
-          ...remainingTargetIdeas.slice(0, safeInsertIndex),
-          movedIdea,
-          ...remainingTargetIdeas.slice(safeInsertIndex),
-        ];
-        const movingAttachedOpinions = sameGroup
-          ? []
-          : (sourceGroup.discussion_items || []).filter((item) => item.target_node_id === draggedIdeaId);
-
-        nextProblemGroupsSnapshot = problemGroups.map((group) => {
-          if (group.group_id === sourceGroup.group_id && !sameGroup) {
-            return {
-              ...group,
-              ideas: group.ideas.filter((idea) => idea.id !== draggedIdeaId),
-              discussion_items: (group.discussion_items || []).filter((item) => item.target_node_id !== draggedIdeaId),
-            };
-          }
-
-          if (group.group_id === targetGroup.group_id) {
-            return {
-              ...group,
-              ideas: nextTargetIdeas,
-              discussion_items: sameGroup
-                ? group.discussion_items || []
-                : [
-                    ...(group.discussion_items || []),
-                    ...movingAttachedOpinions.map((item) => ({
-                      ...item,
-                      parent_group_id: targetGroup.group_id,
-                      target_node_id: draggedIdeaId,
-                      target_node_label: movedIdea.title,
-                      target_node_kind: "idea" as const,
-                    })),
-                  ],
-            };
-          }
-
-          return group;
-        });
-        nextSelectedSourceNodeId = draggedIdeaId;
-        activityMessage = sameGroup
-          ? `"${movedIdea.title || "아이디어"}" 순서를 변경했습니다.`
-          : `"${movedIdea.title || "아이디어"}"를 "${targetGroup.topic}" 그룹으로 이동했습니다.`;
-      } else {
-        const sourceEntries = buildProblemSummaryEntries(sourceGroup);
-        const movedEntry = sourceEntries[activeProblemIdeaDrag.sourceIndex];
-        if (!movedEntry) {
-          handleProblemIdeaDragEnd();
-          return;
-        }
-
-        if (sameGroup) {
-          const remainingEntries = sourceEntries.filter((_, index) => index !== activeProblemIdeaDrag.sourceIndex);
-          const safeInsertIndex = Math.max(
-            0,
-            Math.min(previewInsertIndex ?? remainingEntries.length, remainingEntries.length),
-          );
-          const nextEntries = [
-            ...remainingEntries.slice(0, safeInsertIndex),
-            movedEntry,
-            ...remainingEntries.slice(safeInsertIndex),
-          ];
-
-          nextProblemGroupsSnapshot = problemGroups.map((group) =>
-            group.group_id === sourceGroup.group_id
-              ? {
-                  ...group,
-                  source_summary_items: nextEntries.map((entry) => entry.value),
-                  discussion_items: remapProblemSummaryDiscussionTargets(
-                    group.group_id,
-                    group.discussion_items,
-                    nextEntries,
-                  ),
-                }
-              : group,
-          );
-          nextSelectedSourceNodeId = makeProblemSummarySourceNodeId(targetGroup.group_id, safeInsertIndex);
-          activityMessage = `"${activeProblemIdeaDrag.title || "요약"}" 순서를 변경했습니다.`;
-        } else {
-          const sourceRemainingEntries = sourceEntries.filter((_, index) => index !== activeProblemIdeaDrag.sourceIndex);
-          const targetEntries = buildProblemSummaryEntries(targetGroup);
-          const safeInsertIndex = Math.max(
-            0,
-            Math.min(previewInsertIndex ?? targetEntries.length, targetEntries.length),
-          );
-          const nextTargetEntries = [
-            ...targetEntries.slice(0, safeInsertIndex),
-            movedEntry,
-            ...targetEntries.slice(safeInsertIndex),
-          ];
-          const movingAttachedOpinions = (sourceGroup.discussion_items || []).filter(
-            (item) => item.target_node_id === movedEntry.originSourceNodeId,
-          );
-          const sourceRemainingDiscussions = (sourceGroup.discussion_items || []).filter(
-            (item) => item.target_node_id !== movedEntry.originSourceNodeId,
-          );
-          const movedTargetNodeId = makeProblemSummarySourceNodeId(targetGroup.group_id, safeInsertIndex);
-          const movedTargetNodeKind = getProblemSummarySourceNodeKind(safeInsertIndex);
-          const movedTargetNodeLabel = makeProblemSummaryTitle(safeInsertIndex);
-
-          nextProblemGroupsSnapshot = problemGroups.map((group) => {
-            if (group.group_id === sourceGroup.group_id) {
-              return {
-                ...group,
-                source_summary_items: sourceRemainingEntries.map((entry) => entry.value),
-                discussion_items: remapProblemSummaryDiscussionTargets(
-                  group.group_id,
-                  sourceRemainingDiscussions,
-                  sourceRemainingEntries,
-                ),
-              };
-            }
-
-            if (group.group_id === targetGroup.group_id) {
-              return {
-                ...group,
-                source_summary_items: nextTargetEntries.map((entry) => entry.value),
-                discussion_items: [
-                  ...remapProblemSummaryDiscussionTargets(
-                    group.group_id,
-                    group.discussion_items,
-                    nextTargetEntries,
-                  ),
-                  ...movingAttachedOpinions.map((item) => ({
-                    ...item,
-                    parent_group_id: targetGroup.group_id,
-                    target_node_id: movedTargetNodeId,
-                    target_node_label: movedTargetNodeLabel,
-                    target_node_kind: movedTargetNodeKind,
-                  })),
-                ],
-              };
-            }
-
-            return group;
-          });
-          nextSelectedSourceNodeId = movedTargetNodeId;
-          activityMessage = `"${activeProblemIdeaDrag.title || "요약"}"를 "${targetGroup.topic}" 그룹으로 이동했습니다.`;
-        }
-      }
-
-      if (!nextProblemGroupsSnapshot) {
-        handleProblemIdeaDragEnd();
-        return;
-      }
-
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage,
-        problemGroups: nextProblemGroupsSnapshot,
-        nodePositions,
-        importedState: persistedSharedImportedState,
-      };
-      setProblemGroups(nextProblemGroupsSnapshot);
-      setSelectedProblemGroupId(targetGroup.group_id);
-      setSelectedProblemSourceNodeId(nextSelectedSourceNodeId);
-      setSelectedNodeId(`problem-${targetGroup.group_id}`);
-      setLeftPanelTab("detail");
-      setActivityMessage(activityMessage);
-      handleProblemIdeaDragEnd();
-
-      if (sharedSyncEnabled) {
-        if (meetingId) {
-          writeSharedWorkspaceSessionCache(
-            meetingId,
-            buildCurrentWorkspacePatchPayload({
-              problemGroups: nextProblemGroupsSnapshot,
-              nodePositions,
-            }),
-          );
-        }
-        forceBroadcastSharedCanvas({
-          problemGroups: nextProblemGroupsSnapshot,
-          nodePositions,
-        });
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            problem_groups: buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot),
-            node_positions: nodePositions,
-            imported_state: persistedSharedImportedState,
-          }).catch((error) => {
-            console.error("Failed to save problem idea reorder:", error);
-          });
-        }
-      }
-    },
-    [
-      buildCurrentWorkspacePatchPayload,
-      forceBroadcastSharedCanvas,
-      handleProblemIdeaDragEnd,
-      meetingId,
-      nodePositions,
-      persistedSharedImportedState,
-      problemGroupById,
-      problemGroups,
-      problemIdeaDrag,
-      problemIdeaDragRef,
-      problemIdeaDropPreview,
-      sharedSyncEnabled,
-      stage,
-    ],
-  );
 
   const flushProblemDiscussionBuffer = useCallback(
     async (reason: "timer" | "silence" | "stage-change" | "manual") => {
@@ -3113,123 +2421,6 @@ export default function MeetingCanvasTab({
       transcripts,
     ],
   );
-
-  useEffect(() => {
-    const handlePointerMove = (event: PointerEvent) => {
-      const pointerDrag = problemIdeaPointerDragRef.current;
-      if (!pointerDrag) return;
-
-      const deltaX = event.clientX - pointerDrag.startX;
-      const deltaY = event.clientY - pointerDrag.startY;
-      if (!pointerDrag.active && Math.hypot(deltaX, deltaY) < 4) {
-        return;
-      }
-
-      event.preventDefault();
-      if (!pointerDrag.active) {
-        pointerDrag.active = true;
-        beginProblemCardDrag(pointerDrag.groupId, pointerDrag.card, event.clientX, event.clientY);
-      }
-
-      updateProblemIdeaDragPoint(event.clientX, event.clientY);
-      const preview = getProblemIdeaDropPreviewFromPoint(event.clientX, event.clientY);
-      setProblemIdeaDropPreview((current) =>
-        current?.targetGroupId === preview?.targetGroupId &&
-        current?.cardKind === preview?.cardKind &&
-        current?.insertIndex === preview?.insertIndex
-          ? current
-          : preview,
-      );
-    };
-
-    const handlePointerUp = (event: PointerEvent) => {
-      const pointerDrag = problemIdeaPointerDragRef.current;
-      if (!pointerDrag) return;
-
-      problemIdeaPointerDragRef.current = null;
-      if (!pointerDrag.active) {
-        return;
-      }
-
-      event.preventDefault();
-      const preview = getProblemIdeaDropPreviewFromPoint(event.clientX, event.clientY);
-      if (!preview) {
-        problemIdeaDragRef.current = null;
-        setProblemIdeaDrag(null);
-        setProblemIdeaDropPreview(null);
-        setProblemIdeaDragPoint(null);
-        setActivityMessage("문제정의 그룹 밖에 놓아서 이동을 취소했습니다.");
-        return;
-      }
-
-      setProblemIdeaDropPreview(preview);
-      handleProblemIdeaDrop(preview.targetGroupId, {
-        preventDefault() {},
-        stopPropagation() {},
-        dataTransfer: {
-          getData(type: string) {
-            if (type === "application/x-imms-problem-idea") return pointerDrag.card.ideaId || "";
-            if (type === "application/x-imms-problem-card") return pointerDrag.card.sourceNodeId;
-            return "";
-          },
-        },
-      } as unknown as React.DragEvent<HTMLDivElement>, preview);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove, true);
-    window.addEventListener("pointerup", handlePointerUp, true);
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove, true);
-      window.removeEventListener("pointerup", handlePointerUp, true);
-    };
-  }, [
-    beginProblemCardDrag,
-    getProblemIdeaDropPreviewFromPoint,
-    handleProblemIdeaDrop,
-    problemIdeaDragRef,
-    problemIdeaPointerDragRef,
-    setProblemIdeaDrag,
-    setProblemIdeaDragPoint,
-    setProblemIdeaDropPreview,
-    updateProblemIdeaDragPoint,
-  ]);
-
-  useEffect(() => {
-    if (!problemIdeaDrag) return;
-
-    const handleWindowDragOver = (event: DragEvent) => {
-      updateProblemIdeaDragPoint(event.clientX, event.clientY);
-    };
-    const handleWindowDrop = (event: DragEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-problem-group-drop-id]")) {
-        return;
-      }
-
-      event.preventDefault();
-      problemIdeaDragRef.current = null;
-      setProblemIdeaDrag(null);
-      setProblemIdeaDropPreview(null);
-      setProblemIdeaDragPoint(null);
-      setActivityMessage("문제정의 그룹 밖에 놓아서 이동을 취소했습니다.");
-    };
-
-    window.addEventListener("dragover", handleWindowDragOver);
-    window.addEventListener("drop", handleWindowDrop);
-
-    return () => {
-      window.removeEventListener("dragover", handleWindowDragOver);
-      window.removeEventListener("drop", handleWindowDrop);
-    };
-  }, [
-    problemIdeaDrag,
-    problemIdeaDragRef,
-    setProblemIdeaDrag,
-    setProblemIdeaDragPoint,
-    setProblemIdeaDropPreview,
-    updateProblemIdeaDragPoint,
-  ]);
 
   useEffect(() => {
     if (stage !== "problem-definition" || problemGroups.length === 0) {
@@ -3602,26 +2793,14 @@ export default function MeetingCanvasTab({
   }, [graphBlueprint.layoutSignature, graphBlueprint.nodeDescriptors, problemGroups, setNodePositions, stage]);
 
   useEffect(() => {
-    CANVAS_STAGES.forEach((stageKey) => {
-      Object.keys(nodePositions[stageKey] || {}).forEach((nodeId) => {
-        delete pendingNodePlacementsRef.current[nodeId];
-      });
-    });
-  }, [nodePositions, pendingNodePlacementsRef]);
-
-  useEffect(() => {
-    const activeDragNodeId = stableIdeationDragRef.current?.nodeId || "";
     const preserveNodeIds = new Set<string>([
       ...remoteNodePreviewTargetsRef.current.keys(),
       ...localDraggingNodeIdsRef.current,
     ]);
-    if (activeDragNodeId) {
-      preserveNodeIds.add(activeDragNodeId);
-    }
     setNodes((current) =>
       reconcileNodes(current, graphBlueprint.nodeDescriptors, preserveNodeIds),
     );
-  }, [graphBlueprint, localDraggingNodeIdsRef, remoteNodePreviewTargetsRef, setNodes, stableIdeationDragRef]);
+  }, [graphBlueprint, localDraggingNodeIdsRef, remoteNodePreviewTargetsRef, setNodes]);
 
   const projectPersonalNotes = useMemo(
     () => personalNotes.filter((note) => !note.projectId || note.projectId === meetingId),
@@ -3885,708 +3064,126 @@ export default function MeetingCanvasTab({
     workspaceLoadedRef,
   });
 
-  const {
-    cancelPendingIdeationDragFrame,
-    collectIdeationDropTargetElements,
-    getStableIdeationDragPosition,
-    resolveIdeationDropPreview,
-    queueIdeationDragFrame,
-    setProblemDropHighlight,
-  } = useCanvasIdeationDragPreview({
-    canvasItemById,
-    canvasItems,
-    flowNodeById,
-    flowRef,
-    hoveredProblemDropTargetElementRef,
-    ideationDragFrameRef,
-    ideationDropPreviewRef,
-    ideationDropTargetElementsRef,
-    pendingIdeationDragFrameRef,
-    scheduleNodePreview,
-    selectedAgendaForDrop,
-    setIdeationDragGhost,
-    setIdeationDropPreview,
-    setNodes,
-    stableIdeationDragRef,
-    stage,
-  });
+  const onNodeDragStart = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      if (stage !== "problem-definition") return;
 
-  const { onNodeDrag, onNodeDragStart } = useCanvasNodeDragStartMove({
-    agendaDragPreviewRef,
-    cancelPendingIdeationDragFrame,
-    collectIdeationDropTargetElements,
-    dragIdByNodeIdRef,
-    getStableIdeationDragPosition,
-    ideationDropPreviewRef,
-    ideationDropTargetElementsRef,
-    localDraggingNodeIdsRef,
-    meetingId,
-    nodePositions,
-    queueIdeationDragFrame,
-    setAgendaDragPreview,
-    setIdeationDragGhost,
-    setIdeationDropPreview,
-    setIdeationNodeDragActive,
-    setNodes,
-    setProblemDropHighlight,
-    stableIdeationDragRef,
-    stage,
-    userId,
-  });
+      localDraggingNodeIdsRef.current.add(node.id);
+      dragIdByNodeIdRef.current[node.id] =
+        `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    },
+    [dragIdByNodeIdRef, localDraggingNodeIdsRef, meetingId, stage, userId],
+  );
 
-  const onNodeDragStop = (event: React.MouseEvent, node: Node) => {
-    setProblemDropHighlight(null);
-    setIdeationNodeDragActive(false);
-    setIdeationDragGhost(null);
-    cancelPendingIdeationDragFrame();
-    const dragNode =
-      stage === "ideation" && node.id.startsWith("canvas-item-")
-        ? {
-            ...node,
-            position: getStableIdeationDragPosition(event, node),
-          }
-        : node;
-    localDraggingNodeIdsRef.current.delete(node.id);
-    stableIdeationDragRef.current = null;
-    const clearNodeDragSession = () => {
-      delete dragIdByNodeIdRef.current[node.id];
-      ideationDropTargetElementsRef.current = [];
-    };
-    const activeIdeationDropPreview = ideationDropPreviewRef.current || ideationDropPreview;
-    ideationDropPreviewRef.current = null;
-    setIdeationDropPreview(null);
-    const activeAgendaDragPreview = agendaDragPreviewRef.current || agendaDragPreview;
-    const agendaDragSession =
-      stage === "ideation" && node.id.startsWith("agenda-") ? activeAgendaDragPreview : null;
+  const onNodeDrag = useCallback(() => undefined, []);
 
-    if (!workspaceLoadedRef.current || workspaceHydratingRef.current || applyingRemoteSharedSyncRef.current) {
-      if (agendaDragSession) {
-        agendaDragPreviewRef.current = null;
-        setAgendaDragPreview(null);
+  const onNodeDragStop = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      localDraggingNodeIdsRef.current.delete(node.id);
+      const clearNodeDragSession = () => {
+        delete dragIdByNodeIdRef.current[node.id];
+      };
+
+      if (stage !== "problem-definition") {
+        clearNodeDragSession();
+        return;
       }
+
+      if (!workspaceLoadedRef.current || workspaceHydratingRef.current || applyingRemoteSharedSyncRef.current) {
+        clearNodeDragSession();
+        return;
+      }
+
+      scheduleNodePreview(node.id, node.position);
+      flushPendingNodePreviews();
       clearNodeDragSession();
-      return;
-    }
 
-    scheduleNodePreview(dragNode.id, dragNode.position);
-    flushPendingNodePreviews();
-    clearNodeDragSession();
-
-    const currentPosition = nodePositions[stage]?.[node.id];
-    if (currentPosition && currentPosition.x === dragNode.position.x && currentPosition.y === dragNode.position.y) {
-      if (agendaDragSession) {
-        agendaDragPreviewRef.current = null;
-        setAgendaDragPreview(null);
+      const currentPosition = nodePositions[stage]?.[node.id];
+      if (currentPosition && currentPosition.x === node.position.x && currentPosition.y === node.position.y) {
+        return;
       }
-      return;
-    }
 
-    if (!sharedSyncEnabled) {
-      localNodeOverridesRef.current[stage].add(node.id);
-    }
+      if (!sharedSyncEnabled) {
+        localNodeOverridesRef.current[stage].add(node.id);
+      }
 
-    let nextPositionsSnapshot: CanvasNodePositionsByStage = {
-      ...nodePositions,
-      [stage]: {
-        ...(nodePositions[stage] || {}),
-        [node.id]: {
-          x: dragNode.position.x,
-          y: dragNode.position.y,
+      const nextPositionsSnapshot = normalizeCanvasNodePositionsForComputedIdeation({
+        ...nodePositions,
+        [stage]: {
+          ...(nodePositions[stage] || {}),
+          [node.id]: {
+            x: node.position.x,
+            y: node.position.y,
+          },
         },
-      },
-    };
+      });
 
-    let nextCanvasItemsSnapshot: CanvasItemViewModel[] | null = null;
-    let nextProblemGroupsSnapshot: ProblemGroupViewModel[] | null = null;
-    let topicSummaryRefreshItemIds: string[] = [];
-    if (stage === "ideation" && node.id.startsWith("agenda-")) {
-      const agendaId = node.id.slice("agenda-".length);
-      const nextStagePositions = {
-        ...(nextPositionsSnapshot.ideation || {}),
-        [`agenda-${agendaId}`]: {
-          x: dragNode.position.x,
-          y: dragNode.position.y,
-        },
+      liveNodePositionsRef.current = nextPositionsSnapshot;
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        stage,
+        canvasItems,
+        problemGroups,
+        nodePositions: nextPositionsSnapshot,
+        importedState: persistedSharedImportedState,
       };
+      console.info("[canvas drag stop] computed position", {
+        meetingId,
+        stage,
+        nodeId: node.id,
+        position: nextPositionsSnapshot[stage]?.[node.id],
+        nodePositions: summarizeNodePositionsForDebug(nextPositionsSnapshot),
+        renderedNodes: summarizeRenderedNodesForDebug(nodes),
+      });
+      setNodePositions(nextPositionsSnapshot);
 
-      nextPositionsSnapshot = {
-        ...nextPositionsSnapshot,
-        ideation: nextStagePositions,
-      };
-      agendaDragPreviewRef.current = null;
-      setAgendaDragPreview(null);
-      setActivityMessage("그룹 분류와 하위 콘텐츠 위치를 함께 이동했습니다.");
-    }
-
-    if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
-      const canvasItemId = node.id.slice("canvas-item-".length);
-      const draggedItem = canvasItemById.get(canvasItemId) || null;
-      const dropPreview =
-        resolveIdeationDropPreview(event.clientX, event.clientY, dragNode) ||
-        (activeIdeationDropPreview?.draggedItemId === canvasItemId ? activeIdeationDropPreview : null);
-      let topicToExpandId = "";
-      let ideationMoveMessage = "";
-      let nextSelectedIdeationItemId = canvasItemId;
-
-      if (draggedItem && dropPreview?.mode === "topic-merge") {
-        const draggedTopic = isTopicCanvasItem(draggedItem) ? draggedItem : null;
-        const targetTopicCandidate = canvasItemById.get(dropPreview.targetId) || null;
-        const targetTopic = targetTopicCandidate && isTopicCanvasItem(targetTopicCandidate) ? targetTopicCandidate : null;
-        if (draggedTopic && targetTopic && draggedTopic.id !== targetTopic.id) {
-          const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextAgendaId = dropPreview.agendaId || targetTopic.agenda_id || draggedTopic.agenda_id;
-          const childIds = [
-            ...new Set([
-              ...getTopicFlattenedIdeaChildIds(canvasItems, targetTopic.id),
-              ...getTopicFlattenedIdeaChildIds(canvasItems, draggedTopic.id),
-            ]),
-          ].filter((childId) => childId !== targetTopic.id && childId !== draggedTopic.id);
-          const nextTopic: CanvasItemViewModel = {
-            id: newTopicId,
-            agenda_id: nextAgendaId,
-            point_id: "",
-            kind: "topic",
-            status: "discussion",
-            title: buildUserMergedTopicTitle(targetTopic, draggedTopic),
-            body: [targetTopic.body, draggedTopic.body].filter(Boolean).join("\n") || "통합한 토픽의 내용을 정리해 주세요.",
-            keywords: [...new Set([...(targetTopic.keywords || []), ...(draggedTopic.keywords || [])])].slice(0, 5),
-            key_evidence: [],
-            refined_utterances: [],
-            evidence_utterance_ids: [
-              ...new Set([...(targetTopic.evidence_utterance_ids || []), ...(draggedTopic.evidence_utterance_ids || [])]),
-            ],
-            ignored_utterance_ids: [
-              ...new Set([...(targetTopic.ignored_utterance_ids || []), ...(draggedTopic.ignored_utterance_ids || [])]),
-            ],
-            merged_children: [],
-            compacted_from_ids: [
-              ...new Set([
-                targetTopic.id,
-                draggedTopic.id,
-                ...(targetTopic.compacted_from_ids || []),
-                ...(draggedTopic.compacted_from_ids || []),
-                ...childIds,
-              ]),
-            ],
-            compaction_level: Math.max(targetTopic.compaction_level || 0, draggedTopic.compaction_level || 0) + 1,
-            parent_topic_id: "",
-            parent_topic_source: "",
-            parent_topic_locked: false,
-            child_item_ids: childIds,
-            topic_collapsed: false,
-            created_by: "user",
-            manual_position: false,
-            ai_generated: sharedSyncEnabled,
-            user_edited: !sharedSyncEnabled,
-            ai_pending: sharedSyncEnabled,
-            x: undefined,
-            y: undefined,
-          };
-          const targetIndex = canvasItemIndexById.get(targetTopic.id) ?? canvasItems.length;
-          const draggedIndex = canvasItemIndexById.get(draggedTopic.id) ?? canvasItems.length;
-          const insertIndex = Math.max(0, Math.min(
-            targetIndex >= 0 ? targetIndex : canvasItems.length,
-            draggedIndex >= 0 ? draggedIndex : canvasItems.length,
-          ));
-          const removedTopicIds = new Set([
-            targetTopic.id,
-            draggedTopic.id,
-            ...getTopicDescendantTopicIds(canvasItems, targetTopic.id),
-            ...getTopicDescendantTopicIds(canvasItems, draggedTopic.id),
-          ]);
-          const childIdSet = new Set(childIds);
-          const nextItems: CanvasItemViewModel[] = [];
-          let insertedTopic = false;
-
-          canvasItems.forEach((item, index) => {
-            if (index === insertIndex && !insertedTopic) {
-              nextItems.push(nextTopic);
-              insertedTopic = true;
-            }
-
-            if (removedTopicIds.has(item.id)) {
-              return;
-            }
-
-            if (childIdSet.has(item.id)) {
-              nextItems.push({
-                ...item,
-                agenda_id: nextAgendaId,
-                parent_topic_id: newTopicId,
-                parent_topic_source: "user",
-                parent_topic_locked: true,
-                manual_position: false,
-                x: undefined,
-                y: undefined,
-              });
-              return;
-            }
-
-            if (isTopicCanvasItem(item)) {
-              nextItems.push({
-                ...item,
-                child_item_ids: (item.child_item_ids || []).filter(
-                  (id) => !childIdSet.has(id) && !removedTopicIds.has(id),
-                ),
-              });
-              return;
-            }
-
-            nextItems.push(item);
-          });
-
-          if (!insertedTopic) {
-            nextItems.push(nextTopic);
-          }
-
-          nextCanvasItemsSnapshot = nextItems;
-          topicToExpandId = newTopicId;
-          topicSummaryRefreshItemIds = [newTopicId];
-          nextSelectedIdeationItemId = newTopicId;
-          ideationMoveMessage = `"${targetTopic.title || "토픽"}"과 "${draggedTopic.title || "토픽"}"을 새 토픽으로 통합했습니다.`;
-        }
-      } else if (draggedItem && dropPreview?.mode === "topic-idea-merge") {
-        const draggedTopic = isTopicCanvasItem(draggedItem) ? draggedItem : null;
-        const targetItemCandidate = canvasItemById.get(dropPreview.targetId) || null;
-        const targetItem = targetItemCandidate && !isTopicCanvasItem(targetItemCandidate) ? targetItemCandidate : null;
-        if (draggedTopic && targetItem) {
-          const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextAgendaId = dropPreview.agendaId || targetItem.agenda_id || draggedTopic.agenda_id;
-          const removedTopicIds = new Set([
-            draggedTopic.id,
-            ...getTopicDescendantTopicIds(canvasItems, draggedTopic.id),
-          ]);
-          const childIds = [
-            ...new Set([
-              ...getTopicFlattenedIdeaChildIds(canvasItems, draggedTopic.id),
-              targetItem.id,
-            ]),
-          ].filter((childId) => !removedTopicIds.has(childId));
-          const childIdSet = new Set(childIds);
-          const previousTargetParentTopicId =
-            targetItem.parent_topic_id && targetItem.parent_topic_id !== draggedTopic.id
-              ? targetItem.parent_topic_id
-              : "";
-          const previousParentRemainingChildIds = previousTargetParentTopicId
-            ? getTopicFlattenedIdeaChildIds(canvasItems, previousTargetParentTopicId).filter(
-                (childId) => !childIdSet.has(childId),
-              )
-            : [];
-          const nextTopic: CanvasItemViewModel = {
-            id: newTopicId,
-            agenda_id: nextAgendaId,
-            point_id: "",
-            kind: "topic",
-            status: "discussion",
-            title: buildUserMergedTopicTitle(draggedTopic, targetItem),
-            body: [draggedTopic.body, targetItem.body].filter(Boolean).join("\n") || "통합한 토픽의 내용을 정리해 주세요.",
-            keywords: [...new Set([...(draggedTopic.keywords || []), ...(targetItem.keywords || [])])].slice(0, 5),
-            key_evidence: [...new Set([...(draggedTopic.key_evidence || []), ...(targetItem.key_evidence || [])])].slice(0, 6),
-            refined_utterances: [],
-            evidence_utterance_ids: [
-              ...new Set([...(draggedTopic.evidence_utterance_ids || []), ...(targetItem.evidence_utterance_ids || [])]),
-            ],
-            ignored_utterance_ids: [
-              ...new Set([...(draggedTopic.ignored_utterance_ids || []), ...(targetItem.ignored_utterance_ids || [])]),
-            ],
-            merged_children: [],
-            compacted_from_ids: [
-              ...new Set([
-                draggedTopic.id,
-                targetItem.id,
-                ...(draggedTopic.compacted_from_ids || []),
-                ...(targetItem.compacted_from_ids || []),
-                ...childIds,
-              ]),
-            ],
-            compaction_level: Math.max(draggedTopic.compaction_level || 0, targetItem.compaction_level || 0) + 1,
-            parent_topic_id: "",
-            parent_topic_source: "",
-            parent_topic_locked: false,
-            child_item_ids: childIds,
-            topic_collapsed: false,
-            created_by: "user",
-            manual_position: false,
-            ai_generated: sharedSyncEnabled,
-            user_edited: !sharedSyncEnabled,
-            ai_pending: sharedSyncEnabled,
-            x: undefined,
-            y: undefined,
-          };
-          const targetIndex = canvasItemIndexById.get(targetItem.id) ?? canvasItems.length;
-          const draggedIndex = canvasItemIndexById.get(draggedTopic.id) ?? canvasItems.length;
-          const insertIndex = Math.max(0, Math.min(
-            targetIndex >= 0 ? targetIndex : canvasItems.length,
-            draggedIndex >= 0 ? draggedIndex : canvasItems.length,
-          ));
-          const nextItems: CanvasItemViewModel[] = [];
-          let insertedTopic = false;
-
-          canvasItems.forEach((item, index) => {
-            if (index === insertIndex && !insertedTopic) {
-              nextItems.push(nextTopic);
-              insertedTopic = true;
-            }
-
-            if (removedTopicIds.has(item.id)) {
-              return;
-            }
-
-            if (childIdSet.has(item.id)) {
-              nextItems.push({
-                ...item,
-                agenda_id: nextAgendaId,
-                parent_topic_id: newTopicId,
-                parent_topic_source: "user",
-                parent_topic_locked: true,
-                manual_position: false,
-                x: undefined,
-                y: undefined,
-              });
-              return;
-            }
-
-            if (isTopicCanvasItem(item)) {
-              const remainingChildIds = (item.child_item_ids || []).filter(
-                (id) => !childIdSet.has(id) && !removedTopicIds.has(id),
-              );
-              nextItems.push({
-                ...item,
-                child_item_ids: remainingChildIds,
-                ...(item.id === previousTargetParentTopicId && previousParentRemainingChildIds.length > 0 && sharedSyncEnabled
-                  ? {
-                      ai_pending: true,
-                      ai_generated: true,
-                      user_edited: false,
-                    }
-                  : {}),
-              });
-              return;
-            }
-
-            nextItems.push(item);
-          });
-
-          if (!insertedTopic) {
-            nextItems.push(nextTopic);
-          }
-
-          nextCanvasItemsSnapshot = nextItems;
-          topicToExpandId = newTopicId;
-          topicSummaryRefreshItemIds = [
-            newTopicId,
-            ...(previousTargetParentTopicId && previousParentRemainingChildIds.length > 0
-              ? [previousTargetParentTopicId]
-              : []),
-          ];
-          nextSelectedIdeationItemId = newTopicId;
-          ideationMoveMessage = `"${draggedTopic.title || "토픽"}"과 "${targetItem.title || "대상 노드"}"를 새 토픽으로 통합했습니다.`;
-        }
-      } else if (draggedItem && dropPreview?.mode === "topic") {
-        const targetGroup = canvasItemById.get(dropPreview.targetId) || null;
-        if (targetGroup && targetGroup.id !== draggedItem.id) {
-          const nextAgendaId = targetGroup.agenda_id || draggedItem.agenda_id;
-          nextCanvasItemsSnapshot = canvasItems.map((item) =>
-            item.id === canvasItemId
-              ? {
-                  ...item,
-                  agenda_id: nextAgendaId,
-                  parent_topic_id: targetGroup.id,
-                  parent_topic_source: "user",
-                  parent_topic_locked: true,
-                  manual_position: false,
-                  x: undefined,
-                  y: undefined,
-                }
-              : item.id === targetGroup.id
-                ? {
-                    ...item,
-                    child_item_ids: [...new Set([...(item.child_item_ids || []), canvasItemId])],
-                    ...(isTopicCanvasItem(item) && sharedSyncEnabled
-                      ? {
-                          ai_pending: true,
-                          ai_generated: true,
-                          user_edited: false,
-                        }
-                      : {}),
-                  }
-              : item.child_item_ids?.includes(canvasItemId)
-                ? {
-                    ...item,
-                    child_item_ids: (item.child_item_ids || []).filter((id) => id !== canvasItemId),
-                  }
-                : item,
-          );
-          topicToExpandId = targetGroup.id;
-          topicSummaryRefreshItemIds = isTopicCanvasItem(targetGroup) ? [targetGroup.id] : [];
-          ideationMoveMessage = `"${draggedItem.title || "노드"}"를 "${targetGroup.title || "그룹"}"에 추가했습니다.`;
-        }
-      } else if (draggedItem && dropPreview?.mode === "merge") {
-        const targetItemCandidate = canvasItemById.get(dropPreview.targetId) || null;
-        const targetItem = targetItemCandidate && !isTopicCanvasItem(targetItemCandidate) ? targetItemCandidate : null;
-        if (targetItem && targetItem.id !== draggedItem.id) {
-          const newTopicId = `user-topic-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-          const nextAgendaId = dropPreview.agendaId || targetItem.agenda_id || draggedItem.agenda_id;
-          const childIds = [...new Set([targetItem.id, draggedItem.id])];
-          const nextTopic: CanvasItemViewModel = {
-            id: newTopicId,
-            agenda_id: nextAgendaId,
-            point_id: "",
-            kind: "topic",
-            status: "discussion",
-            title: buildUserMergedTopicTitle(targetItem, draggedItem),
-            body: "사용자가 직접 묶은 토픽입니다. 필요하면 제목과 내용을 수정해 주세요.",
-            keywords: [...new Set([...(targetItem.keywords || []), ...(draggedItem.keywords || [])])].slice(0, 5),
-            key_evidence: [],
-            refined_utterances: [],
-            evidence_utterance_ids: [],
-            ignored_utterance_ids: [],
-            merged_children: [],
-            compacted_from_ids: childIds,
-            compaction_level: Math.max(targetItem.compaction_level || 0, draggedItem.compaction_level || 0) + 1,
-            parent_topic_id: "",
-            parent_topic_source: "",
-            parent_topic_locked: false,
-            child_item_ids: childIds,
-            topic_collapsed: false,
-            created_by: "user",
-            manual_position: false,
-            ai_generated: sharedSyncEnabled,
-            user_edited: !sharedSyncEnabled,
-            ai_pending: sharedSyncEnabled,
-            x: undefined,
-            y: undefined,
-          };
-          const targetIndex = canvasItemIndexById.get(targetItem.id) ?? canvasItems.length;
-          const draggedIndex = canvasItemIndexById.get(draggedItem.id) ?? canvasItems.length;
-          const insertIndex = Math.max(0, Math.min(
-            targetIndex >= 0 ? targetIndex : canvasItems.length,
-            draggedIndex >= 0 ? draggedIndex : canvasItems.length,
-          ));
-          const nextItems: CanvasItemViewModel[] = [];
-          canvasItems.forEach((item, index) => {
-            if (index === insertIndex) {
-              nextItems.push(nextTopic);
-            }
-
-            if (childIds.includes(item.id)) {
-              nextItems.push({
-                ...item,
-                agenda_id: nextAgendaId,
-                parent_topic_id: newTopicId,
-                parent_topic_source: "user",
-                parent_topic_locked: true,
-                manual_position: false,
-                x: undefined,
-                y: undefined,
-              });
-              return;
-            }
-
-            if (isTopicCanvasItem(item)) {
-              nextItems.push({
-                ...item,
-                child_item_ids: (item.child_item_ids || []).filter((id) => !childIds.includes(id)),
-              });
-              return;
-            }
-
-            nextItems.push(item);
-          });
-          if (insertIndex >= canvasItems.length) {
-            nextItems.push(nextTopic);
-          }
-
-          nextCanvasItemsSnapshot = nextItems;
-          topicToExpandId = newTopicId;
-          topicSummaryRefreshItemIds = [newTopicId];
-          nextSelectedIdeationItemId = newTopicId;
-          ideationMoveMessage = `"${targetItem.title || "대상 노드"}"와 "${draggedItem.title || "노드"}"를 새 토픽으로 묶었습니다.`;
-        }
-      } else if (draggedItem && dropPreview?.mode === "detach") {
-        const nextAgendaId = dropPreview.agendaId || draggedItem.agenda_id;
-        nextCanvasItemsSnapshot = canvasItems.map((item) =>
-          item.id === canvasItemId
-            ? {
-                ...item,
-                agenda_id: nextAgendaId,
-                parent_topic_id: "",
-                parent_topic_source: "",
-                parent_topic_locked: false,
-                manual_position: false,
-                x: undefined,
-                y: undefined,
-              }
-            : item.child_item_ids?.includes(canvasItemId)
-              ? {
-                  ...item,
-                child_item_ids: (item.child_item_ids || []).filter((id) => id !== canvasItemId),
-              }
-            : item,
-        );
-        nextSelectedIdeationItemId = canvasItemId;
-        ideationMoveMessage = `"${draggedItem.title || "노드"}"를 1차 노드로 이동했습니다.`;
+      if (!sharedSyncEnabled) {
+        return;
       }
 
-      const nextStagePositions = {
-        ...(nextPositionsSnapshot.ideation || {}),
-      };
-      delete nextStagePositions[node.id];
-      nextPositionsSnapshot = {
-        ...nextPositionsSnapshot,
-        ideation: nextStagePositions,
-      };
-
-      if (nextCanvasItemsSnapshot) {
-        setCanvasItems(nextCanvasItemsSnapshot);
-      }
-      if (topicToExpandId) {
-        setTopicCollapsedOverrides((current) => {
-          if (current[topicToExpandId] === false) return current;
-          const next = {
-            ...current,
-            [topicToExpandId]: false,
-          };
-          writeTopicCollapseOverrides(meetingId, userId, next);
-          return next;
-        });
-      }
-      if (ideationMoveMessage) {
-        setSelectedCanvasItemId(nextSelectedIdeationItemId);
-        setSelectedNodeId(`canvas-item-${nextSelectedIdeationItemId}`);
-        setActivityMessage(ideationMoveMessage);
-      }
-    }
-
-    if (stage === "problem-definition" && node.id.startsWith("problem-discussion-")) {
-      const discussionId = node.id.slice("problem-discussion-".length);
-      const sourceDropTarget = findProblemSourceDropTarget(event.clientX, event.clientY, node.id);
-      if (sourceDropTarget?.groupId && sourceDropTarget.nodeId) {
-        let movedDiscussion: ProblemDiscussionViewModel | null = null;
-        nextProblemGroupsSnapshot = problemGroups.map((group) => {
-          const remaining = (group.discussion_items || []).filter((item) => {
-            if (item.id !== discussionId) return true;
-            movedDiscussion = {
-              ...item,
-              parent_group_id: sourceDropTarget.groupId,
-              target_node_id: sourceDropTarget.nodeId,
-              target_node_label: sourceDropTarget.nodeLabel,
-              target_node_kind: sourceDropTarget.nodeKind,
-            };
-            return false;
-          });
-          return {
-            ...group,
-            discussion_items: remaining,
-          };
-        }).map((group) =>
-          group.group_id === sourceDropTarget.groupId && movedDiscussion
-            ? {
-                ...group,
-                discussion_items: [
-                  ...(group.discussion_items || []),
-                  movedDiscussion,
-                ],
-              }
-            : group,
-        );
-
-        const nextStagePositions = {
-          ...(nextPositionsSnapshot["problem-definition"] || {}),
-        };
-        delete nextStagePositions[node.id];
-        nextPositionsSnapshot = {
-          ...nextPositionsSnapshot,
-          "problem-definition": nextStagePositions,
-        };
-
-        setProblemGroups(nextProblemGroupsSnapshot);
-        setSelectedProblemGroupId(sourceDropTarget.groupId);
-        setSelectedProblemSourceNodeId(sourceDropTarget.nodeId);
-        setSelectedNodeId(`problem-${sourceDropTarget.groupId}`);
-        setLeftPanelTab("detail");
-        setActivityMessage(`의견 노드를 "${sourceDropTarget.nodeLabel || "선택한 노드"}"의 속한 의견으로 추가했습니다.`);
-      } else {
-        const nextStagePositions = {
-          ...(nextPositionsSnapshot["problem-definition"] || {}),
-        };
-        delete nextStagePositions[node.id];
-        nextPositionsSnapshot = {
-          ...nextPositionsSnapshot,
-          "problem-definition": nextStagePositions,
-        };
-        setSelectedNodeId(node.id);
-        setActivityMessage("의견 노드는 캔버스의 아이디어/맥락 카드 위에 놓을 때만 연결됩니다.");
-      }
-    }
-
-    nextPositionsSnapshot = normalizeCanvasNodePositionsForComputedIdeation(nextPositionsSnapshot);
-    liveNodePositionsRef.current = nextPositionsSnapshot;
-    latestSharedWorkspaceRef.current = {
-      ...latestSharedWorkspaceRef.current,
-      stage,
-      canvasItems: nextCanvasItemsSnapshot || canvasItems,
-      problemGroups: nextProblemGroupsSnapshot || problemGroups,
-      nodePositions: nextPositionsSnapshot,
-      importedState: persistedSharedImportedState,
-    };
-    console.info("[canvas drag stop] computed position", {
-      meetingId,
-      stage,
-      nodeId: node.id,
-      position: nextPositionsSnapshot[stage]?.[node.id],
-      nodePositions: summarizeNodePositionsForDebug(nextPositionsSnapshot),
-      renderedNodes: summarizeRenderedNodesForDebug(nodes),
-    });
-    setNodePositions(nextPositionsSnapshot);
-
-    if (sharedSyncEnabled) {
       if (meetingId) {
         writeSharedWorkspaceSessionCache(
           meetingId,
           buildCurrentWorkspacePatchPayload({
-            canvasItems: nextCanvasItemsSnapshot || canvasItems,
-            problemGroups: nextProblemGroupsSnapshot || problemGroups,
+            problemGroups,
             nodePositions: nextPositionsSnapshot,
           }),
         );
-      }
-      if (nextCanvasItemsSnapshot || nextProblemGroupsSnapshot) {
-        forceBroadcastSharedCanvas({
-          canvasItems: nextCanvasItemsSnapshot || undefined,
-          problemGroups: nextProblemGroupsSnapshot || undefined,
-        });
-      }
-      broadcastNodePositionCommit(stage, node.id, nextPositionsSnapshot);
-      if (meetingId) {
-        const savePromise = saveCanvasWorkspacePatch({
+        void saveCanvasWorkspacePatch({
           meeting_id: meetingId,
           stage,
-          canvas_items: nextCanvasItemsSnapshot
-            ? serializeSharedCanvasItems(nextCanvasItemsSnapshot)
-            : undefined,
-          problem_groups: nextProblemGroupsSnapshot
-            ? buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot)
-            : undefined,
           node_positions: nextPositionsSnapshot,
           imported_state: persistedSharedImportedState,
-        });
-        void savePromise.catch((error) => {
+        }).catch((error) => {
           console.error("Failed to save shared node positions:", error);
         });
-        const uniqueTopicSummaryRefreshItemIds = [...new Set(topicSummaryRefreshItemIds.filter(Boolean))];
-        if (uniqueTopicSummaryRefreshItemIds.length > 0) {
-          void savePromise
-            .then(() => {
-              uniqueTopicSummaryRefreshItemIds.forEach((topicItemId) => {
-                void refreshCanvasTopicSummary(topicItemId);
-              });
-            })
-            .catch(() => undefined);
-        }
       }
-    }
-  };
+
+      broadcastNodePositionCommit(stage, node.id, nextPositionsSnapshot);
+    },
+    [
+      applyingRemoteSharedSyncRef,
+      broadcastNodePositionCommit,
+      buildCurrentWorkspacePatchPayload,
+      canvasItems,
+      dragIdByNodeIdRef,
+      flushPendingNodePreviews,
+      liveNodePositionsRef,
+      localDraggingNodeIdsRef,
+      localNodeOverridesRef,
+      meetingId,
+      nodePositions,
+      nodes,
+      persistedSharedImportedState,
+      problemGroups,
+      scheduleNodePreview,
+      setNodePositions,
+      sharedSyncEnabled,
+      stage,
+      workspaceHydratingRef,
+      workspaceLoadedRef,
+    ],
+  );
 
   const handleDeletePersonalNote = (noteId: string) => {
     setPersonalNotes((prev) => prev.filter((item) => item.id !== noteId));
@@ -4741,14 +3338,6 @@ export default function MeetingCanvasTab({
       }),
     [collapsedProblemGroupIds, problemDefinitionPhase, problemGroups, stage],
   );
-  const ideationDragGhostItem = useMemo(
-    () =>
-      ideationDragGhost
-        ? canvasItemById.get(ideationDragGhost.itemId) || null
-        : null,
-    [canvasItemById, ideationDragGhost],
-  );
-
   const { linkPendingPersonalNoteToCanvasItem } = usePersonalNoteCanvasLinking({
     composerAgendaId,
     composerPersonalNoteLinkId: COMPOSER_PERSONAL_NOTE_LINK_ID,
@@ -4796,27 +3385,11 @@ export default function MeetingCanvasTab({
       setEditingProblemGroupId("");
       return;
     }
-    const problemSourceInfo = extractProblemSourceCanvasNodeInfo(node.id);
     const clickedProblemGroupId =
-      node.id.startsWith("problem-") && !node.id.startsWith("problem-discussion-")
+      node.id.startsWith("problem-")
         ? node.id.slice("problem-".length)
         : "";
-    if (problemSourceInfo) {
-      setSelectedProblemGroupId(problemSourceInfo.groupId);
-      setSelectedProblemSourceNodeId(problemSourceInfo.sourceNodeId);
-      setSelectedCanvasItemId("");
-      setEditingProblemGroupId("");
-    } else if (node.id.startsWith("problem-discussion-")) {
-      const discussionId = node.id.slice("problem-discussion-".length);
-      const parentGroup = problemGroups.find((group) =>
-        (group.discussion_items || []).some((item) => item.id === discussionId),
-      );
-      setSelectedProblemGroupId(parentGroup?.group_id || "");
-      const discussion = parentGroup?.discussion_items?.find((item) => item.id === discussionId);
-      setSelectedProblemSourceNodeId(discussion?.target_node_id || "");
-      setSelectedCanvasItemId("");
-      setEditingProblemGroupId("");
-    } else if (clickedProblemGroupId) {
+    if (clickedProblemGroupId) {
       setSelectedProblemGroupId(clickedProblemGroupId);
       setSelectedProblemSourceNodeId("");
       setSelectedCanvasItemId("");
@@ -4951,21 +3524,6 @@ export default function MeetingCanvasTab({
             canvasStatusMessage={canvasStatusMessage}
             problemCanvasToolbarActions={problemCanvasToolbarActions}
             selectedProblemStatus={selectedProblemGroup?.status || ""}
-            problemIdeaDrag={problemIdeaDrag}
-            problemIdeaDragPoint={problemIdeaDragPoint}
-            ideationDragGhost={ideationDragGhost}
-            ideationDragGhostContent={
-              ideationDragGhost && ideationDragGhostItem
-                ? makeIdeationDragGhostLabel(
-                    ideationDragGhostItem,
-                    ideationDropPreview?.mode === "detach"
-                      ? "왼쪽에 추가"
-                      : ideationDropPreview?.mode === "topic"
-                        ? "토픽으로 이동"
-                        : "이동 중",
-                  )
-                : null
-            }
             onFlowInit={handleFlowInitStable}
             onNodeClick={handleCanvasNodeClickStable}
             onPaneClick={handleCanvasPaneClickStable}

@@ -16,7 +16,6 @@ import {
   CanvasStageEmptyOverlay,
   CanvasStatusToast,
   ProblemDefinitionPreparingOverlay,
-  ProblemIdeaDragPreview,
   SummaryDocumentPendingOverlay,
 } from "@/components/canvas/CanvasStatusOverlays";
 import {
@@ -38,22 +37,6 @@ type ConcreteProblemDefinitionMode = Exclude<ProblemDefinitionMode, "">;
 type ProblemDefinitionPhase = "explore" | "structure";
 type ProblemStructureMethod = "affinity" | "card-sorting";
 type SummaryDocumentSection = NonNullable<CanvasFinalSolutionSummary["sections"]>[number];
-
-type ProblemIdeaDrag = {
-  cardKind: "summary" | string;
-  title: string;
-};
-
-type ProblemIdeaDragPoint = {
-  x: number;
-  y: number;
-};
-
-type IdeationDragGhost = {
-  itemId: string;
-  x: number;
-  y: number;
-};
 
 type ProblemGroupingRationale = {
   groupId: string;
@@ -96,10 +79,6 @@ type CanvasSurfaceProps = {
   canvasStatusMessage: string;
   problemCanvasToolbarActions: ProblemCanvasToolbarActionId[];
   selectedProblemStatus: ProblemGroupStatus | "";
-  problemIdeaDrag: ProblemIdeaDrag | null;
-  problemIdeaDragPoint: ProblemIdeaDragPoint | null;
-  ideationDragGhost: IdeationDragGhost | null;
-  ideationDragGhostContent: ReactNode;
   onFlowInit: (instance: ReactFlowInstance<Node, Edge>) => void;
   onNodeClick: (event: React.MouseEvent, node: Node) => void;
   onPaneClick: (event: React.MouseEvent) => void;
@@ -269,10 +248,6 @@ export const CanvasSurface = memo(function CanvasSurface({
   canvasStatusMessage,
   problemCanvasToolbarActions,
   selectedProblemStatus,
-  problemIdeaDrag,
-  problemIdeaDragPoint,
-  ideationDragGhost,
-  ideationDragGhostContent,
   onFlowInit,
   onNodeClick,
   onPaneClick,
@@ -319,7 +294,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             nodesConnectable={false}
-            panOnDrag={!problemIdeaDrag}
+            panOnDrag
             autoPanOnNodeDrag={false}
             noPanClassName="nopan"
             nodesDraggable={stage === "problem-definition"}
@@ -368,27 +343,6 @@ export const CanvasSurface = memo(function CanvasSurface({
           />
         )}
       </div>
-
-      {problemIdeaDrag && problemIdeaDragPoint ? (
-        <ProblemIdeaDragPreview
-          x={problemIdeaDragPoint.x}
-          y={problemIdeaDragPoint.y}
-          cardKind={problemIdeaDrag.cardKind}
-          title={problemIdeaDrag.title}
-        />
-      ) : null}
-
-      {ideationDragGhost && ideationDragGhostContent ? (
-        <div
-          className="pointer-events-none fixed z-[85] w-[min(17.5rem,72vw)] -translate-x-1/2 -translate-y-[18%] opacity-95"
-          style={{
-            left: ideationDragGhost.x,
-            top: ideationDragGhost.y,
-          }}
-        >
-          {ideationDragGhostContent}
-        </div>
-      ) : null}
 
       {stage === "problem-definition" && problemGroupsCount === 0 ? (
         <CanvasStageEmptyOverlay
