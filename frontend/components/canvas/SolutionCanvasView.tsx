@@ -19,12 +19,16 @@ type SolutionCanvasViewProps = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   paneRef: RefObject<HTMLElement | null>;
   document: CanvasFinalSolutionSummary;
+  draftMarkdown: string;
+  draftDirty: boolean;
   editMode: boolean;
   pending: boolean;
+  saving: boolean;
   onToggleEvidence: (groupId: string) => void;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
+  onSave: () => void | Promise<void>;
   onMarkdownChange: (markdown: string) => void;
   renderPreview: (markdown: string, onEdit: () => void) => ReactNode;
 };
@@ -37,12 +41,16 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   remoteEditPresenceByKey,
   paneRef,
   document,
+  draftMarkdown,
+  draftDirty,
   editMode,
   pending,
+  saving,
   onToggleEvidence,
   onSetEditMode,
   onRegenerate,
   onCopy,
+  onSave,
   onMarkdownChange,
   renderPreview,
 }: SolutionCanvasViewProps) {
@@ -59,12 +67,16 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
       <SolutionFinalDocumentPanel
         paneRef={paneRef}
         document={document}
+        draftMarkdown={draftMarkdown}
+        draftDirty={draftDirty}
         editMode={editMode}
         pending={pending}
+        saving={saving}
         eligibleGroupCount={groups.length}
         onSetEditMode={onSetEditMode}
         onRegenerate={onRegenerate}
         onCopy={onCopy}
+        onSave={onSave}
         onMarkdownChange={onMarkdownChange}
         renderPreview={renderPreview}
       />

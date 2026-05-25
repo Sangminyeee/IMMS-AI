@@ -2,25 +2,17 @@
 
 import "@xyflow/react/dist/style.css";
 import {
-  applyNodeChanges,
   type Edge,
   type Node,
-  type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getCanvasWorkspaceState,
   getCanvasPersonalNotes,
   confirmCanvasPlacement,
   getCanvasIdeaAssimilationWorkspaceJob,
   getCanvasProblemDiscussionWorkspaceJob,
-  generateProblemStructure,
-  generateCanvasProblemTaxonomy,
-  generateCanvasSummaryDocument,
-  flushCanvasPersonalNotes,
-  flushCanvasWorkspacePatch,
-  saveCanvasPersonalNotes,
   saveCanvasWorkspacePatch,
   startCanvasProblemDiscussionWorkspace,
   startCanvasTopicSummaryWorkspace,
@@ -44,15 +36,10 @@ import {
   type CanvasNodeDescriptor,
 } from "@/components/canvas/CanvasGraphTypes";
 import {
-  CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING,
-  CANVAS_ITEM_NODE_WIDTH,
-  CANVAS_TOPIC_CHILD_GAP_X,
   buildUserMergedTopicTitle,
   getCanvasItemChangeSignature,
-  getCanvasItemDescendantIds,
   getCanvasItemTopLevelAncestorId,
   getTopicDescendantTopicIds,
-  getTopicDirectChildIds,
   getTopicFlattenedIdeaChildIds,
   isTopicCanvasItem,
   makeIdeationDragGhostLabel,
@@ -66,16 +53,11 @@ import {
   buildStableIdeationBubbleVisuals,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
-  buildProblemStructureNodesFromGroups,
   buildProblemStructureStatePayload,
-  buildSummaryDocumentSourceSignature,
   createDefaultProblemStructureState,
   getSummaryEligibleStructureGroups,
   hydrateProblemStructureState,
-  normalizeProblemStructureGroupsFromResponse,
-  problemDefinitionModeLabel,
   problemStructureMethodLabel,
-  pruneProblemStructureGroups,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -87,19 +69,62 @@ import {
   useCanvasFlowRefs,
   useCanvasNodeSyncRefs,
   useCanvasRuntimeState,
-  type IdeationDropTargetElement,
-  type IdeationDropPreviewState,
-  type PendingIdeationDragFrame,
   type ProblemIdeaDropPreviewState,
 } from "@/components/canvas/useCanvasRuntimeState";
 import { useCanvasEndMeetingState } from "@/components/canvas/useCanvasEndMeetingState";
 import { useCanvasMeetingGoalEditor } from "@/components/canvas/useCanvasMeetingGoalEditor";
 import { useProblemStructureEditor } from "@/components/canvas/useProblemStructureEditor";
+import { useProblemDefinitionGeneration } from "@/components/canvas/useProblemDefinitionGeneration";
+import { useProblemStructureGeneration } from "@/components/canvas/useProblemStructureGeneration";
 import { useProblemChildGeneration } from "@/components/canvas/useProblemChildGeneration";
 import { useProblemGroupActions } from "@/components/canvas/useProblemGroupActions";
 import { useProblemGroupingRationale } from "@/components/canvas/useProblemGroupingRationale";
 import { useProblemGroupRelationships } from "@/components/canvas/useProblemGroupRelationships";
 import { usePersonalNoteCanvasLinking } from "@/components/canvas/usePersonalNoteCanvasLinking";
+import { useSummaryDocumentActions } from "@/components/canvas/useSummaryDocumentActions";
+import { useSharedCanvasBroadcast } from "@/components/canvas/useSharedCanvasBroadcast";
+import { useSharedCanvasIncomingSync } from "@/components/canvas/useSharedCanvasIncomingSync";
+import { useCanvasPersistence } from "@/components/canvas/useCanvasPersistence";
+import { useCanvasNodePreviewSync } from "@/components/canvas/useCanvasNodePreviewSync";
+import { useCanvasNodeChanges } from "@/components/canvas/useCanvasNodeChanges";
+import { useCanvasIdeationDragPreview } from "@/components/canvas/useCanvasIdeationDragPreview";
+import { useCanvasNodeDragStartMove } from "@/components/canvas/useCanvasNodeDragStartMove";
+import {
+  extractCanvasItemIdFromNodeId,
+  findProblemSourceDropTarget,
+  getReactFlowCanvasRect,
+  pointInRect,
+} from "@/components/canvas/canvasInteractionDom";
+import {
+  buildMeetingStateSignature,
+  buildSharedCanvasSignature,
+  buildWorkspaceFieldSignatures,
+  buildWorkspaceProblemGroupsPayload,
+  createWorkspaceFieldSignatures,
+  normalizeCanvasItemStatus,
+  normalizeCanvasNodePositionsForComputedIdeation,
+  normalizeIdeationSuggestionStatus,
+  normalizeRefinedUtterances,
+  readSharedWorkspaceSessionCache,
+  readTopicCollapseOverrides,
+  serializeCustomGroups,
+  serializeSharedCanvasItems,
+  summarizeNodePositionsForDebug,
+  summarizeRenderedNodesForDebug,
+  writeSharedWorkspaceSessionCache,
+  writeTopicCollapseOverrides,
+  type AgendaOverride,
+  type WorkspaceFieldSignatures,
+} from "@/components/canvas/canvasWorkspaceSerialization";
+import {
+  buildFinalSolutionSummaryPayload,
+  buildPrintableSummaryDocumentHtml,
+  buildSummaryDocumentFromResponse,
+  createEmptyFinalSolutionSummary,
+  normalizeFinalSolutionSummaryPayload,
+  openPrintableSummaryDocumentPdf,
+  renderSummaryMarkdownPreview,
+} from "@/components/canvas/summaryDocumentHelpers";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
 import type {
@@ -108,15 +133,12 @@ import type {
   CanvasCustomGroup,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
-  CanvasLocalState,
   CanvasNodePreviewPayload,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
   CanvasProblemStructureState,
   CanvasRealtimeSyncPayload,
-  CanvasRefinedUtterance,
   CanvasProblemDiscussionItem,
-  CanvasSummaryDocumentSection,
   CanvasWorkspaceStateResponse,
   CanvasWorkspaceItem,
   MeetingState,
@@ -158,13 +180,9 @@ type ProblemCanvasToolbarAction =
   | "adopt";
 type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
-type CanvasItemStatus = "discussion" | "confirmed" | "closed";
 const CANVAS_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
-const NODE_PREVIEW_SYNC_THROTTLE_MS = 64;
-const NODE_PREVIEW_ANIMATION_LERP = 0.38;
-const NODE_PREVIEW_SETTLE_DISTANCE = 0.75;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
 function clampNumber(value: number, min: number, max: number) {
@@ -206,63 +224,6 @@ type ProblemDiscussionViewModel = CanvasProblemDiscussionItem;
 type CanvasItemViewModel = CanvasWorkspaceItem;
 type CustomGroupViewModel = CanvasCustomGroup;
 
-type WorkspaceFieldSignatures = {
-  meeting_goal: string;
-  meeting_goal_context: string;
-  stage: string;
-  agenda_overrides: string;
-  canvas_items: string;
-  custom_groups: string;
-  problem_groups: string;
-  problem_structure: string;
-  solution_topics: string;
-  final_solution_summary: string;
-  node_positions: string;
-  imported_state: string;
-};
-
-function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
-  return {
-    meeting_goal: "",
-    meeting_goal_context: "",
-    stage: "",
-    agenda_overrides: "",
-    canvas_items: "",
-    custom_groups: "",
-    problem_groups: "",
-    problem_structure: "",
-    solution_topics: "",
-    final_solution_summary: "",
-    node_positions: "",
-    imported_state: "",
-  };
-}
-
-function buildWorkspaceProblemGroupsPayload(groups: ProblemGroupViewModel[]) {
-  return groups.map((group) => ({
-    group_id: group.group_id,
-    parent_group_id: group.parent_group_id || "",
-    depth: group.depth || 0,
-    topic: group.topic,
-    insight_lens: group.insight_lens,
-    insight_user_edited: group.insight_user_edited,
-    keywords: group.keywords,
-    agenda_ids: group.agenda_ids,
-    agenda_titles: group.agenda_titles,
-    ideas: group.ideas,
-    source_summary_items: group.source_summary_items,
-    discussion_items: group.discussion_items || [],
-    linked_group_ids: group.linked_group_ids || [],
-    evidence_utterance_ids: group.evidence_utterance_ids || [],
-    conclusion: group.conclusion,
-    conclusion_user_edited: group.conclusion_user_edited,
-    status: group.status,
-    source_signature: group.source_signature,
-    source_agenda_signatures: group.source_agenda_signatures,
-    source_idea_signatures: group.source_idea_signatures,
-  }));
-}
-
 function buildProblemTaxonomyExistingGroupsPayload(groups: ProblemGroupViewModel[]) {
   return groups.map((group) => ({
     group_id: group.group_id,
@@ -272,389 +233,6 @@ function buildProblemTaxonomyExistingGroupsPayload(groups: ProblemGroupViewModel
     evidence_utterance_ids: group.evidence_utterance_ids || [],
     source_summary_items: group.source_summary_items || [],
   }));
-}
-
-function createEmptyFinalSolutionSummary(): CanvasFinalSolutionSummary {
-  return {
-    final_count: 0,
-    topics: [],
-    items: [],
-    markdown: "",
-    document_status: "empty",
-    generated_at: "",
-    used_llm: false,
-    warning: "",
-    source_signature: "",
-    sections: [],
-  };
-}
-
-function normalizeFinalSolutionSummaryPayload(raw?: CanvasFinalSolutionSummary | null): CanvasFinalSolutionSummary {
-  const fallback = createEmptyFinalSolutionSummary();
-  if (!raw || typeof raw !== "object") return fallback;
-  const markdown = typeof raw.markdown === "string" ? raw.markdown : "";
-  const sections = Array.isArray(raw.sections)
-    ? raw.sections.map((section) => ({
-        group_id: section.group_id || "",
-        title: section.title || "요약 그룹",
-        status: section.status || "draft",
-        status_label: section.status_label || (section.status === "review" ? "검토 중" : section.status === "final" ? "확정" : "초안"),
-        rationale: section.rationale || "",
-        node_titles: Array.isArray(section.node_titles) ? section.node_titles.filter(Boolean) : [],
-        evidence: Array.isArray(section.evidence)
-          ? section.evidence
-              .map((item) => ({
-                utterance_id: item.utterance_id || "",
-                speaker: item.speaker || "참가자",
-                timestamp: item.timestamp || "",
-                text: item.text || "",
-              }))
-              .filter((item) => item.text)
-          : [],
-      }))
-    : [];
-
-  return {
-    final_count: Math.max(Number.isFinite(raw.final_count) ? raw.final_count : raw.items?.length || 0, sections.length),
-    topics: Array.isArray(raw.topics) ? raw.topics : [],
-    items: Array.isArray(raw.items) ? raw.items : [],
-    markdown,
-    document_status: raw.document_status || (markdown ? "ready" : "empty"),
-    generated_at: raw.generated_at || "",
-    used_llm: Boolean(raw.used_llm),
-    warning: raw.warning || "",
-    source_signature: raw.source_signature || "",
-    sections,
-  };
-}
-
-function buildFinalSolutionSummaryPayload(
-  summaryDocument?: CanvasFinalSolutionSummary | null,
-): CanvasFinalSolutionSummary {
-  return normalizeFinalSolutionSummaryPayload(summaryDocument);
-}
-
-function normalizeRefinedUtterances(
-  rows: CanvasRefinedUtterance[] | undefined,
-  limit = 120,
-): CanvasRefinedUtterance[] {
-  const seen = new Set<string>();
-  const normalized: CanvasRefinedUtterance[] = [];
-
-  (rows || []).forEach((row, index) => {
-    const text = trimText(row.text || "", 72);
-    if (!text) return;
-    const utteranceId = (row.utterance_id || `refined-${index}`).trim();
-    const key = utteranceId || `${row.speaker || ""}:${text}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    normalized.push({
-      utterance_id: utteranceId,
-      speaker: (row.speaker || "참가자").trim(),
-      text,
-      timestamp: (row.timestamp || "").trim(),
-    });
-  });
-
-  return normalized.slice(0, limit);
-}
-
-function buildWorkspaceCanvasItemsPayload(items: CanvasItemViewModel[]): CanvasWorkspaceItem[] {
-  return items.map((item) => ({
-    id: item.id,
-    agenda_id: item.agenda_id,
-    point_id: item.point_id || "",
-    kind: item.kind,
-    status: normalizeCanvasItemStatus(item.status),
-    title: item.title,
-    body: item.body,
-    keywords: (item.keywords || []).map((keyword) => keyword.trim()).filter(Boolean),
-    key_evidence: (item.key_evidence || []).map((value) => value.trim()).filter(Boolean),
-    refined_utterances: normalizeRefinedUtterances(item.refined_utterances),
-    evidence_utterance_ids: (item.evidence_utterance_ids || []).map((value) => value.trim()).filter(Boolean),
-    ignored_utterance_ids: (item.ignored_utterance_ids || []).map((value) => value.trim()).filter(Boolean),
-    merged_children: buildWorkspaceCanvasItemsPayload(item.merged_children || []),
-    compacted_from_ids: (item.compacted_from_ids || []).map((value) => value.trim()).filter(Boolean),
-    compaction_level: typeof item.compaction_level === "number" ? item.compaction_level : 0,
-    parent_topic_id: item.parent_topic_id || "",
-    parent_topic_source: item.parent_topic_source || "",
-    parent_topic_locked: Boolean(item.parent_topic_locked),
-    child_item_ids: (item.child_item_ids || []).map((value) => value.trim()).filter(Boolean),
-    topic_collapsed: Boolean(item.topic_collapsed),
-    created_by: item.created_by || "",
-    manual_position: false,
-    ai_generated: Boolean(item.ai_generated),
-    user_edited: Boolean(item.user_edited),
-    ai_pending: Boolean(item.ai_pending),
-    ai_suggestions: (item.ai_suggestions || [])
-      .map((suggestion) => ({
-        id: suggestion.id,
-        text: suggestion.text.trim(),
-        status: normalizeIdeationSuggestionStatus(suggestion.status),
-      }))
-      .filter((suggestion) => suggestion.id && suggestion.text)
-      .slice(0, 8),
-  }));
-}
-
-function serializeCustomGroups(groups: CustomGroupViewModel[]) {
-  return groups
-    .map((group) => ({
-      id: group.id,
-      title: group.title.trim(),
-      description: (group.description || "").trim(),
-      keywords: (group.keywords || []).map((keyword) => keyword.trim()).filter(Boolean),
-      color: (group.color || "").trim(),
-      created_by: group.created_by || "",
-      created_at: group.created_at || "",
-    }))
-    .filter((group) => group.id && group.title);
-}
-
-function buildWorkspaceFieldSignatures(input: {
-  meetingGoal: string;
-  meetingGoalContext: string;
-  stage: CanvasStage;
-  agendaOverrides: Record<string, AgendaOverride>;
-  canvasItems: CanvasItemViewModel[];
-  customGroups: CustomGroupViewModel[];
-  problemGroups: ProblemGroupViewModel[];
-  problemStructure?: CanvasProblemStructureState;
-  finalSolutionSummary?: CanvasFinalSolutionSummary;
-  nodePositions: CanvasNodePositionsByStage;
-  importedState: MeetingState | null;
-}): WorkspaceFieldSignatures {
-  return {
-    meeting_goal: input.meetingGoal.trim(),
-    meeting_goal_context: input.meetingGoalContext.trim(),
-    stage: input.stage,
-    agenda_overrides: JSON.stringify(serializeAgendaOverrides(input.agendaOverrides)),
-    canvas_items: JSON.stringify(buildWorkspaceCanvasItemsPayload(input.canvasItems)),
-    custom_groups: JSON.stringify(serializeCustomGroups(input.customGroups)),
-    problem_groups: JSON.stringify(buildWorkspaceProblemGroupsPayload(input.problemGroups)),
-    problem_structure: JSON.stringify(input.problemStructure || createDefaultProblemStructureState()),
-    solution_topics: JSON.stringify([]),
-    final_solution_summary: JSON.stringify(buildFinalSolutionSummaryPayload(input.finalSolutionSummary)),
-    node_positions: JSON.stringify(normalizeCanvasNodePositionsForComputedIdeation(input.nodePositions)),
-    imported_state: JSON.stringify(input.importedState || null),
-  };
-}
-
-type FullWorkspacePatchPayloadInput = {
-  meetingId: string;
-  meetingGoal: string;
-  meetingGoalContext: string;
-  stage: CanvasStage;
-  agendaOverrides: Record<string, AgendaOverride>;
-  canvasItems: CanvasItemViewModel[];
-  customGroups: CustomGroupViewModel[];
-  problemGroups: ProblemGroupViewModel[];
-  problemStructure?: CanvasProblemStructureState;
-  finalSolutionSummary?: CanvasFinalSolutionSummary;
-  nodePositions: CanvasNodePositionsByStage;
-  importedState: MeetingState | null;
-};
-
-type FullWorkspacePatchPayloadOverrides = Partial<Omit<FullWorkspacePatchPayloadInput, "meetingId">>;
-
-function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadInput) {
-  return {
-    meeting_id: input.meetingId,
-    meeting_goal: input.meetingGoal.trim(),
-    meeting_goal_context: input.meetingGoalContext.trim(),
-    stage: input.stage,
-    agenda_overrides: serializeAgendaOverrides(input.agendaOverrides),
-    canvas_items: serializeSharedCanvasItems(input.canvasItems),
-    custom_groups: serializeCustomGroups(input.customGroups),
-    problem_groups: buildWorkspaceProblemGroupsPayload(input.problemGroups),
-    problem_structure: input.problemStructure || createDefaultProblemStructureState(),
-    solution_topics: [],
-    final_solution_summary: buildFinalSolutionSummaryPayload(input.finalSolutionSummary),
-    node_positions: normalizeCanvasNodePositionsForComputedIdeation(input.nodePositions),
-    imported_state: input.importedState,
-  };
-}
-
-function getSharedWorkspaceSessionStorageKey(meetingId: string) {
-  return `imms:canvas-shared-workspace:${meetingId}`;
-}
-
-function writeSharedWorkspaceSessionCache(
-  meetingId: string,
-  snapshot: ReturnType<typeof buildFullWorkspacePatchPayload>,
-) {
-  if (typeof window === "undefined" || !meetingId) return;
-  try {
-    window.sessionStorage.setItem(
-      getSharedWorkspaceSessionStorageKey(meetingId),
-      JSON.stringify({
-        ...snapshot,
-        cached_at: Date.now(),
-      }),
-    );
-  } catch {
-    // ignore sessionStorage errors
-  }
-}
-
-function readSharedWorkspaceSessionCache(meetingId: string): Partial<ReturnType<typeof buildFullWorkspacePatchPayload>> | null {
-  if (typeof window === "undefined" || !meetingId) return null;
-  try {
-    const raw = window.sessionStorage.getItem(getSharedWorkspaceSessionStorageKey(meetingId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function getTopicCollapseStorageKey(meetingId: string, userId: string) {
-  return `imms:canvas-topic-collapse:${meetingId}:${userId || "anonymous"}`;
-}
-
-function readTopicCollapseOverrides(meetingId: string, userId: string): Record<string, boolean> {
-  if (typeof window === "undefined" || !meetingId) return {};
-  try {
-    const raw = window.localStorage.getItem(getTopicCollapseStorageKey(meetingId, userId));
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return {};
-
-    return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, boolean] => (
-        typeof entry[0] === "string" && typeof entry[1] === "boolean"
-      )),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function writeTopicCollapseOverrides(meetingId: string, userId: string, overrides: Record<string, boolean>) {
-  if (typeof window === "undefined" || !meetingId) return;
-  try {
-    window.localStorage.setItem(getTopicCollapseStorageKey(meetingId, userId), JSON.stringify(overrides));
-  } catch {
-    // ignore localStorage errors
-  }
-}
-
-function summarizeNodePositionsForDebug(nodePositions: CanvasNodePositionsByStage) {
-  const topIdeationNodes = Object.entries(nodePositions.ideation || {})
-    .sort((a, b) => {
-      const ay = Number(a[1]?.y ?? 0);
-      const by = Number(b[1]?.y ?? 0);
-      if (ay !== by) return ay - by;
-      return Number(a[1]?.x ?? 0) - Number(b[1]?.x ?? 0);
-    })
-    .slice(0, 4);
-
-  return {
-    ideation: Object.keys(nodePositions.ideation || {}).length,
-    problemDefinition: Object.keys(nodePositions["problem-definition"] || {}).length,
-    solution: Object.keys(nodePositions.solution || {}).length,
-    topIdeationNodes,
-  };
-}
-
-function summarizeRenderedNodesForDebug(nodes: Node[]) {
-  const topIdeationNodes = nodes
-    .filter((node) => node.id.startsWith("agenda-") || node.id.startsWith("canvas-item-"))
-    .sort((a, b) => {
-      const ay = Number(a.position?.y ?? 0);
-      const by = Number(b.position?.y ?? 0);
-      if (ay !== by) return ay - by;
-      return Number(a.position?.x ?? 0) - Number(b.position?.x ?? 0);
-    })
-    .slice(0, 4)
-    .map((node) => [node.id, { x: node.position.x, y: node.position.y }] as const);
-
-  return {
-    total: nodes.length,
-    topIdeationNodes,
-  };
-}
-
-function normalizeCanvasNodePositionsForComputedIdeation(
-  positions: CanvasNodePositionsByStage | undefined,
-): CanvasNodePositionsByStage {
-  if (!positions) return {};
-
-  const normalized: CanvasNodePositionsByStage = {};
-  CANVAS_STAGES.forEach((stageKey) => {
-    const stagePositions = positions[stageKey] || {};
-    const entries = Object.entries(stagePositions)
-      .filter(([nodeId]) => stageKey !== "ideation" || nodeId.startsWith("agenda-"))
-      .map(([nodeId, position]) => [
-        nodeId,
-        {
-          x: Number(position?.x || 0),
-          y: Number(position?.y || 0),
-        },
-      ] as const);
-
-    if (entries.length > 0) {
-      normalized[stageKey] = Object.fromEntries(entries);
-    }
-  });
-
-  return normalized;
-}
-
-function buildCanvasPersonalNotesPayload(
-  meetingId: string,
-  userId: string,
-  personalNotes: PersonalNote[],
-  localCanvasState?: CanvasLocalState | null,
-) {
-  return {
-    meeting_id: meetingId,
-    user_id: userId,
-    personal_notes: personalNotes.map((note) => ({
-      id: note.id,
-      project_id: note.projectId || meetingId,
-      agenda_id: note.agendaId,
-      linked_canvas_item_id: note.linkedCanvasItemId || "",
-      linked_canvas_item_title: note.linkedCanvasItemTitle || "",
-      kind: note.kind,
-      title: note.title,
-      body: note.body,
-    })),
-    local_canvas_state: localCanvasState || null,
-  };
-}
-
-function buildMeetingStateSignature(state: MeetingState | null) {
-  if (!state) {
-    return "";
-  }
-
-  return JSON.stringify({
-    transcript: (state.transcript || []).map((row) => `${row.speaker}\u0001${row.text}\u0001${row.timestamp}`),
-    agendas: (state.analysis?.agenda_outcomes || []).map((row) => ({
-      id: row.agenda_id,
-      title: row.agenda_title,
-      start: row.start_turn_id,
-      end: row.end_turn_id,
-    })),
-  });
-}
-
-function serializeAgendaOverrides(overrides: Record<string, AgendaOverride>) {
-  return Object.fromEntries(
-    Object.entries(overrides).flatMap(([agendaId, override]) => {
-      const title = (override.title || "").trim();
-      const keywords = (override.keywords || []).map((item) => item.trim()).filter(Boolean);
-      const summaryBullets = (override.summaryBullets || []).map((item) => item.trim()).filter(Boolean);
-
-      if (!title && keywords.length === 0 && summaryBullets.length === 0) {
-        return [];
-      }
-
-      return [[agendaId, { title, keywords, summaryBullets }]];
-    }),
-  );
 }
 
 type AgendaViewModel = {
@@ -667,12 +245,6 @@ type AgendaViewModel = {
   decisions: AgendaDecisionDetail[];
   actionItems: AgendaActionItemDetail[];
   isCustom?: boolean;
-};
-
-type AgendaOverride = {
-  title?: string;
-  keywords?: string[];
-  summaryBullets?: string[];
 };
 
 type ProblemGroupDisplayCard = {
@@ -822,10 +394,6 @@ function extractAgendaIdFromNodeId(nodeId: string) {
   return "";
 }
 
-function extractCanvasItemIdFromNodeId(nodeId: string) {
-  return nodeId.startsWith("canvas-item-") ? nodeId.slice("canvas-item-".length) : "";
-}
-
 function extractProblemSourceCanvasNodeInfo(nodeId: string) {
   if (!nodeId.startsWith("problem-source::")) return null;
   const [, encodedGroupId = "", encodedSourceNodeId = ""] = nodeId.split("::");
@@ -846,23 +414,6 @@ function stripLeadingTimestamp(text: string) {
       "",
     )
     .trim();
-}
-
-function trimText(text: string, maxLength: number) {
-  const clean = stripLeadingTimestamp(text || "").replace(/\s+/g, " ").trim();
-  if (clean.length <= maxLength) return clean;
-  return `${clean.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
-}
-
-function normalizeCanvasItemStatus(raw: string | undefined): CanvasItemStatus {
-  if (raw === "confirmed" || raw === "final") return "confirmed";
-  if (raw === "closed") return "closed";
-  return "discussion";
-}
-
-function normalizeIdeationSuggestionStatus(raw: string | undefined) {
-  if (raw === "selected" || raw === "dismissed") return raw;
-  return "draft";
 }
 
 function makeProblemSummarySourceNodeId(groupId: string, index: number) {
@@ -961,415 +512,6 @@ function buildProblemGroupDisplayCards(group: ProblemGroupViewModel): ProblemGro
   }
 
   return [...summaryCards, ...personalCards];
-}
-
-function buildSummaryDocumentFromResponse(input: {
-  markdown: string;
-  sections: CanvasSummaryDocumentSection[];
-  generatedAt: string;
-  usedLlm: boolean;
-  warning?: string;
-  sourceSignature: string;
-}): CanvasFinalSolutionSummary {
-  return normalizeFinalSolutionSummaryPayload({
-    final_count: input.sections.length,
-    topics: [],
-    items: [],
-    markdown: input.markdown,
-    document_status: input.markdown.trim() ? "ready" : "empty",
-    generated_at: input.generatedAt,
-    used_llm: input.usedLlm,
-    warning: input.warning || "",
-    source_signature: input.sourceSignature,
-    sections: input.sections,
-  });
-}
-
-function renderSummaryMarkdownInline(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-    const token = match[0];
-    if (token.startsWith("`")) {
-      nodes.push(
-        <code key={`code-${match.index}`} className="rounded-[4px] bg-[#f7ecfb] px-1.5 py-0.5 font-mono text-[0.92em] text-[#a13ab8]">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith("**")) {
-      nodes.push(
-        <strong key={`strong-${match.index}`} className="font-semibold text-black">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    }
-    lastIndex = pattern.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes.length > 0 ? nodes : [text];
-}
-
-function isMarkdownTableSeparator(line: string) {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
-}
-
-function parseMarkdownTableRow(line: string) {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
-}
-
-function renderSummaryMarkdownPreview(markdown: string, onEdit: () => void) {
-  const lines = markdown.split(/\r?\n/);
-  const blocks: ReactNode[] = [];
-  let index = 0;
-  let listItems: string[] = [];
-
-  const flushList = () => {
-    if (listItems.length === 0) return;
-    blocks.push(
-      <ul key={`list-${blocks.length}`} className="my-3 space-y-1.5 pl-5 text-[15px] leading-7 text-[#334155]">
-        {listItems.map((item, itemIndex) => (
-          <li key={`list-${blocks.length}-${itemIndex}`} className="list-disc">
-            {renderSummaryMarkdownInline(item)}
-          </li>
-        ))}
-      </ul>,
-    );
-    listItems = [];
-  };
-
-  while (index < lines.length) {
-    const rawLine = lines[index] || "";
-    const line = rawLine.trim();
-
-    if (!line) {
-      flushList();
-      index += 1;
-      continue;
-    }
-
-    if (line.includes("|") && index + 1 < lines.length && isMarkdownTableSeparator(lines[index + 1] || "")) {
-      flushList();
-      const headers = parseMarkdownTableRow(line);
-      index += 2;
-      const rows: string[][] = [];
-      while (index < lines.length && (lines[index] || "").includes("|") && (lines[index] || "").trim()) {
-        rows.push(parseMarkdownTableRow(lines[index] || ""));
-        index += 1;
-      }
-      blocks.push(
-        <div key={`table-${blocks.length}`} className="my-4 overflow-x-auto border border-black/10 bg-white">
-          <table className="min-w-full border-collapse text-left text-sm">
-            <thead className="bg-[#f5f6f8] text-black">
-              <tr>
-                {headers.map((header, headerIndex) => (
-                  <th key={`table-head-${headerIndex}`} className="border-b border-black/10 px-3 py-2 font-semibold">
-                    {renderSummaryMarkdownInline(header)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={`table-row-${rowIndex}`} className="border-b border-black/5 last:border-b-0">
-                  {headers.map((_, cellIndex) => (
-                    <td key={`table-cell-${rowIndex}-${cellIndex}`} className="px-3 py-2 align-top text-[#334155]">
-                      {renderSummaryMarkdownInline(row[cellIndex] || "")}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      );
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/);
-    if (heading) {
-      flushList();
-      const level = heading[1].length;
-      const content = heading[2];
-      const className =
-        level === 1
-          ? "mb-5 mt-1 text-3xl font-semibold leading-tight text-black"
-          : level === 2
-            ? "mb-3 mt-8 border-t border-black/10 pt-5 text-xl font-semibold leading-8 text-black first:mt-0 first:border-t-0 first:pt-0"
-            : "mb-2 mt-5 text-base font-semibold leading-7 text-[#1f2937]";
-      const headingContent = renderSummaryMarkdownInline(content);
-      if (level === 1) {
-        blocks.push(<h1 key={`heading-${index}`} className={className}>{headingContent}</h1>);
-      } else if (level === 2) {
-        blocks.push(<h2 key={`heading-${index}`} className={className}>{headingContent}</h2>);
-      } else if (level === 3) {
-        blocks.push(<h3 key={`heading-${index}`} className={className}>{headingContent}</h3>);
-      } else {
-        blocks.push(<h4 key={`heading-${index}`} className={className}>{headingContent}</h4>);
-      }
-      index += 1;
-      continue;
-    }
-
-    const listMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+[.)]\s+(.+)$/);
-    if (listMatch) {
-      listItems.push(listMatch[1]);
-      index += 1;
-      continue;
-    }
-
-    flushList();
-    blocks.push(
-      <p key={`paragraph-${index}`} className="my-3 text-[15px] leading-8 text-[#334155]">
-        {renderSummaryMarkdownInline(line)}
-      </p>,
-    );
-    index += 1;
-  }
-
-  flushList();
-
-  return (
-    <button
-      type="button"
-      onClick={onEdit}
-      className="h-full w-full overflow-y-auto border border-black/10 bg-white px-8 py-7 text-left outline-none transition hover:border-[#a13ab8]/30 focus:border-[#a13ab8]/30 focus:ring-2 focus:ring-[#a13ab8]/10"
-    >
-      {blocks.length > 0 ? blocks : (
-        <p className="text-sm leading-7 text-[#999]">요약 문서가 아직 없습니다.</p>
-      )}
-    </button>
-  );
-}
-
-function escapeSummaryHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function renderSummaryMarkdownInlineHtml(value: string) {
-  return escapeSummaryHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-
-function summaryMarkdownToPrintableHtml(markdown: string) {
-  const lines = markdown.split(/\r?\n/);
-  const blocks: string[] = [];
-  let index = 0;
-  let listItems: string[] = [];
-
-  const flushList = () => {
-    if (listItems.length === 0) return;
-    blocks.push(`<ul>${listItems.map((item) => `<li>${renderSummaryMarkdownInlineHtml(item)}</li>`).join("")}</ul>`);
-    listItems = [];
-  };
-
-  while (index < lines.length) {
-    const rawLine = lines[index] || "";
-    const line = rawLine.trim();
-
-    if (!line) {
-      flushList();
-      index += 1;
-      continue;
-    }
-
-    if (line.includes("|") && index + 1 < lines.length && isMarkdownTableSeparator(lines[index + 1] || "")) {
-      flushList();
-      const headers = parseMarkdownTableRow(line);
-      index += 2;
-      const rows: string[][] = [];
-      while (index < lines.length && (lines[index] || "").includes("|") && (lines[index] || "").trim()) {
-        rows.push(parseMarkdownTableRow(lines[index] || ""));
-        index += 1;
-      }
-      blocks.push(`
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>${headers.map((header) => `<th>${renderSummaryMarkdownInlineHtml(header)}</th>`).join("")}</tr>
-            </thead>
-            <tbody>
-              ${rows
-                .map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${renderSummaryMarkdownInlineHtml(row[cellIndex] || "")}</td>`).join("")}</tr>`)
-                .join("")}
-            </tbody>
-          </table>
-        </div>
-      `);
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/);
-    if (heading) {
-      flushList();
-      const level = Math.min(heading[1].length, 4);
-      blocks.push(`<h${level}>${renderSummaryMarkdownInlineHtml(heading[2])}</h${level}>`);
-      index += 1;
-      continue;
-    }
-
-    const listMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+[.)]\s+(.+)$/);
-    if (listMatch) {
-      listItems.push(listMatch[1]);
-      index += 1;
-      continue;
-    }
-
-    flushList();
-    blocks.push(`<p>${renderSummaryMarkdownInlineHtml(line)}</p>`);
-    index += 1;
-  }
-
-  flushList();
-  return blocks.join("\n") || "<p class=\"empty\">요약 문서가 아직 없습니다.</p>";
-}
-
-function buildPrintableSummaryDocumentHtml(markdown: string, options: { includeToolbar?: boolean } = {}) {
-  const includeToolbar = options.includeToolbar ?? true;
-  return `<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>최종 정리 문서</title>
-  <style>
-    @page { size: A4; margin: 18mm; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: #f5f6f8;
-      color: #111;
-      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
-      line-height: 1.65;
-    }
-    .toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 2;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      border-bottom: 1px solid rgba(0,0,0,0.1);
-      background: rgba(255,255,255,0.94);
-      padding: 14px 24px;
-      backdrop-filter: blur(12px);
-    }
-    .toolbar p { margin: 0; color: #4d4d4d; font-size: 13px; }
-    .toolbar button {
-      border: 1px solid #ead0f2;
-      border-radius: 10px;
-      background: #f4e8fb;
-      color: #6f2b7d;
-      padding: 9px 14px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .document {
-      width: min(860px, calc(100% - 40px));
-      margin: 32px auto;
-      border: 1px solid rgba(0,0,0,0.1);
-      background: #fff;
-      padding: 44px 50px;
-      box-shadow: 0 20px 70px rgba(15,23,42,0.09);
-    }
-    .document-title {
-      margin: 0 0 28px;
-      color: #000;
-      font-size: 32px;
-      font-weight: 750;
-      letter-spacing: 0;
-      line-height: 1.25;
-    }
-    h1 { margin: 26px 0 18px; color: #000; font-size: 30px; line-height: 1.25; }
-    h2 { margin: 34px 0 14px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 22px; color: #000; font-size: 22px; line-height: 1.45; }
-    h3 { margin: 24px 0 10px; color: #1f2937; font-size: 17px; line-height: 1.55; }
-    h4 { margin: 18px 0 8px; color: #1f2937; font-size: 15px; line-height: 1.55; }
-    p { margin: 12px 0; color: #334155; font-size: 15px; line-height: 1.85; }
-    ul { margin: 12px 0; padding-left: 24px; color: #334155; font-size: 15px; line-height: 1.8; }
-    li { margin: 5px 0; }
-    strong { font-weight: 750; color: #111827; }
-    em { font-style: italic; }
-    code { border-radius: 5px; background: #f5f6f8; padding: 1px 5px; color: #6f2b7d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
-    .table-wrap { margin: 18px 0; overflow-x: auto; border: 1px solid rgba(0,0,0,0.1); }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { border-bottom: 1px solid rgba(0,0,0,0.1); background: #f5f6f8; padding: 10px 12px; text-align: left; color: #000; }
-    td { border-bottom: 1px solid rgba(0,0,0,0.05); padding: 10px 12px; vertical-align: top; color: #334155; }
-    tr:last-child td { border-bottom: 0; }
-    .empty { color: #999; }
-    @media print {
-      body { background: #fff; }
-      .toolbar { display: none; }
-      .document { width: auto; margin: 0; border: 0; padding: 0; box-shadow: none; }
-      h2 { break-after: avoid; }
-      h1, h2, h3, h4, p, li, tr { break-inside: avoid; }
-    }
-  </style>
-</head>
-<body>
-  ${
-    includeToolbar
-      ? `<div class="toolbar">
-    <p>인쇄 대화상자에서 PDF로 저장하면 현재 보이는 문서 형식 그대로 저장됩니다.</p>
-    <button type="button" onclick="window.print()">PDF로 저장</button>
-  </div>`
-      : ""
-  }
-  <main class="document">
-    <h1 class="document-title">최종 정리 문서</h1>
-    ${summaryMarkdownToPrintableHtml(markdown)}
-  </main>
-</body>
-</html>`;
-}
-
-function openPrintableSummaryDocumentPdf(markdown: string) {
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  iframe.style.opacity = "0";
-  iframe.setAttribute("aria-hidden", "true");
-  document.body.appendChild(iframe);
-
-  const frameWindow = iframe.contentWindow;
-  const frameDocument = iframe.contentDocument || frameWindow?.document;
-  if (!frameWindow || !frameDocument) {
-    iframe.remove();
-    return false;
-  }
-
-  frameDocument.open();
-  frameDocument.write(buildPrintableSummaryDocumentHtml(markdown, { includeToolbar: false }));
-  frameDocument.close();
-  frameWindow.focus();
-  frameWindow.print();
-  window.setTimeout(() => iframe.remove(), 60000);
-  return true;
 }
 
 function hydrateProblemGroups(
@@ -1581,36 +723,6 @@ function buildAgendaModels(
   ];
 }
 
-
-function serializeSharedProblemGroups(groups: ProblemGroupViewModel[]) {
-  return groups.map((group) => ({
-    group_id: group.group_id,
-    parent_group_id: group.parent_group_id || "",
-    depth: group.depth || 0,
-    topic: group.topic,
-    insight_lens: group.insight_lens,
-    insight_user_edited: group.insight_user_edited,
-    keywords: group.keywords,
-    agenda_ids: group.agenda_ids,
-    agenda_titles: group.agenda_titles,
-    ideas: group.ideas,
-    linked_group_ids: group.linked_group_ids || [],
-    evidence_utterance_ids: group.evidence_utterance_ids || [],
-    source_summary_items: group.source_summary_items,
-    discussion_items: group.discussion_items || [],
-    conclusion: group.conclusion,
-    conclusion_user_edited: group.conclusion_user_edited,
-    status: group.status,
-    source_signature: group.source_signature,
-    source_agenda_signatures: group.source_agenda_signatures,
-    source_idea_signatures: group.source_idea_signatures,
-  }));
-}
-
-function serializeSharedCanvasItems(items: CanvasItemViewModel[]) {
-  return buildWorkspaceCanvasItemsPayload(items);
-}
-
 function hydrateCanvasItems(items: CanvasItemViewModel[] = []): CanvasItemViewModel[] {
   return items.map((item) => {
     const keywords = (item.keywords || []).map((keyword) => keyword.trim()).filter(Boolean);
@@ -1668,34 +780,6 @@ function hydrateCustomGroups(groups: CustomGroupViewModel[] = []): CustomGroupVi
     .filter((group) => group.id && group.title);
 }
 
-function buildSharedCanvasSignature(payload: {
-  meeting_goal?: string;
-  meeting_goal_context?: string;
-  stage: CanvasStage;
-  agenda_overrides: Record<string, unknown>;
-  canvas_items: unknown[];
-  custom_groups?: unknown[];
-  problem_groups: unknown[];
-  problem_structure?: unknown;
-  solution_topics: unknown[];
-  final_solution_summary?: unknown;
-  node_positions?: CanvasNodePositionsByStage;
-  imported_state: MeetingState | null;
-}) {
-  return JSON.stringify({
-    meeting_goal: payload.meeting_goal,
-    meeting_goal_context: payload.meeting_goal_context,
-    agenda_overrides: payload.agenda_overrides,
-    canvas_items: payload.canvas_items,
-    custom_groups: payload.custom_groups,
-    problem_groups: payload.problem_groups,
-    problem_structure: payload.problem_structure,
-    solution_topics: payload.solution_topics,
-    final_solution_summary: payload.final_solution_summary,
-    imported_state: payload.imported_state,
-  });
-}
-
 function createLocalNodeOverrideMap() {
   return {
     ideation: new Set<string>(),
@@ -1704,112 +788,11 @@ function createLocalNodeOverrideMap() {
   };
 }
 
-function getNodePositionUpdateKey(stage: CanvasStage, nodeId: string) {
-  return `${stage}:${nodeId}`;
-}
-
-function getSyncUpdatedAtMs(updatedAt: string | undefined) {
-  const parsed = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
 function positionsEqual(
   left?: { x: number; y: number },
   right?: { x: number; y: number },
 ) {
   return (left?.x ?? 0) === (right?.x ?? 0) && (left?.y ?? 0) === (right?.y ?? 0);
-}
-
-function rectIntersectionArea(left: DOMRect, right: DOMRect) {
-  const width = Math.max(0, Math.min(left.right, right.right) - Math.max(left.left, right.left));
-  const height = Math.max(0, Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top));
-  return width * height;
-}
-
-function getReactFlowCanvasRect(container: HTMLElement | null) {
-  if (!container) {
-    return null;
-  }
-
-  const flowElement = container.querySelector<HTMLElement>(".react-flow");
-  return (flowElement || container).getBoundingClientRect();
-}
-
-function pointInRect(clientX: number, clientY: number, rect: DOMRect | null) {
-  return Boolean(
-    rect &&
-      clientX >= rect.left &&
-      clientX <= rect.right &&
-      clientY >= rect.top &&
-      clientY <= rect.bottom,
-  );
-}
-
-function getReactFlowNodeElement(nodeId: string) {
-  if (typeof document === "undefined" || !nodeId) {
-    return null;
-  }
-  return Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
-    .find((element) => element.getAttribute("data-id") === nodeId) || null;
-}
-
-type ProblemSourceDropTarget = {
-  groupId: string;
-  nodeId: string;
-  nodeKind: "topic" | "idea";
-  nodeLabel: string;
-  element: HTMLElement;
-};
-
-function makeProblemSourceDropTarget(candidate: HTMLElement): ProblemSourceDropTarget | null {
-  const nodeKind = candidate.dataset.problemSourceNodeKind;
-  if (nodeKind !== "topic" && nodeKind !== "idea") {
-    return null;
-  }
-
-  return {
-    groupId: candidate.dataset.problemSourceGroupId || "",
-    nodeId: candidate.dataset.problemSourceNodeId || "",
-    nodeKind,
-    nodeLabel: candidate.dataset.problemSourceNodeLabel || "",
-    element: candidate,
-  };
-}
-
-function findProblemSourceDropTarget(clientX: number, clientY: number, draggedNodeId?: string): ProblemSourceDropTarget | null {
-  if (typeof document === "undefined" || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
-    return null;
-  }
-
-  const candidates = Array.from(
-    document.querySelectorAll<HTMLElement>("[data-problem-source-node-id][data-problem-source-group-id]"),
-  );
-
-  const draggedElement = draggedNodeId ? getReactFlowNodeElement(draggedNodeId) : null;
-  if (draggedElement) {
-    const draggedRect = draggedElement.getBoundingClientRect();
-    const best = candidates
-      .map((candidate) => ({
-        candidate,
-        area: rectIntersectionArea(draggedRect, candidate.getBoundingClientRect()),
-      }))
-      .filter((entry) => entry.area >= 900)
-      .sort((left, right) => right.area - left.area)[0];
-    if (best) {
-      return makeProblemSourceDropTarget(best.candidate);
-    }
-  }
-
-  for (const candidate of candidates) {
-    const rect = candidate.getBoundingClientRect();
-    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
-      continue;
-    }
-
-    return makeProblemSourceDropTarget(candidate);
-  }
-
-  return null;
 }
 
 function styleSignature(style?: React.CSSProperties) {
@@ -1999,6 +982,8 @@ export default function MeetingCanvasTab({
     createEmptyFinalSolutionSummary(),
   );
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
+  const [summaryDocumentDraftMarkdown, setSummaryDocumentDraftMarkdown] = useState("");
+  const [summaryDocumentDraftDirty, setSummaryDocumentDraftDirty] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
   const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
   const [llmIdeationKeywordSignature, setLlmIdeationKeywordSignature] = useState("");
@@ -2091,9 +1076,7 @@ export default function MeetingCanvasTab({
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
   const workspaceHydratingRef = useRef(false);
-  const workspaceSaveTimerRef = useRef<number | null>(null);
   const lastWorkspaceFieldSignaturesRef = useRef<WorkspaceFieldSignatures>(createWorkspaceFieldSignatures());
-  const personalNotesSaveTimerRef = useRef<number | null>(null);
   const sharedSyncTimerRef = useRef<number | null>(null);
   const {
     nodePreviewFlushTimerRef,
@@ -2254,7 +1237,6 @@ export default function MeetingCanvasTab({
     importedState: null,
   });
   const latestSharedSyncEnabledRef = useRef(true);
-  const latestPersonalNotesPayloadRef = useRef<ReturnType<typeof buildCanvasPersonalNotesPayload> | null>(null);
 
   const persistMeetingGoalEdit = useCallback(
     async (nextGoal: string, nextContext: string) => {
@@ -2693,7 +1675,6 @@ export default function MeetingCanvasTab({
       importedState: null,
     };
     latestSharedSyncEnabledRef.current = true;
-    latestPersonalNotesPayloadRef.current = null;
     setImportOverrideActive(false);
     setAgendaOverrides({});
     setCanvasItems([]);
@@ -2721,14 +1702,6 @@ export default function MeetingCanvasTab({
     setProblemIdeaDropPreview(null);
     setProblemIdeaDragPoint(null);
     setPlacementFeedback(null);
-    if (workspaceSaveTimerRef.current) {
-      window.clearTimeout(workspaceSaveTimerRef.current);
-      workspaceSaveTimerRef.current = null;
-    }
-    if (personalNotesSaveTimerRef.current) {
-      window.clearTimeout(personalNotesSaveTimerRef.current);
-      personalNotesSaveTimerRef.current = null;
-    }
     if (sharedSyncTimerRef.current) {
       window.clearTimeout(sharedSyncTimerRef.current);
       sharedSyncTimerRef.current = null;
@@ -3357,347 +2330,96 @@ export default function MeetingCanvasTab({
     [meetingId, meetingTopicForAi, problemGroups],
   );
 
-  const buildCurrentWorkspacePatchPayload = useCallback(
-    (overrides: FullWorkspacePatchPayloadOverrides = {}) =>
-      buildFullWorkspacePatchPayload({
-        meetingId,
-        meetingGoal: overrides.meetingGoal ?? meetingGoalDraft,
-        meetingGoalContext: overrides.meetingGoalContext ?? meetingGoalContextDraft,
-        stage: overrides.stage ?? stage,
-        agendaOverrides: overrides.agendaOverrides ?? agendaOverrides,
-        canvasItems: overrides.canvasItems ?? canvasItems,
-        customGroups: overrides.customGroups ?? customGroups,
-        problemGroups: overrides.problemGroups ?? problemGroups,
-        problemStructure: overrides.problemStructure ?? problemStructureStatePayload,
-        finalSolutionSummary: overrides.finalSolutionSummary ?? finalSummaryDocument,
-        nodePositions: overrides.nodePositions ?? nodePositions,
-        importedState:
-          "importedState" in overrides
-            ? (overrides.importedState ?? null)
-            : persistedSharedImportedState,
-      }),
-    [
-      agendaOverrides,
-      canvasItems,
-      customGroups,
-      finalSummaryDocument,
-      meetingGoalContextDraft,
-      meetingGoalDraft,
-      meetingId,
-      nodePositions,
-      persistedSharedImportedState,
-      problemGroups,
-      problemStructureStatePayload,
-      stage,
-    ],
-  );
-
-  const forceBroadcastSharedCanvas = useCallback(
-    (overrides?: FullWorkspacePatchPayloadOverrides) => {
-      if (!meetingId || !userId) {
-        return;
-      }
-
-      const snapshot = {
-        meeting_goal: (overrides?.meetingGoal ?? meetingGoalDraft).trim(),
-        meeting_goal_context: (overrides?.meetingGoalContext ?? meetingGoalContextDraft).trim(),
-        stage: overrides?.stage ?? stage,
-        agenda_overrides: serializeAgendaOverrides(overrides?.agendaOverrides ?? agendaOverrides),
-        canvas_items: serializeSharedCanvasItems(overrides?.canvasItems ?? canvasItems),
-        custom_groups: serializeCustomGroups(overrides?.customGroups ?? customGroups),
-        problem_groups: serializeSharedProblemGroups(overrides?.problemGroups ?? problemGroups),
-        problem_structure: overrides?.problemStructure ?? problemStructureStatePayload,
-        solution_topics: [],
-        final_solution_summary: buildFinalSolutionSummaryPayload(overrides?.finalSolutionSummary ?? finalSummaryDocument),
-        imported_state:
-          overrides && "importedState" in overrides
-            ? (overrides.importedState ?? null)
-            : persistedSharedImportedState,
-      };
-
-      if (nodePreviewFlushTimerRef.current) {
-        window.clearTimeout(nodePreviewFlushTimerRef.current);
-        nodePreviewFlushTimerRef.current = null;
-      }
-      pendingNodePreviewsRef.current = {};
-      lastNodePreviewFlushAtRef.current = Date.now();
-      lastSharedSyncSignatureRef.current = buildSharedCanvasSignature(snapshot);
-      onSharedCanvasSync({
-        sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        meeting_id: meetingId,
-        sync_scope: "full",
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-        meeting_goal: snapshot.meeting_goal,
-        meeting_goal_context: snapshot.meeting_goal_context,
-        stage: snapshot.stage,
-        agenda_overrides: snapshot.agenda_overrides,
-        canvas_items: snapshot.canvas_items,
-        custom_groups: snapshot.custom_groups,
-        problem_groups: snapshot.problem_groups,
-        problem_structure: snapshot.problem_structure,
-        solution_topics: snapshot.solution_topics,
-        final_solution_summary: snapshot.final_solution_summary,
-        imported_state: snapshot.imported_state,
-      });
-    },
-    [
-      agendaOverrides,
-      canvasItems,
-      customGroups,
-      finalSummaryDocument,
-      meetingGoalContextDraft,
-      meetingGoalDraft,
-      meetingId,
-      onSharedCanvasSync,
-      persistedSharedImportedState,
-      lastNodePreviewFlushAtRef,
-      problemGroups,
-      problemStructureStatePayload,
-      nodePreviewFlushTimerRef,
-      pendingNodePreviewsRef,
-      stage,
-      userId,
-    ],
-  );
-
-  const flushPendingNodePreviews = useCallback(() => {
-    if (nodePreviewFlushTimerRef.current) {
-      window.clearTimeout(nodePreviewFlushTimerRef.current);
-    }
-    nodePreviewFlushTimerRef.current = null;
-    if (
-      !meetingId ||
-      !userId ||
-      !latestSharedSyncEnabledRef.current ||
-      !workspaceLoadedRef.current ||
-      workspaceHydratingRef.current ||
-      applyingRemoteSharedSyncRef.current
-    ) {
-      pendingNodePreviewsRef.current = {};
-      return;
-    }
-
-    const pendingPreviews = Object.values(pendingNodePreviewsRef.current);
-    pendingNodePreviewsRef.current = {};
-    if (pendingPreviews.length === 0) {
-      return;
-    }
-
-    lastNodePreviewFlushAtRef.current = Date.now();
-    pendingPreviews.forEach((preview) => {
-      onNodePreviewSync(preview);
-    });
-  }, [
+  const {
+    buildCurrentWorkspacePatchPayload,
+    forceBroadcastSharedCanvas,
+  } = useSharedCanvasBroadcast({
+    agendaOverrides,
+    applyingRemoteSharedSyncRef,
+    canvasItems,
+    customGroups,
+    finalSummaryDocument,
+    importedState: persistedSharedImportedState,
+    incomingCanvasStateRequestId,
     lastNodePreviewFlushAtRef,
+    lastSharedSyncSignatureRef,
+    meetingGoalContextDraft,
+    meetingGoalDraft,
     meetingId,
+    nodePositions,
     nodePreviewFlushTimerRef,
-    onNodePreviewSync,
+    onSharedCanvasSync,
     pendingNodePreviewsRef,
-    userId,
-  ]);
-
-  const scheduleNodePreview = useCallback(
-    (nodeId: string, position: { x: number; y: number }) => {
-      if (
-        !meetingId ||
-        !userId ||
-        !nodeId ||
-        !latestSharedSyncEnabledRef.current ||
-        !workspaceLoadedRef.current ||
-        workspaceHydratingRef.current ||
-        applyingRemoteSharedSyncRef.current
-      ) {
-        return;
-      }
-
-      const dragId =
-        dragIdByNodeIdRef.current[nodeId] ||
-        `${meetingId}:${userId}:${nodeId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-      dragIdByNodeIdRef.current[nodeId] = dragId;
-      const preview: CanvasNodePreviewPayload = {
-        meeting_id: meetingId,
-        stage,
-        node_id: nodeId,
-        x: Number(position.x || 0),
-        y: Number(position.y || 0),
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-        drag_id: dragId,
-        client_seq: ++nodePreviewSeqRef.current,
-      };
-      pendingNodePreviewsRef.current[`${preview.stage}:${preview.node_id}`] = preview;
-
-      const elapsed = Date.now() - lastNodePreviewFlushAtRef.current;
-      const delay = Math.max(0, NODE_PREVIEW_SYNC_THROTTLE_MS - elapsed);
-      if (delay === 0) {
-        flushPendingNodePreviews();
-        return;
-      }
-
-      if (!nodePreviewFlushTimerRef.current) {
-        nodePreviewFlushTimerRef.current = window.setTimeout(flushPendingNodePreviews, delay);
-      }
-    },
-    [
-      dragIdByNodeIdRef,
-      flushPendingNodePreviews,
-      lastNodePreviewFlushAtRef,
-      meetingId,
-      nodePreviewFlushTimerRef,
-      nodePreviewSeqRef,
-      pendingNodePreviewsRef,
-      stage,
-      userId,
-    ],
-  );
-
-  const ensureRemoteNodePreviewAnimation = useCallback(() => {
-    if (remoteNodePreviewFrameRef.current !== null) {
-      return;
-    }
-
-    const animate = () => {
-      remoteNodePreviewFrameRef.current = null;
-      if (remoteNodePreviewTargetsRef.current.size === 0) {
-        return;
-      }
-
-      setNodes((current) => {
-        const visibleNodeIds = new Set(current.map((node) => node.id));
-        remoteNodePreviewTargetsRef.current.forEach((_, nodeId) => {
-          if (!visibleNodeIds.has(nodeId) || localDraggingNodeIdsRef.current.has(nodeId)) {
-            remoteNodePreviewTargetsRef.current.delete(nodeId);
-          }
-        });
-
-        let changed = false;
-        const nextNodes = current.map((node) => {
-          const target = remoteNodePreviewTargetsRef.current.get(node.id);
-          if (!target) {
-            return node;
-          }
-
-          const dx = target.x - node.position.x;
-          const dy = target.y - node.position.y;
-          const distance = Math.hypot(dx, dy);
-          const nextPosition =
-            distance <= NODE_PREVIEW_SETTLE_DISTANCE
-              ? target
-              : {
-                  x: node.position.x + dx * NODE_PREVIEW_ANIMATION_LERP,
-                  y: node.position.y + dy * NODE_PREVIEW_ANIMATION_LERP,
-                };
-
-          if (distance <= NODE_PREVIEW_SETTLE_DISTANCE) {
-            remoteNodePreviewTargetsRef.current.delete(node.id);
-          }
-
-          if (positionsEqual(node.position, nextPosition)) {
-            return node;
-          }
-
-          changed = true;
-          return {
-            ...node,
-            position: nextPosition,
-          };
-        });
-
-        return changed ? nextNodes : current;
-      });
-
-      if (remoteNodePreviewTargetsRef.current.size > 0) {
-        remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
-      }
-    };
-
-    remoteNodePreviewFrameRef.current = window.requestAnimationFrame(animate);
-  }, [localDraggingNodeIdsRef, remoteNodePreviewFrameRef, remoteNodePreviewTargetsRef, setNodes]);
-
-  const broadcastNodePositionCommit = useCallback(
-    (stageKey: CanvasStage, nodeId: string, nextNodePositions: CanvasNodePositionsByStage) => {
-      if (
-        !meetingId ||
-        !userId ||
-        !nodeId ||
-        !latestSharedSyncEnabledRef.current ||
-        !workspaceLoadedRef.current ||
-        workspaceHydratingRef.current ||
-        applyingRemoteSharedSyncRef.current
-      ) {
-        return;
-      }
-
-      const normalizedNodePositions = normalizeCanvasNodePositionsForComputedIdeation(nextNodePositions);
-      const committedPosition = normalizedNodePositions[stageKey]?.[nodeId];
-      if (!committedPosition) {
-        return;
-      }
-
-      const committedAtMs = Date.now();
-      lastNodePositionUpdateMsByKeyRef.current[getNodePositionUpdateKey(stageKey, nodeId)] = committedAtMs;
-      lastWorkspaceFieldSignaturesRef.current = {
-        ...lastWorkspaceFieldSignaturesRef.current,
-        node_positions: JSON.stringify(normalizedNodePositions),
-      };
-
-      onSharedCanvasSync({
-        sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        meeting_id: meetingId,
-        sync_scope: "node_positions",
-        updated_by: userId,
-        updated_at: new Date(committedAtMs).toISOString(),
-        stage: stageKey,
-        node_positions: {
-          [stageKey]: {
-            [nodeId]: committedPosition,
-          },
-        },
-      });
-    },
-    [lastNodePositionUpdateMsByKeyRef, meetingId, onSharedCanvasSync, userId],
-  );
-
-  useEffect(() => {
-    if (
-      !incomingNodePreview ||
-      incomingNodePreview.meeting_id !== meetingId ||
-      incomingNodePreview.updated_by === userId ||
-      incomingNodePreview.stage !== stage ||
-      !workspaceLoadedRef.current ||
-      workspaceHydratingRef.current
-    ) {
-      return;
-    }
-
-    const nodeId = incomingNodePreview.node_id;
-    if (!nodeId || localDraggingNodeIdsRef.current.has(nodeId)) {
-      return;
-    }
-
-    const sequenceKey = `${incomingNodePreview.updated_by}:${incomingNodePreview.stage}:${nodeId}`;
-    const previousSequence = lastRemoteNodePreviewSeqRef.current[sequenceKey] ?? -1;
-    if (incomingNodePreview.client_seq <= previousSequence) {
-      return;
-    }
-
-    lastRemoteNodePreviewSeqRef.current[sequenceKey] = incomingNodePreview.client_seq;
-    remoteNodePreviewTargetsRef.current.set(nodeId, {
-      x: incomingNodePreview.x,
-      y: incomingNodePreview.y,
-    });
-    ensureRemoteNodePreviewAnimation();
-  }, [
-    ensureRemoteNodePreviewAnimation,
-    incomingNodePreview,
-    lastRemoteNodePreviewSeqRef,
-    localDraggingNodeIdsRef,
-    meetingId,
-    remoteNodePreviewTargetsRef,
+    problemGroups,
+    problemStructureStatePayload,
+    sharedSyncEnabled,
+    sharedSyncTimerRef,
     stage,
     userId,
-  ]);
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
+
+  useCanvasPersistence({
+    agendaOverrides,
+    applyingRemoteSharedSyncRef,
+    buildCurrentWorkspacePatchPayload,
+    captureStageOverride,
+    canvasItems,
+    conclusionBatchBusy,
+    customGroups,
+    finalSummaryDocument,
+    importOverrideActive,
+    lastWorkspaceFieldSignaturesRef,
+    latestSharedSyncEnabledRef,
+    latestSharedWorkspaceRef,
+    meetingGoalContextDraft,
+    meetingGoalDraft,
+    meetingId,
+    nodePositions,
+    onMeetingGoalSync,
+    persistedSharedImportedState,
+    personalNotes,
+    problemDefinitionStagePending,
+    problemGroups,
+    problemStructureStatePayload,
+    sharedSyncEnabled,
+    stage,
+    summaryDocumentPending,
+    userId,
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
+
+  const {
+    broadcastNodePositionCommit,
+    ensureRemoteNodePreviewAnimation,
+    flushPendingNodePreviews,
+    scheduleNodePreview,
+  } = useCanvasNodePreviewSync({
+    applyingRemoteSharedSyncRef,
+    dragIdByNodeIdRef,
+    incomingNodePreview,
+    lastNodePositionUpdateMsByKeyRef,
+    lastNodePreviewFlushAtRef,
+    lastRemoteNodePreviewSeqRef,
+    lastWorkspaceFieldSignaturesRef,
+    latestSharedSyncEnabledRef,
+    localDraggingNodeIdsRef,
+    meetingId,
+    nodePreviewFlushTimerRef,
+    nodePreviewSeqRef,
+    onNodePreviewSync,
+    onSharedCanvasSync,
+    pendingNodePreviewsRef,
+    remoteNodePreviewFrameRef,
+    remoteNodePreviewTargetsRef,
+    setNodes,
+    stage,
+    userId,
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
 
   const applyServerIdeaWorkspace = useCallback(
     (workspace: CanvasWorkspaceStateResponse | undefined | null) => {
@@ -3919,7 +2641,7 @@ export default function MeetingCanvasTab({
     personalNotes,
     problemGroupById,
     problemGroups,
-    serializeSharedProblemGroups,
+    serializeSharedProblemGroups: buildWorkspaceProblemGroupsPayload,
     sharedSyncEnabled,
     stage,
     writeSharedWorkspaceSessionCache,
@@ -4299,7 +3021,7 @@ export default function MeetingCanvasTab({
         if (meetingId) {
           void saveCanvasWorkspacePatch({
             meeting_id: meetingId,
-            problem_groups: serializeSharedProblemGroups(nextProblemGroupsSnapshot),
+            problem_groups: buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot),
             node_positions: nodePositions,
             imported_state: persistedSharedImportedState,
           }).catch((error) => {
@@ -4323,253 +3045,6 @@ export default function MeetingCanvasTab({
       sharedSyncEnabled,
       stage,
     ],
-  );
-
-  useEffect(() => {
-    if (
-      !meetingId ||
-      captureStageOverride ||
-      !workspaceLoadedRef.current ||
-      workspaceHydratingRef.current ||
-      problemDefinitionStagePending ||
-      summaryDocumentPending ||
-      conclusionBatchBusy ||
-      applyingRemoteSharedSyncRef.current
-    ) {
-      return;
-    }
-
-    const nextProblemGroupsPayload = buildWorkspaceProblemGroupsPayload(problemGroups);
-    const nextMeetingGoal = meetingGoalDraft.trim();
-    const nextMeetingGoalContext = meetingGoalContextDraft.trim();
-    const nextSignatures = buildWorkspaceFieldSignatures({
-      meetingGoal: nextMeetingGoal,
-      meetingGoalContext: nextMeetingGoalContext,
-      stage,
-      agendaOverrides,
-      canvasItems,
-      customGroups,
-      problemGroups,
-      problemStructure: problemStructureStatePayload,
-      finalSolutionSummary: finalSummaryDocument,
-      nodePositions,
-      importedState: persistedSharedImportedState,
-    });
-    const previousSignatures = lastWorkspaceFieldSignaturesRef.current;
-    const patch: {
-      meeting_id: string;
-      meeting_goal?: string;
-      meeting_goal_context?: string;
-      stage?: CanvasStage;
-      agenda_overrides?: ReturnType<typeof serializeAgendaOverrides>;
-      canvas_items?: ReturnType<typeof serializeSharedCanvasItems>;
-      custom_groups?: ReturnType<typeof serializeCustomGroups>;
-      problem_groups?: ReturnType<typeof buildWorkspaceProblemGroupsPayload>;
-      problem_structure?: CanvasProblemStructureState;
-      solution_topics?: NonNullable<CanvasLocalState["solution_topics"]>;
-      final_solution_summary?: CanvasFinalSolutionSummary;
-      node_positions?: CanvasNodePositionsByStage;
-      imported_state?: MeetingState | null;
-    } = {
-      meeting_id: meetingId,
-    };
-
-    let hasChanges = false;
-    let meetingGoalChanged = false;
-    if (
-      nextSignatures.meeting_goal !== previousSignatures.meeting_goal ||
-      nextSignatures.meeting_goal_context !== previousSignatures.meeting_goal_context
-    ) {
-      patch.meeting_goal = nextMeetingGoal;
-      patch.meeting_goal_context = nextMeetingGoalContext;
-      hasChanges = true;
-      meetingGoalChanged = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.agenda_overrides !== previousSignatures.agenda_overrides) {
-      patch.agenda_overrides = serializeAgendaOverrides(agendaOverrides);
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.canvas_items !== previousSignatures.canvas_items) {
-      patch.canvas_items = serializeSharedCanvasItems(canvasItems);
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.custom_groups !== previousSignatures.custom_groups) {
-      patch.custom_groups = serializeCustomGroups(customGroups);
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.problem_groups !== previousSignatures.problem_groups) {
-      patch.problem_groups = nextProblemGroupsPayload;
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.problem_structure !== previousSignatures.problem_structure) {
-      patch.problem_structure = problemStructureStatePayload;
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.solution_topics !== previousSignatures.solution_topics) {
-      patch.solution_topics = [];
-      patch.final_solution_summary = buildFinalSolutionSummaryPayload(finalSummaryDocument);
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.final_solution_summary !== previousSignatures.final_solution_summary) {
-      patch.final_solution_summary = buildFinalSolutionSummaryPayload(finalSummaryDocument);
-      hasChanges = true;
-    }
-    if (sharedSyncEnabled && nextSignatures.imported_state !== previousSignatures.imported_state) {
-      patch.imported_state = persistedSharedImportedState;
-      hasChanges = true;
-    }
-
-    if (!hasChanges) {
-      return;
-    }
-
-    if (workspaceSaveTimerRef.current) {
-      window.clearTimeout(workspaceSaveTimerRef.current);
-    }
-
-    workspaceSaveTimerRef.current = window.setTimeout(() => {
-      void saveCanvasWorkspacePatch(patch)
-        .then(() => {
-          if (meetingGoalChanged) {
-            onMeetingGoalSync?.(nextMeetingGoal, nextMeetingGoalContext);
-          }
-          lastWorkspaceFieldSignaturesRef.current = sharedSyncEnabled
-            ? nextSignatures
-            : {
-                ...lastWorkspaceFieldSignaturesRef.current,
-                meeting_goal: nextSignatures.meeting_goal,
-                meeting_goal_context: nextSignatures.meeting_goal_context,
-              };
-        })
-        .catch((error) => {
-          console.error("Failed to save canvas workspace patch:", error);
-        });
-    }, 450);
-
-    return () => {
-      if (workspaceSaveTimerRef.current) {
-        window.clearTimeout(workspaceSaveTimerRef.current);
-        workspaceSaveTimerRef.current = null;
-      }
-    };
-  }, [
-    agendaOverrides,
-    captureStageOverride,
-    canvasItems,
-    conclusionBatchBusy,
-    customGroups,
-    finalSummaryDocument,
-    meetingGoalContextDraft,
-    meetingGoalDraft,
-    meetingId,
-    nodePositions,
-    onMeetingGoalSync,
-    persistedSharedImportedState,
-    problemDefinitionStagePending,
-    problemGroups,
-    problemStructureStatePayload,
-    sharedSyncEnabled,
-    summaryDocumentPending,
-    stage,
-  ]);
-
-  const localCanvasState = useMemo<CanvasLocalState>(
-    () =>
-      sharedSyncEnabled
-        ? {
-            shared_sync_enabled: true,
-            meeting_goal: meetingGoalDraft.trim(),
-            meeting_goal_context: meetingGoalContextDraft.trim(),
-            agenda_overrides: serializeAgendaOverrides(agendaOverrides),
-            canvas_items: serializeSharedCanvasItems(canvasItems),
-            custom_groups: serializeCustomGroups(customGroups),
-            stage,
-          }
-        : {
-            shared_sync_enabled: false,
-            meeting_goal: meetingGoalDraft.trim(),
-            meeting_goal_context: meetingGoalContextDraft.trim(),
-            agenda_overrides: serializeAgendaOverrides(agendaOverrides),
-            canvas_items: serializeSharedCanvasItems(canvasItems),
-            custom_groups: serializeCustomGroups(customGroups),
-            stage,
-            problem_groups: serializeSharedProblemGroups(problemGroups),
-            problem_structure: problemStructureStatePayload,
-            solution_topics: [],
-            final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
-            node_positions: normalizeCanvasNodePositionsForComputedIdeation(nodePositions),
-            imported_state: persistedSharedImportedState,
-            import_override_active: importOverrideActive,
-          },
-    [
-      agendaOverrides,
-      canvasItems,
-      customGroups,
-      finalSummaryDocument,
-      importOverrideActive,
-      meetingGoalContextDraft,
-      meetingGoalDraft,
-      nodePositions,
-      persistedSharedImportedState,
-      problemGroups,
-      problemStructureStatePayload,
-      sharedSyncEnabled,
-      stage,
-    ],
-  );
-
-  useEffect(() => {
-    if (!meetingId || !userId || !workspaceLoadedRef.current || workspaceHydratingRef.current) {
-      return;
-    }
-
-    if (personalNotesSaveTimerRef.current) {
-      window.clearTimeout(personalNotesSaveTimerRef.current);
-    }
-
-    personalNotesSaveTimerRef.current = window.setTimeout(() => {
-      void saveCanvasPersonalNotes({
-        meeting_id: meetingId,
-        user_id: userId,
-        personal_notes: personalNotes.map((note) => ({
-          id: note.id,
-          project_id: note.projectId || meetingId,
-          agenda_id: note.agendaId,
-          linked_canvas_item_id: note.linkedCanvasItemId || "",
-          linked_canvas_item_title: note.linkedCanvasItemTitle || "",
-          kind: note.kind,
-          title: note.title,
-          body: note.body,
-        })),
-        local_canvas_state: localCanvasState,
-      }).catch((error) => {
-        console.error("Failed to save canvas personal notes:", error);
-      });
-    }, 300);
-
-    return () => {
-      if (personalNotesSaveTimerRef.current) {
-        window.clearTimeout(personalNotesSaveTimerRef.current);
-        personalNotesSaveTimerRef.current = null;
-      }
-    };
-  }, [localCanvasState, meetingId, personalNotes, userId]);
-
-  const sharedCanvasSnapshot = useMemo(
-    () => ({
-      meeting_goal: meetingGoalDraft.trim(),
-      meeting_goal_context: meetingGoalContextDraft.trim(),
-      stage,
-      agenda_overrides: serializeAgendaOverrides(agendaOverrides),
-      canvas_items: serializeSharedCanvasItems(canvasItems),
-      custom_groups: serializeCustomGroups(customGroups),
-      problem_groups: serializeSharedProblemGroups(problemGroups),
-      problem_structure: problemStructureStatePayload,
-      solution_topics: [],
-      final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
-      imported_state: persistedSharedImportedState,
-    }),
-    [agendaOverrides, canvasItems, customGroups, finalSummaryDocument, meetingGoalContextDraft, meetingGoalDraft, persistedSharedImportedState, problemGroups, problemStructureStatePayload, stage],
   );
 
   const flushProblemDiscussionBuffer = useCallback(
@@ -4860,377 +3335,53 @@ export default function MeetingCanvasTab({
     };
   }, [flushProblemDiscussionBuffer, problemGroups.length, stage, transcripts]);
 
-  useEffect(() => {
-    if (!meetingId || !sharedSyncEnabled || !workspaceLoadedRef.current || workspaceHydratingRef.current) {
-      return;
-    }
-
-    writeSharedWorkspaceSessionCache(
-      meetingId,
-      buildCurrentWorkspacePatchPayload(),
-    );
-  }, [
-    buildCurrentWorkspacePatchPayload,
-    meetingId,
-    sharedSyncEnabled,
-  ]);
-
-  const sharedCanvasSignature = useMemo(
-    () => buildSharedCanvasSignature(sharedCanvasSnapshot),
-    [sharedCanvasSnapshot],
-  );
-
-  const currentPersonalNotesPayload = useMemo(() => {
-    if (!meetingId || !userId || !workspaceLoadedRef.current || workspaceHydratingRef.current) {
-      return null;
-    }
-    return buildCanvasPersonalNotesPayload(meetingId, userId, personalNotes, localCanvasState);
-  }, [localCanvasState, meetingId, personalNotes, userId]);
-
-  useEffect(() => {
-    latestPersonalNotesPayloadRef.current = currentPersonalNotesPayload;
-  }, [currentPersonalNotesPayload]);
-
-  useEffect(() => {
-    if (!incomingSharedCanvasSync || incomingSharedCanvasSync.meeting_id !== meetingId) {
-      return;
-    }
-
-    if (workspaceHydratingRef.current) {
-      return;
-    }
-
-    if (incomingSharedCanvasSync.updated_by === userId) {
-      return;
-    }
-
-    if (lastIncomingSharedSyncIdRef.current === incomingSharedCanvasSync.sync_id) {
-      return;
-    }
-
-    const hasLocalNodePositions = CANVAS_STAGES.some(
-      (stageKey) => Object.keys(nodePositions[stageKey] || {}).length > 0,
-    );
-    if (
-      incomingSharedCanvasSync.updated_by === "__server__" &&
-      workspaceLoadedRef.current &&
-      hasLocalNodePositions
-    ) {
-      return;
-    }
-
-    lastIncomingSharedSyncIdRef.current = incomingSharedCanvasSync.sync_id;
-    if (incomingSharedCanvasSync.sync_scope === "node_positions") {
-      const incomingNodePositionPatch = normalizeCanvasNodePositionsForComputedIdeation(
-        incomingSharedCanvasSync.node_positions || {},
-      );
-      const incomingUpdatedAtMs = getSyncUpdatedAtMs(incomingSharedCanvasSync.updated_at);
-      const acceptedPreviewTargets: Array<[string, { x: number; y: number }]> = [];
-      let changed = false;
-      const mergedNodePositions: CanvasNodePositionsByStage = {
-        ...liveNodePositionsRef.current,
-      };
-
-      CANVAS_STAGES.forEach((stageKey) => {
-        const incomingStagePositions = incomingNodePositionPatch[stageKey] || {};
-        const incomingEntries = Object.entries(incomingStagePositions);
-        if (incomingEntries.length === 0) {
-          return;
-        }
-
-        const nextStagePositions = {
-          ...(mergedNodePositions[stageKey] || {}),
-        };
-        incomingEntries.forEach(([nodeId, position]) => {
-          if (!nodeId || localDraggingNodeIdsRef.current.has(nodeId)) {
-            return;
-          }
-          if (!sharedSyncEnabled && localNodeOverridesRef.current[stageKey].has(nodeId)) {
-            return;
-          }
-
-          const updateKey = getNodePositionUpdateKey(stageKey, nodeId);
-          const lastUpdateMs = lastNodePositionUpdateMsByKeyRef.current[updateKey] || 0;
-          if (incomingUpdatedAtMs < lastUpdateMs) {
-            return;
-          }
-
-          const nextPosition = {
-            x: Number(position.x || 0),
-            y: Number(position.y || 0),
-          };
-          lastNodePositionUpdateMsByKeyRef.current[updateKey] = incomingUpdatedAtMs;
-          if (!positionsEqual(nextStagePositions[nodeId], nextPosition)) {
-            nextStagePositions[nodeId] = nextPosition;
-            changed = true;
-            if (stageKey === stage) {
-              acceptedPreviewTargets.push([nodeId, nextPosition]);
-            }
-          }
-        });
-        mergedNodePositions[stageKey] = nextStagePositions;
-      });
-
-      const nextMergedNodePositions = changed
-        ? normalizeCanvasNodePositionsForComputedIdeation(mergedNodePositions)
-        : liveNodePositionsRef.current;
-
-      if (acceptedPreviewTargets.length > 0) {
-        acceptedPreviewTargets.forEach(([nodeId, position]) => {
-          remoteNodePreviewTargetsRef.current.set(nodeId, position);
-        });
-        ensureRemoteNodePreviewAnimation();
-      }
-
-      applyingRemoteSharedSyncRef.current = true;
-      liveNodePositionsRef.current = nextMergedNodePositions;
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        nodePositions: nextMergedNodePositions,
-      };
-      lastWorkspaceFieldSignaturesRef.current = {
-        ...lastWorkspaceFieldSignaturesRef.current,
-        node_positions: JSON.stringify(nextMergedNodePositions),
-      };
-      if (changed) {
-        setNodePositions(nextMergedNodePositions);
-      }
-      window.setTimeout(() => {
-        applyingRemoteSharedSyncRef.current = false;
-      }, 0);
-      return;
-    }
-
-    const incomingCanvasItems = hydrateCanvasItems(incomingSharedCanvasSync.canvas_items || []);
-    const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
-    const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
-    const incomingMeetingGoalContext = incomingSharedCanvasSync.meeting_goal_context || "";
-    const nextIncomingCanvasItems = incomingCanvasItems;
-    const currentNodePositionsSnapshot = liveNodePositionsRef.current;
-
-    const nextProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], problemGroups);
-    const nextProblemStructure = hydrateProblemStructureState(
-      incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState(),
-      nextProblemGroups,
-    );
-    const localViewProblemStructurePayload = buildProblemStructureStatePayload({
-      ...nextProblemStructure,
-      phase: problemDefinitionPhase,
-      method: problemStructureMethod,
-      mode: problemDefinitionMode,
-    });
-    const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
-
-    lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
-      meeting_goal: incomingMeetingGoal,
-      meeting_goal_context: incomingMeetingGoalContext,
-      stage,
-      agenda_overrides: incomingSharedCanvasSync.agenda_overrides || {},
-      canvas_items: nextIncomingCanvasItems,
-      custom_groups: serializeCustomGroups(incomingCustomGroups),
-      problem_groups: incomingSharedCanvasSync.problem_groups || [],
-      problem_structure: localViewProblemStructurePayload,
-      solution_topics: [],
-      final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
-      node_positions: currentNodePositionsSnapshot,
-      imported_state: incomingSharedCanvasSync.imported_state || null,
-    });
-    applyingRemoteSharedSyncRef.current = true;
-
-    setProblemGroups(nextProblemGroups);
-    setProblemStructureNodes(nextProblemStructure.nodes);
-    setProblemStructureGroups(nextProblemStructure.groups);
-    setProblemStructurePending(false);
-    setFinalSummaryDocument(nextFinalSummary);
-    setSummaryDocumentEditMode(false);
-    setMeetingGoalDrafts(incomingMeetingGoal, incomingMeetingGoalContext);
-    onMeetingGoalChange(incomingMeetingGoal);
-    onMeetingGoalContextChange(incomingMeetingGoalContext);
-    setAgendaOverrides(incomingSharedCanvasSync.agenda_overrides || {});
-    setCanvasItems(nextIncomingCanvasItems);
-    setCustomGroups(incomingCustomGroups);
-    setImportedState(incomingSharedCanvasSync.imported_state || null);
-    if (incomingSharedCanvasSync.imported_state) {
-      analysisSignatureAtImportRef.current = buildMeetingStateSignature(incomingSharedCanvasSync.imported_state);
-      setImportOverrideActive(true);
-    } else {
-      analysisSignatureAtImportRef.current = "";
-      setImportOverrideActive(false);
-    }
-    lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
-      meetingGoal: incomingMeetingGoal,
-      meetingGoalContext: incomingMeetingGoalContext,
-      stage,
-      agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
-      canvasItems: nextIncomingCanvasItems,
-      customGroups: incomingCustomGroups,
-      problemGroups: nextProblemGroups,
-      problemStructure: localViewProblemStructurePayload,
-      finalSolutionSummary: nextFinalSummary,
-      nodePositions: currentNodePositionsSnapshot,
-      importedState: incomingSharedCanvasSync.imported_state || null,
-    });
-    setActivityMessage("다른 참가자의 canvas 변경사항이 반영되었습니다.");
-
-    window.setTimeout(() => {
-      applyingRemoteSharedSyncRef.current = false;
-    }, 0);
-  }, [
+  useSharedCanvasIncomingSync({
+    analysisSignatureAtImportRef,
+    applyingRemoteSharedSyncRef,
+    ensureRemoteNodePreviewAnimation,
+    hydrateCanvasItems,
+    hydrateCustomGroups,
+    hydrateProblemGroups,
     incomingSharedCanvasSync,
+    lastIncomingSharedSyncIdRef,
     lastNodePositionUpdateMsByKeyRef,
+    lastSharedSyncSignatureRef,
+    lastWorkspaceFieldSignaturesRef,
+    latestSharedWorkspaceRef,
     liveNodePositionsRef,
     localDraggingNodeIdsRef,
+    localNodeOverridesRef,
     meetingId,
     nodePositions,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
-    problemGroups,
-    remoteNodePreviewTargetsRef,
-    setMeetingGoalDrafts,
-    setNodePositions,
-    sharedSyncEnabled,
-    userId,
-    ensureRemoteNodePreviewAnimation,
     problemDefinitionMode,
     problemDefinitionPhase,
+    problemGroups,
     problemStructureMethod,
+    remoteNodePreviewTargetsRef,
+    setActivityMessage,
+    setAgendaOverrides,
+    setCanvasItems,
+    setCustomGroups,
+    setFinalSummaryDocument,
+    setImportedState,
+    setImportOverrideActive,
+    setMeetingGoalDrafts,
+    setNodePositions,
+    setProblemGroups,
+    setProblemStructureGroups,
+    setProblemStructureNodes,
+    setProblemStructurePending,
+    setSummaryDocumentDraftDirty,
+    setSummaryDocumentDraftMarkdown,
+    setSummaryDocumentEditMode,
+    sharedSyncEnabled,
     stage,
-  ]);
-
-  useEffect(() => {
-    const flushPendingCanvasState = () => {
-      if (captureStageOverride) {
-        return;
-      }
-      if (
-        meetingId &&
-        latestSharedSyncEnabledRef.current &&
-        workspaceLoadedRef.current &&
-        !workspaceHydratingRef.current
-      ) {
-        console.info("[canvas pagehide flush] sending workspace snapshot", {
-          meetingId,
-          stage: latestSharedWorkspaceRef.current.stage,
-          canvasItems: latestSharedWorkspaceRef.current.canvasItems.length,
-          nodePositions: summarizeNodePositionsForDebug(latestSharedWorkspaceRef.current.nodePositions),
-        });
-        flushCanvasWorkspacePatch(
-          buildCurrentWorkspacePatchPayload(latestSharedWorkspaceRef.current),
-        );
-      }
-      if (latestPersonalNotesPayloadRef.current) {
-        flushCanvasPersonalNotes(latestPersonalNotesPayloadRef.current);
-      }
-    };
-
-    window.addEventListener("pagehide", flushPendingCanvasState);
-    return () => {
-      window.removeEventListener("pagehide", flushPendingCanvasState);
-    };
-  }, [buildCurrentWorkspacePatchPayload, captureStageOverride, meetingId]);
-
-  useEffect(() => {
-    if (
-      !meetingId ||
-      !userId ||
-      !sharedSyncEnabled ||
-      !workspaceLoadedRef.current ||
-      workspaceHydratingRef.current ||
-      applyingRemoteSharedSyncRef.current ||
-      lastSharedSyncSignatureRef.current === sharedCanvasSignature
-    ) {
-      return;
-    }
-
-    if (sharedSyncTimerRef.current) {
-      window.clearTimeout(sharedSyncTimerRef.current);
-    }
-
-    sharedSyncTimerRef.current = window.setTimeout(() => {
-      if (workspaceHydratingRef.current || applyingRemoteSharedSyncRef.current) {
-        return;
-      }
-
-      lastSharedSyncSignatureRef.current = sharedCanvasSignature;
-      onSharedCanvasSync({
-        sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        meeting_id: meetingId,
-        sync_scope: "full",
-        meeting_goal: sharedCanvasSnapshot.meeting_goal,
-        meeting_goal_context: sharedCanvasSnapshot.meeting_goal_context,
-        updated_by: userId,
-        updated_at: new Date().toISOString(),
-        stage: sharedCanvasSnapshot.stage,
-        agenda_overrides: sharedCanvasSnapshot.agenda_overrides,
-        canvas_items: sharedCanvasSnapshot.canvas_items,
-        custom_groups: sharedCanvasSnapshot.custom_groups,
-        problem_groups: sharedCanvasSnapshot.problem_groups,
-        problem_structure: sharedCanvasSnapshot.problem_structure,
-        solution_topics: sharedCanvasSnapshot.solution_topics,
-        final_solution_summary: sharedCanvasSnapshot.final_solution_summary,
-        imported_state: sharedCanvasSnapshot.imported_state,
-      });
-    }, 140);
-
-    return () => {
-      if (sharedSyncTimerRef.current) {
-        window.clearTimeout(sharedSyncTimerRef.current);
-        sharedSyncTimerRef.current = null;
-      }
-    };
-  }, [meetingId, onSharedCanvasSync, sharedCanvasSignature, sharedCanvasSnapshot, sharedSyncEnabled, userId]);
-
-  useEffect(() => {
-    if (
-      !incomingCanvasStateRequestId ||
-      !sharedSyncEnabled ||
-      !workspaceLoadedRef.current ||
-      workspaceHydratingRef.current ||
-      applyingRemoteSharedSyncRef.current
-    ) {
-      return;
-    }
-
-    forceBroadcastSharedCanvas();
-  }, [forceBroadcastSharedCanvas, incomingCanvasStateRequestId, sharedSyncEnabled]);
-
-  const handleCopyFinalSolutionMarkdown = useCallback(async () => {
-    const markdown = finalSummaryDocument.markdown.trim();
-    if (!markdown) {
-      setActivityMessage("복사할 요약 문서가 없습니다.");
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setActivityMessage("요약 문서를 마크다운으로 복사했습니다.");
-    } catch (error) {
-      console.error("Failed to copy final solution markdown:", error);
-      setActivityMessage("브라우저 권한 문제로 마크다운 복사에 실패했습니다.");
-    }
-  }, [finalSummaryDocument.markdown]);
-
-  const handleSummaryDocumentMarkdownChange = useCallback((value: string) => {
-    setFinalSummaryDocument((current) =>
-      normalizeFinalSolutionSummaryPayload({
-        ...current,
-        markdown: value,
-        document_status: value.trim() ? "edited" : "empty",
-      }),
-    );
-  }, []);
-
-  const handleToggleSummaryEvidence = useCallback((groupId: string) => {
-    setSummaryEvidenceOpenGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
-      }
-      return next;
-    });
-  }, []);
+    userId,
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
 
   const commitProblemGroupsSnapshot = useCallback(
     (nextGroups: ProblemGroupViewModel[], message: string, selectedGroupId?: string) => {
@@ -5252,7 +3403,7 @@ export default function MeetingCanvasTab({
         if (meetingId) {
           void saveCanvasWorkspacePatch({
             meeting_id: meetingId,
-            problem_groups: serializeSharedProblemGroups(nextGroups),
+            problem_groups: buildWorkspaceProblemGroupsPayload(nextGroups),
             imported_state: persistedSharedImportedState,
           }).catch((error) => {
             console.error("Failed to save problem groups:", error);
@@ -5310,149 +3461,41 @@ export default function MeetingCanvasTab({
     setSelectedProblemGroupId,
   });
 
-  const syncProblemStructureNodesFromDefinition = useCallback(() => {
-    const nextNodes = buildProblemStructureNodesFromGroups(problemGroups);
-    setProblemStructureNodes(nextNodes);
-    setProblemStructureGroups((prev) => pruneProblemStructureGroups(prev, nextNodes));
-    return nextNodes;
-  }, [problemGroups]);
-
-  const handleOpenProblemStructureSetup = useCallback(() => {
-    if (problemGroups.length === 0) {
-      setActivityMessage("구조화할 문제정의 노드가 아직 없습니다.");
-      return;
-    }
-    setProblemStructureDraftMethod(problemStructureMethod);
-    setProblemStructureDraftMode(problemDefinitionMode || "ai");
-    setProblemStructureSetupOpen(true);
-  }, [problemDefinitionMode, problemGroups.length, problemStructureMethod]);
-
-  const runProblemStructureGrouping = useCallback(
-    async (options?: { nodes?: ProblemStructureNodeViewModel[]; method?: ProblemStructureMethod }) => {
-      const structureNodes =
-        options?.nodes && options.nodes.length > 0
-          ? options.nodes
-          : problemStructureNodes.length > 0
-            ? problemStructureNodes
-            : buildProblemStructureNodesFromGroups(problemGroups);
-      if (structureNodes.length === 0) {
-        setActivityMessage("AI가 묶을 문제정의 노드가 아직 없습니다.");
-        return;
-      }
-
-      const requestSeq = problemStructureRequestSeqRef.current + 1;
-      problemStructureRequestSeqRef.current = requestSeq;
-      const method = options?.method || problemStructureMethod;
-      setProblemStructurePending(true);
-      setActivityMessage(`${problemStructureMethodLabel(method)} 기준으로 AI가 노드를 묶고 있습니다.`);
-
-      try {
-        const result = await generateProblemStructure({
-          meeting_id: meetingId,
-          meeting_topic: meetingTopicForAi,
-          method,
-          nodes: structureNodes.map((node) => ({
-            id: node.id,
-            title: node.title,
-            body: node.body,
-            status: node.status,
-            depth: node.depth,
-          })),
-          existing_groups: problemStructureGroups.map((group) => ({
-            id: group.id,
-            title: group.title,
-            node_ids: group.nodeIds,
-            rationale: group.rationale,
-          })),
-          max_groups: Math.min(8, Math.max(1, Math.ceil(structureNodes.length / 2))),
-        });
-        if (problemStructureRequestSeqRef.current !== requestSeq) {
-          return;
-        }
-
-        const nextGroups = normalizeProblemStructureGroupsFromResponse(result.groups || [], structureNodes);
-        if (nextGroups.length === 0) {
-          setActivityMessage(result.warning || "AI가 유효한 구조화 그룹을 만들지 못했습니다.");
-          return;
-        }
-
-        setProblemDefinitionMode("ai");
-        setProblemStructureMethod(method);
-        setProblemStructureNodes(structureNodes);
-        setProblemStructureGroups(nextGroups);
-        setActivityMessage(
-          result.warning ||
-            `${result.used_llm ? "AI" : "로컬 fallback"}가 ${structureNodes.length}개 노드를 ${nextGroups.length}개 그룹으로 묶었습니다.`,
-        );
-      } catch (error) {
-        if (problemStructureRequestSeqRef.current !== requestSeq) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        setActivityMessage(`AI 구조화 실패: ${message}`);
-      } finally {
-        if (problemStructureRequestSeqRef.current === requestSeq) {
-          setProblemStructurePending(false);
-        }
-      }
-    },
-    [
-      meetingId,
-      meetingTopicForAi,
-      problemGroups,
-      problemStructureGroups,
-      problemStructureMethod,
-      problemStructureNodes,
-    ],
-  );
-
-  const handleStartProblemStructure = useCallback(async () => {
-    if (problemGroups.length === 0) {
-      setActivityMessage("구조화할 문제정의 노드가 아직 없습니다.");
-      return;
-    }
-    const nextMode = problemStructureDraftMode || "manual";
-    setProblemStructureMethod(problemStructureDraftMethod);
-    setProblemDefinitionMode(nextMode);
-    const nextNodes = syncProblemStructureNodesFromDefinition();
-    setProblemDefinitionPhase("structure");
-    setProblemStructureSetupOpen(false);
-    setArmedCanvasTool(null);
-    setCanvasPlacementPreview(null);
-    setPendingProblemGroupLinkId("");
-    setSelectedNodeId("");
-    setSelectedProblemGroupId("");
-    setProblemGroupingRationaleOpenGroupId("");
-    setActivityMessage(
-      `${problemStructureMethodLabel(problemStructureDraftMethod)} · ${problemDefinitionModeLabel(nextMode)} 방식으로 정의 2단계를 시작했습니다. 노드 ${nextNodes.length}개를 가져왔습니다.`,
-    );
-    if (nextMode === "ai") {
-      await runProblemStructureGrouping({
-        nodes: nextNodes,
-        method: problemStructureDraftMethod,
-      });
-    }
-  }, [
-    problemGroups.length,
+  const {
+    handleBackToProblemDefinitionExplore,
+    handleOpenProblemStructureSetup,
+    handleRefreshProblemStructureNodes,
+    handleStartProblemStructure,
+    runProblemStructureGrouping,
+  } = useProblemStructureGeneration({
+    meetingId,
+    meetingTopicForAi,
+    problemDefinitionMode,
+    problemGroups,
     problemStructureDraftMethod,
     problemStructureDraftMode,
-    runProblemStructureGrouping,
+    problemStructureGroups,
+    problemStructureMethod,
+    problemStructureNodes,
+    problemStructureRequestSeqRef,
+    selectedProblemGroupId,
+    setActivityMessage,
+    setArmedCanvasTool,
     setCanvasPlacementPreview,
-    syncProblemStructureNodesFromDefinition,
-  ]);
-
-  const handleBackToProblemDefinitionExplore = useCallback(() => {
-    setProblemDefinitionPhase("explore");
-    const nextGroupId = selectedProblemGroupId || problemGroups[0]?.group_id || "";
-    setSelectedProblemGroupId(nextGroupId);
-    setSelectedNodeId(nextGroupId ? `problem-${nextGroupId}` : "");
-    setActivityMessage("정의 1단계 캔버스로 돌아왔습니다.");
-  }, [problemGroups, selectedProblemGroupId]);
-
-  const handleRefreshProblemStructureNodes = useCallback(() => {
-    const nextNodes = syncProblemStructureNodesFromDefinition();
-    setActivityMessage(`정의 1단계의 현재 노드 ${nextNodes.length}개를 다시 가져왔습니다.`);
-  }, [syncProblemStructureNodesFromDefinition]);
+    setPendingProblemGroupLinkId,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
+    setProblemGroupingRationaleOpenGroupId,
+    setProblemStructureDraftMethod,
+    setProblemStructureDraftMode,
+    setProblemStructureGroups,
+    setProblemStructureMethod,
+    setProblemStructureNodes,
+    setProblemStructurePending,
+    setProblemStructureSetupOpen,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+  });
 
   const problemExploreLayout = useMemo(
     () =>
@@ -5717,275 +3760,87 @@ export default function MeetingCanvasTab({
     return () => window.clearTimeout(timeoutId);
   }, [focusedCanvasItemId]);
 
-  const handleGenerateProblemDefinition = useCallback(async (options?: { force?: boolean; refreshChunkSummaries?: boolean }) => {
-    const forceRegenerate = Boolean(options?.force);
-    const refreshChunkSummaries = Boolean(options?.refreshChunkSummaries);
-    setProblemDefinitionStagePending(true);
-    setBusy(true);
-    try {
-      setStage("problem-definition");
-      setEditingProblemGroupId("");
-
-      if (problemGroups.length > 0 && !forceRegenerate) {
-        const firstGroupId = selectedProblemGroupId || problemGroups[0]?.group_id || "";
-        setSelectedProblemGroupId(firstGroupId);
-        setSelectedNodeId(firstGroupId ? `problem-${firstGroupId}` : "");
-        setActivityMessage("기존 문제정의 캔버스를 유지했습니다.");
-        return;
-      }
-
-      const utterances = buildProblemTaxonomyUtterances(transcripts);
-      if (utterances.length === 0) {
-        if (forceRegenerate) {
-          setProblemGroups([]);
-          setProblemGroupingRationaleById({});
-          setProblemGroupingRationaleOpenGroupId("");
-          setProblemGroupingRationalePendingId("");
-          setProblemDefinitionPhase("explore");
-          setProblemStructureSetupOpen(false);
-          setProblemStructureNodes([]);
-          setProblemStructureGroups([]);
-          setProblemStructurePending(false);
-        }
-        setProblemDefinitionMode("");
-        setSelectedProblemGroupId("");
-        setSelectedNodeId("");
-        setActivityMessage("문제정의를 만들 STT 발화가 아직 없습니다.");
-        return;
-      }
-
-      const nextNodePositionsSnapshot = forceRegenerate
-        ? {
-            ...nodePositions,
-            "problem-definition": {},
-          }
-        : nodePositions;
-      if (forceRegenerate) {
-        setProblemGroups([]);
-        setNodePositions(nextNodePositionsSnapshot);
-        setProblemDefinitionPhase("explore");
-        setProblemStructureSetupOpen(false);
-        setProblemStructureNodes([]);
-        setProblemStructureGroups([]);
-        setProblemStructurePending(false);
-        setSelectedProblemGroupId("");
-        setSelectedProblemSourceNodeId("");
-        setSelectedNodeId("");
-        setCollapsedProblemGroupIds(new Set());
-        setProblemGroupingRationaleById({});
-        setProblemGroupingRationaleOpenGroupId("");
-        setProblemGroupingRationalePendingId("");
-      }
-
-      const result = await generateCanvasProblemTaxonomy({
-        meeting_id: meetingId,
-        meeting_topic: meetingTopicForAi,
-        debug_nonce: forceRegenerate ? `debug-${refreshChunkSummaries ? "chunks-" : ""}${Date.now()}` : undefined,
-        refresh_chunk_summaries: refreshChunkSummaries || undefined,
-        utterances,
-        existing_group_ids: [],
-        existing_groups: forceRegenerate ? [] : buildProblemTaxonomyExistingGroupsPayload(problemGroups),
-        max_groups: 6,
-      });
-      const nextGroups = hydrateProblemGroups(result.groups || [], []).map((group) => ({
-        ...group,
-        parent_group_id: group.parent_group_id || "",
-        depth: group.depth || 0,
-        status: "draft" as ProblemGroupStatus,
-      }));
-
-      setProblemGroups(nextGroups);
-      setProblemDefinitionPhase("explore");
-      setProblemStructureSetupOpen(false);
-      setProblemStructureNodes([]);
-      setProblemStructureGroups([]);
-      setProblemStructurePending(false);
-      const nextSelectedGroupId = nextGroups[0]?.group_id || "";
-      setSelectedProblemGroupId(nextSelectedGroupId);
-      setSelectedNodeId(nextSelectedGroupId ? `problem-${nextSelectedGroupId}` : "");
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage: "problem-definition",
-        problemGroups: nextGroups,
-        nodePositions: nextNodePositionsSnapshot,
-        importedState: persistedSharedImportedState,
-      };
-
-      if (sharedSyncEnabled) {
-        forceBroadcastSharedCanvas({
-          stage: "problem-definition",
-          problemGroups: nextGroups,
-          nodePositions: nextNodePositionsSnapshot,
-        });
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            stage: "problem-definition",
-            problem_groups: serializeSharedProblemGroups(nextGroups),
-            solution_topics: [],
-            node_positions: nextNodePositionsSnapshot,
-            imported_state: persistedSharedImportedState,
-          }).catch((error) => {
-            console.error("Failed to save problem taxonomy:", error);
-          });
-        }
-      }
-
-      setActivityMessage(
-        result.warning ||
-          (nextGroups.length > 0
-            ? forceRegenerate
-              ? refreshChunkSummaries
-                ? `요약 캐시까지 다시 만들고 문제정의를 재생성했습니다. 큰 분류 ${nextGroups.length}개를 만들었습니다.`
-                : `문제정의를 다시 생성했습니다. 큰 분류 ${nextGroups.length}개를 만들었습니다.`
-              : `STT 발화에서 큰 분류 ${nextGroups.length}개를 만들었습니다.`
-            : "분류할 만큼 뚜렷한 STT 발화를 찾지 못했습니다."),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setActivityMessage(`문제 정의 생성 실패: ${message}`);
-    } finally {
-      setProblemDefinitionStagePending(false);
-      setBusy(false);
-    }
-  }, [
+  const {
+    handleDebugRegenerateProblemDefinition,
+    handleGenerateProblemDefinition,
+    handleRefreshProblemChunkSummaries,
+  } = useProblemDefinitionGeneration({
+    buildExistingGroupsPayload: buildProblemTaxonomyExistingGroupsPayload,
+    buildUtterances: buildProblemTaxonomyUtterances,
+    busy,
     forceBroadcastSharedCanvas,
+    hydrateProblemGroups,
+    latestSharedWorkspaceRef,
     meetingId,
     meetingTopicForAi,
     nodePositions,
     persistedSharedImportedState,
+    problemDefinitionStagePending,
     problemGroups,
     selectedProblemGroupId,
+    serializeSharedProblemGroups: buildWorkspaceProblemGroupsPayload,
+    setActivityMessage,
+    setBusy,
+    setCollapsedProblemGroupIds,
+    setEditingProblemGroupId,
     setNodePositions,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
+    setProblemDefinitionStagePending,
+    setProblemGroups,
+    setProblemGroupingRationaleById,
+    setProblemGroupingRationaleOpenGroupId,
+    setProblemGroupingRationalePendingId,
+    setProblemStructureGroups,
+    setProblemStructureNodes,
+    setProblemStructurePending,
+    setProblemStructureSetupOpen,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    setSelectedProblemSourceNodeId,
+    setStage,
     sharedSyncEnabled,
     transcripts,
-  ]);
+  });
 
-  const handleDebugRegenerateProblemDefinition = useCallback(async () => {
-    if (busy || problemDefinitionStagePending) {
-      setActivityMessage("문제정의 생성 작업이 이미 진행 중입니다.");
-      return;
-    }
-    const ok = window.confirm("디버깅용으로 기존 문제정의 노드와 해결책 결과를 비우고 STT 기반으로 다시 생성할까요?");
-    if (!ok) return;
-    await handleGenerateProblemDefinition({ force: true });
-  }, [busy, handleGenerateProblemDefinition, problemDefinitionStagePending]);
-
-  const handleRefreshProblemChunkSummaries = useCallback(async () => {
-    if (busy || problemDefinitionStagePending) {
-      setActivityMessage("문제정의 생성 작업이 이미 진행 중입니다.");
-      return;
-    }
-    const ok = window.confirm(
-      "디버깅용으로 chunk summary 캐시까지 새로 만들고 문제정의 노드를 다시 생성할까요?",
-    );
-    if (!ok) return;
-    await handleGenerateProblemDefinition({ force: true, refreshChunkSummaries: true });
-  }, [busy, handleGenerateProblemDefinition, problemDefinitionStagePending]);
-
-  const handleGenerateSummaryDocument = useCallback(async (options?: { force?: boolean }) => {
-    const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
-    setStage("solution");
-    setLeftPanelTab("detail");
-    setSelectedProblemGroupId("");
-    setSelectedNodeId("");
-
-    if (eligibleGroups.length === 0) {
-      setActivityMessage("요약 문서에 포함할 검토 중/확정 구조화 그룹이 없습니다.");
-      return;
-    }
-
-    const hasExistingSummaryDocument =
-      finalSummaryDocument.markdown.trim() && (finalSummaryDocument.sections || []).length > 0;
-    if (!options?.force && hasExistingSummaryDocument) {
-      setActivityMessage("기존 요약 문서를 유지했습니다. 다시 만들려면 요약 단계의 다시 생성 버튼을 사용해 주세요.");
-      return;
-    }
-
-    setSummaryDocumentPending(true);
-    setBusy(true);
-    try {
-      const result = await generateCanvasSummaryDocument({
-        meeting_id: meetingId,
-        meeting_topic: meetingTopicForAi,
-        groups: eligibleGroups.map((group) => ({
-          id: group.id,
-          title: group.title,
-          node_ids: group.nodeIds,
-          rationale: group.rationale,
-          status: group.status,
-          created_by: group.createdBy,
-        })),
-        nodes: problemStructureNodes.map((node) => ({
-          id: node.id,
-          source_group_id: node.sourceGroupId,
-          title: node.title,
-          body: node.body,
-          status: node.status,
-          depth: node.depth,
-        })),
-      });
-      const nextFinalSummary = buildSummaryDocumentFromResponse({
-        markdown: result.markdown || "",
-        sections: result.sections || [],
-        generatedAt: result.generated_at,
-        usedLlm: result.used_llm,
-        warning: result.warning,
-        sourceSignature: result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
-      });
-
-      setFinalSummaryDocument(nextFinalSummary);
-      setSummaryDocumentEditMode(false);
-      setSummaryEvidenceOpenGroupIds(new Set());
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage: "solution",
-        finalSolutionSummary: nextFinalSummary,
-        importedState: persistedSharedImportedState,
-      };
-      if (sharedSyncEnabled) {
-        forceBroadcastSharedCanvas({
-          stage: "solution",
-          finalSolutionSummary: nextFinalSummary,
-        });
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            stage: "solution",
-            final_solution_summary: nextFinalSummary,
-            imported_state: persistedSharedImportedState,
-          }).catch((error) => {
-            console.error("Failed to save summary document:", error);
-          });
-        }
-      }
-      setActivityMessage(result.warning || `구조화 그룹 ${eligibleGroups.length}개 기준으로 요약 문서를 생성했습니다.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setActivityMessage(`요약 문서 생성 실패: ${message}`);
-    } finally {
-      setSummaryDocumentPending(false);
-      setBusy(false);
-    }
-  }, [
+  const {
+    handleCopyFinalSolutionMarkdown,
+    handleGenerateSummaryDocument,
+    handleRegenerateSummaryDocument,
+    handleSaveSummaryDocument,
+    handleSummaryDocumentMarkdownChange,
+    handleToggleSummaryEvidence,
+    summaryDocumentSaving,
+  } = useSummaryDocumentActions({
+    buildSummaryDocumentFromResponse,
+    busy,
+    finalSummaryDocument,
     forceBroadcastSharedCanvas,
-    finalSummaryDocument.markdown,
-    finalSummaryDocument.sections,
+    latestSharedWorkspaceRef,
     meetingId,
     meetingTopicForAi,
+    normalizeFinalSolutionSummaryPayload,
     persistedSharedImportedState,
     problemStructureGroups,
     problemStructureNodes,
+    setActivityMessage,
+    setBusy,
+    setFinalSummaryDocument,
+    setLeftPanelTab,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    setStage,
+    setSummaryDocumentDraftDirty,
+    setSummaryDocumentDraftMarkdown,
+    setSummaryDocumentEditMode,
+    setSummaryDocumentPending,
+    setSummaryEvidenceOpenGroupIds,
     sharedSyncEnabled,
-  ]);
-
-  const handleRegenerateSummaryDocument = useCallback(async () => {
-    if (busy || summaryDocumentPending) {
-      setActivityMessage("요약 문서 생성 작업이 이미 진행 중입니다.");
-      return;
-    }
-    await handleGenerateSummaryDocument({ force: true });
-  }, [busy, handleGenerateSummaryDocument, summaryDocumentPending]);
+    summaryDocumentDraftDirty,
+    summaryDocumentDraftMarkdown,
+    summaryDocumentEditMode,
+    summaryDocumentPending,
+  });
 
   const handleStageSelect = useCallback(
     async (nextStage: CanvasStage) => {
@@ -6432,7 +4287,7 @@ export default function MeetingCanvasTab({
           if (meetingId) {
             void saveCanvasWorkspacePatch({
               meeting_id: meetingId,
-              problem_groups: serializeSharedProblemGroups(nextProblemGroupsSnapshot),
+              problem_groups: buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot),
               node_positions: nextNodePositionsSnapshot,
               imported_state: persistedSharedImportedState,
             }).catch((error) => {
@@ -6723,597 +4578,72 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const onNodesChange = (changes: NodeChange[]) => {
-    if (!workspaceLoadedRef.current || workspaceHydratingRef.current || applyingRemoteSharedSyncRef.current) {
-      setNodes((current) => applyNodeChanges(changes, current));
-      return;
-    }
+  const onNodesChange = useCanvasNodeChanges({
+    applyingRemoteSharedSyncRef,
+    liveNodePositionsRef,
+    localNodeOverridesRef,
+    scheduleNodePreview,
+    setNodePositions,
+    setNodes,
+    sharedSyncEnabled,
+    stage,
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
 
-    setNodes((current) => applyNodeChanges(changes, current));
-    let livePositionsChanged = false;
-    let nextLiveStagePositions = { ...(liveNodePositionsRef.current[stage] || {}) };
+  const {
+    cancelPendingIdeationDragFrame,
+    collectIdeationDropTargetElements,
+    getStableIdeationDragPosition,
+    resolveIdeationDropPreview,
+    queueIdeationDragFrame,
+    setProblemDropHighlight,
+  } = useCanvasIdeationDragPreview({
+    canvasItemById,
+    canvasItems,
+    flowNodeById,
+    flowRef,
+    hoveredProblemDropTargetElementRef,
+    ideationDragFrameRef,
+    ideationDropPreviewRef,
+    ideationDropTargetElementsRef,
+    ideationLeftFlowRef,
+    ideationLeftPaneRef,
+    ideationRightFlowRef,
+    ideationRightPaneRef,
+    pendingIdeationDragFrameRef,
+    scheduleNodePreview,
+    selectedAgendaForDrop,
+    selectedCanvasItemId,
+    setIdeationDragGhost,
+    setIdeationDropPreview,
+    setNodes,
+    stableIdeationDragRef,
+    stage,
+  });
 
-    changes.forEach((change) => {
-      if (change.type !== "position" || !("position" in change) || !change.position) {
-        return;
-      }
-      if (stage === "ideation" && !change.id.startsWith("agenda-")) {
-        return;
-      }
-
-      const nextPosition = {
-        x: Number(change.position.x || 0),
-        y: Number(change.position.y || 0),
-      };
-      const previousPosition = nextLiveStagePositions[change.id];
-      if (previousPosition?.x === nextPosition.x && previousPosition.y === nextPosition.y) {
-        return;
-      }
-
-      scheduleNodePreview(change.id, nextPosition);
-      nextLiveStagePositions = {
-        ...nextLiveStagePositions,
-        [change.id]: nextPosition,
-      };
-      livePositionsChanged = true;
-    });
-
-    if (livePositionsChanged) {
-      const nextLivePositions = normalizeCanvasNodePositionsForComputedIdeation({
-        ...liveNodePositionsRef.current,
-        [stage]: nextLiveStagePositions,
-      });
-      liveNodePositionsRef.current = nextLivePositions;
-    }
-
-    setNodePositions((prev) => {
-      const stagePositions = { ...(prev[stage] || {}) };
-      let changed = false;
-
-      changes.forEach((change) => {
-        if (change.type === "remove" && stagePositions[change.id]) {
-          delete stagePositions[change.id];
-          changed = true;
-        }
-      });
-
-      if (!changed) {
-        return prev;
-      }
-
-      if (!sharedSyncEnabled) {
-        changes.forEach((change) => {
-          if (change.type === "remove") {
-            localNodeOverridesRef.current[stage].delete(change.id);
-          }
-        });
-      }
-
-      return {
-        ...prev,
-        [stage]: stagePositions,
-      };
-    });
-  };
-
-  const setProblemDropHighlight = (target: ProblemSourceDropTarget | null) => {
-    const previousElement = hoveredProblemDropTargetElementRef.current;
-    if (previousElement && previousElement !== target?.element) {
-      previousElement.classList.remove("imms-problem-source-drop-active");
-    }
-
-    if (target?.element) {
-      target.element.classList.add("imms-problem-source-drop-active");
-      hoveredProblemDropTargetElementRef.current = target.element;
-      if (typeof document !== "undefined") {
-        document.body.style.cursor = "copy";
-      }
-      return;
-    }
-
-    hoveredProblemDropTargetElementRef.current = null;
-    if (typeof document !== "undefined") {
-      document.body.style.cursor = "";
-    }
-  };
-
-  const getStableIdeationDragPosition = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      const dragState = stableIdeationDragRef.current;
-      if (!flowRef.current || !dragState || dragState.nodeId !== node.id) {
-        return node.position;
-      }
-
-      const pointerPosition = flowRef.current.screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-      return {
-        x: pointerPosition.x - dragState.anchor.x,
-        y: pointerPosition.y - dragState.anchor.y,
-      };
-    },
-    [flowRef, stableIdeationDragRef],
-  );
-
-  const getIdeationDropPlaceholderPosition = useCallback(
-    (pane: "left" | "right", clientX: number, clientY: number, fallback: { x: number; y: number }) => {
-      const instance = pane === "left" ? ideationLeftFlowRef.current : ideationRightFlowRef.current;
-      if (!instance) {
-        return fallback;
-      }
-
-      const flowPosition = instance.screenToFlowPosition({ x: clientX, y: clientY });
-      return {
-        x: flowPosition.x - CANVAS_ITEM_NODE_WIDTH / 2,
-        y: flowPosition.y - 64,
-      };
-    },
-    [ideationLeftFlowRef, ideationRightFlowRef],
-  );
-
-  const collectIdeationDropTargetElements = useCallback((draggedNodeId: string): IdeationDropTargetElement[] => {
-    if (typeof document === "undefined") {
-      return [];
-    }
-
-    return Array.from(document.querySelectorAll<HTMLElement>(".react-flow__node"))
-      .map((element) => {
-        const nodeId = element.getAttribute("data-id") || "";
-        const itemId = extractCanvasItemIdFromNodeId(nodeId);
-        return {
-          element,
-          nodeId,
-          itemId,
-        };
-      })
-      .filter(
-        (candidate) =>
-          candidate.nodeId &&
-          candidate.itemId &&
-          candidate.nodeId !== draggedNodeId &&
-          candidate.nodeId !== "ideation-drop-placeholder",
-      );
-  }, []);
-
-  const findIdeationLeftGroupDropTarget = useCallback(
-    (clientX: number, clientY: number, draggedItem: CanvasItemViewModel) => {
-      if (stage !== "ideation") {
-        return null;
-      }
-
-      const leftPane = ideationLeftPaneRef.current;
-      if (!leftPane) {
-        return null;
-      }
-
-      const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
-      const draggedDescendantIds = new Set(getCanvasItemDescendantIds(canvasItems, draggedItem.id));
-      const candidates =
-        ideationDropTargetElementsRef.current.length > 0
-          ? ideationDropTargetElementsRef.current
-          : collectIdeationDropTargetElements(`canvas-item-${draggedItem.id}`);
-      let bestTarget: {
-        nodeId: string;
-        targetItem: CanvasItemViewModel;
-        targetNode: Node | null;
-        isCurrentRoot: boolean;
-        distance: number;
-      } | null = null;
-
-      for (const { element, nodeId, itemId } of candidates) {
-        if (!leftPane.contains(element)) {
-          continue;
-        }
-        const targetItem = canvasItemById.get(itemId) || null;
-        if (!targetItem) {
-          continue;
-        }
-
-        const rect = element.getBoundingClientRect();
-        const inside =
-          clientX >= rect.left &&
-          clientX <= rect.right &&
-          clientY >= rect.top &&
-          clientY <= rect.bottom;
-        if (!inside) {
-          continue;
-        }
-
-        if (
-          targetItem.parent_topic_id ||
-          targetItem.agenda_id !== selectedAgendaForDrop ||
-          targetItem.id === draggedItem.id ||
-          draggedDescendantIds.has(targetItem.id)
-        ) {
-          continue;
-        }
-
-        const target = {
-          nodeId,
-          targetItem,
-          targetNode: flowNodeById.get(nodeId) || null,
-          isCurrentRoot: targetItem.id === draggedRootId,
-          distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-        };
-        if (!bestTarget || target.distance < bestTarget.distance) {
-          bestTarget = target;
-        }
-      }
-
-      return bestTarget;
-    },
-    [
-      canvasItemById,
-      canvasItems,
-      collectIdeationDropTargetElements,
-      flowNodeById,
-      ideationDropTargetElementsRef,
-      selectedAgendaForDrop,
-      stage,
-    ],
-  );
-
-  const resolveIdeationDropPreview = useCallback(
-    (clientX: number, clientY: number, node: Node): IdeationDropPreviewState | null => {
-      if (stage !== "ideation" || !node.id.startsWith("canvas-item-")) {
-        return null;
-      }
-
-      const draggedItemId = node.id.slice("canvas-item-".length);
-      const draggedItem = canvasItemById.get(draggedItemId) || null;
-      if (!draggedItem) {
-        return null;
-      }
-
-      const draggedRootId = getCanvasItemTopLevelAncestorId(canvasItems, draggedItem.id);
-      const draggedDescendantIds = getCanvasItemDescendantIds(canvasItems, draggedItem.id);
-      const splitLeftDropTarget = findIdeationLeftGroupDropTarget(clientX, clientY, draggedItem);
-      const pointerInsideLeftPane = pointInRect(
-        clientX,
-        clientY,
-        getReactFlowCanvasRect(ideationLeftPaneRef.current),
-      );
-      const pointerInsideRightPane = pointInRect(
-        clientX,
-        clientY,
-        getReactFlowCanvasRect(ideationRightPaneRef.current),
-      );
-
-      if (draggedItem.parent_topic_id && pointerInsideLeftPane) {
-        if (splitLeftDropTarget && splitLeftDropTarget.targetNode && !splitLeftDropTarget.isCurrentRoot) {
-          return {
-            draggedItemId,
-            targetId: splitLeftDropTarget.targetItem.id,
-            mode: "topic",
-            agendaId: splitLeftDropTarget.targetItem.agenda_id || draggedItem.agenda_id,
-            position: splitLeftDropTarget.targetNode.position,
-            label: "이 그룹으로 이동",
-            hint: `"${splitLeftDropTarget.targetItem.title || "그룹"}" 상세 캔버스로 이동합니다.`,
-          };
-        }
-
-        return {
-          draggedItemId,
-          targetId: selectedAgendaForDrop || draggedItem.agenda_id,
-          mode: "detach",
-          agendaId: selectedAgendaForDrop || draggedItem.agenda_id,
-          position: getIdeationDropPlaceholderPosition("left", clientX, clientY, node.position),
-          label: "왼쪽에 추가",
-          hint: "마우스를 놓으면 현재 그룹분류의 1차 노드로 추가합니다.",
-        };
-      }
-
-      if (splitLeftDropTarget && splitLeftDropTarget.targetNode) {
-        if (!draggedItem.parent_topic_id && !splitLeftDropTarget.isCurrentRoot) {
-          return makeIdeationMergeDropPreview(
-            draggedItem,
-            splitLeftDropTarget.targetItem,
-            splitLeftDropTarget.targetNode.position,
-          );
-        }
-      }
-
-      if (!draggedItem.parent_topic_id && pointerInsideRightPane) {
-        const selectedRootIdForDrop = selectedCanvasItemId
-          ? getCanvasItemTopLevelAncestorId(canvasItems, selectedCanvasItemId)
-          : "";
-        const selectedRootItemForDrop = selectedRootIdForDrop
-          ? canvasItemById.get(selectedRootIdForDrop) || null
-          : null;
-
-        if (
-          selectedRootItemForDrop &&
-          selectedRootItemForDrop.id !== draggedItem.id &&
-          selectedRootItemForDrop.agenda_id === selectedAgendaForDrop
-        ) {
-          return makeIdeationMergeDropPreview(
-            draggedItem,
-            selectedRootItemForDrop,
-            getIdeationDropPlaceholderPosition("right", clientX, clientY, node.position),
-          );
-        }
-      }
-
-      if (pointerInsideLeftPane || (!draggedItem.parent_topic_id && !pointerInsideRightPane)) {
-        return null;
-      }
-
-      if (draggedItem.parent_topic_id && pointerInsideRightPane) {
-        return null;
-      }
-
-      const candidateElements =
-        ideationDropTargetElementsRef.current.length > 0
-          ? ideationDropTargetElementsRef.current
-          : collectIdeationDropTargetElements(node.id);
-      let candidateDropTarget: {
-        nodeId: string;
-        targetItem: CanvasItemViewModel;
-        targetNode: Node;
-        childCount: number;
-        directAction: "group-move" | "group-merge" | "";
-        distance: number;
-      } | null = null;
-
-      for (const { element, nodeId, itemId } of candidateElements) {
-        if (!nodeId.startsWith("canvas-item-")) {
-          continue;
-        }
-        const targetItem = canvasItemById.get(itemId) || null;
-        const targetNode = flowNodeById.get(nodeId) || null;
-        if (!targetItem || !targetNode || targetItem.id === draggedItem.id) {
-          continue;
-        }
-
-        const rect = element.getBoundingClientRect();
-        const insideNodeRect =
-          clientX >= rect.left &&
-          clientX <= rect.right &&
-          clientY >= rect.top &&
-          clientY <= rect.bottom;
-        const canDropOnSplitGroup =
-          insideNodeRect &&
-          Boolean(draggedItem.parent_topic_id) &&
-          !targetItem.parent_topic_id &&
-          targetItem.agenda_id === selectedAgendaForDrop &&
-          targetItem.id !== draggedRootId &&
-          !draggedDescendantIds.includes(targetItem.id);
-        if (canDropOnSplitGroup) {
-          const target = {
-            nodeId,
-            targetItem,
-            targetNode,
-            childCount: 0,
-            directAction: "group-move" as const,
-            distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-          };
-          if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
-            candidateDropTarget = target;
-          }
-          continue;
-        }
-        const canMergeSplitGroups =
-          insideNodeRect &&
-          !draggedItem.parent_topic_id &&
-          !targetItem.parent_topic_id &&
-          targetItem.agenda_id === selectedAgendaForDrop &&
-          targetItem.id !== draggedItem.id &&
-          !draggedDescendantIds.includes(targetItem.id);
-        if (canMergeSplitGroups) {
-          const target = {
-            nodeId,
-            targetItem,
-            targetNode,
-            childCount: 0,
-            directAction: "group-merge" as const,
-            distance: Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2)),
-          };
-          if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
-            candidateDropTarget = target;
-          }
-          continue;
-        }
-
-        const screenGap = Math.max(10, rect.width * 0.045);
-        const childCount =
-          isTopicCanvasItem(targetItem) && !isTopicCanvasItem(draggedItem)
-            ? getTopicDirectChildIds(canvasItems, targetItem.id).filter((childId) => childId !== draggedItem.id).length
-            : 0;
-        const dropLeft = rect.right + screenGap + childCount * (rect.width + screenGap);
-        const dropRight = dropLeft + rect.width;
-        const dropTop = rect.top - CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
-        const dropBottom = rect.bottom + CANVAS_IDEATION_DROP_ZONE_VERTICAL_PADDING;
-        const insideDropZone =
-          clientX >= dropLeft &&
-          clientX <= dropRight &&
-          clientY >= dropTop &&
-          clientY <= dropBottom;
-        if (!insideDropZone) {
-          continue;
-        }
-
-        const target = {
-          nodeId,
-          targetItem,
-          targetNode,
-          childCount,
-          directAction: "" as const,
-          distance: Math.hypot(clientX - dropLeft, clientY - (rect.top + rect.height / 2)),
-        };
-        if (!candidateDropTarget || target.distance < candidateDropTarget.distance) {
-          candidateDropTarget = target;
-        }
-      }
-
-      const candidateNodeId = candidateDropTarget?.nodeId || "";
-
-      if (candidateNodeId.startsWith("canvas-item-")) {
-        const targetItem = candidateDropTarget?.targetItem || null;
-        const targetNode = candidateDropTarget?.targetNode || null;
-        if (!targetItem || !targetNode) {
-          return null;
-        }
-        const placeholderPosition = {
-          x: targetNode.position.x + CANVAS_ITEM_NODE_WIDTH + CANVAS_TOPIC_CHILD_GAP_X + (candidateDropTarget?.childCount || 0) * (CANVAS_ITEM_NODE_WIDTH + CANVAS_TOPIC_CHILD_GAP_X),
-          y: targetNode.position.y,
-        };
-
-        if (candidateDropTarget?.directAction === "group-merge") {
-          return makeIdeationMergeDropPreview(draggedItem, targetItem, targetNode.position);
-        }
-
-        if (candidateDropTarget?.directAction === "group-move") {
-          return {
-            draggedItemId,
-            targetId: targetItem.id,
-            mode: "topic",
-            agendaId: targetItem.agenda_id || draggedItem.agenda_id,
-            position: targetNode.position,
-            label: "이 그룹으로 이동",
-            hint: `"${targetItem.title || "그룹"}" 상세 캔버스로 이동합니다.`,
-          };
-        }
-
-        if (isTopicCanvasItem(targetItem)) {
-          if (isTopicCanvasItem(draggedItem)) {
-            return {
-              draggedItemId,
-              targetId: targetItem.id,
-              mode: "topic-merge",
-              agendaId: targetItem.agenda_id || draggedItem.agenda_id,
-              position: placeholderPosition,
-              label: "토픽 통합",
-              hint: `"${targetItem.title || "토픽"}"과 합쳐 새 토픽으로 재구성합니다.`,
-            };
-          }
-
-          return {
-            draggedItemId,
-            targetId: targetItem.id,
-            mode: "topic",
-            agendaId: targetItem.agenda_id || draggedItem.agenda_id,
-            position: placeholderPosition,
-            label: "이 토픽에 추가",
-            hint: `"${targetItem.title || "토픽"}"의 하위 아이디어로 이동합니다.`,
-          };
-        }
-
-        if (isTopicCanvasItem(draggedItem)) {
-          const draggedTopicChildIds = getTopicFlattenedIdeaChildIds(canvasItems, draggedItem.id);
-          if (draggedTopicChildIds.includes(targetItem.id)) {
-            return null;
-          }
-
-          return {
-            draggedItemId,
-            targetId: targetItem.id,
-            mode: "topic-idea-merge",
-            agendaId: targetItem.agenda_id || draggedItem.agenda_id,
-            position: placeholderPosition,
-            label: "새 토픽으로 통합",
-            hint: `"${targetItem.title || "대상 노드"}"와 토픽을 새 주제로 묶습니다.`,
-          };
-        }
-
-        return {
-          draggedItemId,
-          targetId: targetItem.id,
-          mode: "merge",
-          agendaId: targetItem.agenda_id || draggedItem.agenda_id,
-          position: placeholderPosition,
-          label: "새 토픽으로 묶기",
-          hint: `"${targetItem.title || "대상 노드"}"와 함께 새 토픽을 만듭니다.`,
-        };
-      }
-
-      return null;
-    },
-    [
-      canvasItemById,
-      canvasItems,
-      collectIdeationDropTargetElements,
-      findIdeationLeftGroupDropTarget,
-      flowNodeById,
-      getIdeationDropPlaceholderPosition,
-      ideationDropTargetElementsRef,
-      selectedAgendaForDrop,
-      selectedCanvasItemId,
-      stage,
-    ],
-  );
-
-  const cancelPendingIdeationDragFrame = () => {
-    if (ideationDragFrameRef.current !== null) {
-      window.cancelAnimationFrame(ideationDragFrameRef.current);
-      ideationDragFrameRef.current = null;
-    }
-    pendingIdeationDragFrameRef.current = null;
-  };
-
-  const applyPendingIdeationDragFrame = () => {
-    ideationDragFrameRef.current = null;
-    const pendingFrame = pendingIdeationDragFrameRef.current;
-    pendingIdeationDragFrameRef.current = null;
-    if (!pendingFrame) {
-      return;
-    }
-
-    const { node, itemId, clientX, clientY, position } = pendingFrame;
-    setIdeationDragGhost((current) =>
-      current?.itemId === itemId && current.x === clientX && current.y === clientY
-        ? current
-        : {
-            itemId,
-            x: clientX,
-            y: clientY,
-          },
-    );
-    scheduleNodePreview(node.id, position);
-    setNodes((current) => {
-      const targetNode = current.find((item) => item.id === node.id);
-      if (!targetNode || positionsEqual(targetNode.position, position)) {
-        return current;
-      }
-
-      return current.map((item) =>
-        item.id === node.id
-          ? {
-              ...item,
-              position,
-            }
-          : item,
-      );
-    });
-
-    const dragNode = {
-      ...node,
-      position,
-    };
-    const nextPreview = resolveIdeationDropPreview(clientX, clientY, dragNode);
-    ideationDropPreviewRef.current = nextPreview;
-    setIdeationDropPreview((current) =>
-      current?.draggedItemId === nextPreview?.draggedItemId &&
-      current?.targetId === nextPreview?.targetId &&
-      current?.mode === nextPreview?.mode &&
-      current?.agendaId === nextPreview?.agendaId &&
-      current?.position.x === nextPreview?.position.x &&
-      current?.position.y === nextPreview?.position.y
-        ? current
-        : nextPreview,
-    );
-    setProblemDropHighlight(null);
-  };
-
-  const queueIdeationDragFrame = (pendingFrame: PendingIdeationDragFrame) => {
-    pendingIdeationDragFrameRef.current = pendingFrame;
-    if (ideationDragFrameRef.current !== null) {
-      return;
-    }
-
-    ideationDragFrameRef.current = window.requestAnimationFrame(applyPendingIdeationDragFrame);
-  };
+  const { onNodeDrag, onNodeDragStart } = useCanvasNodeDragStartMove({
+    agendaDragPreviewRef,
+    cancelPendingIdeationDragFrame,
+    collectIdeationDropTargetElements,
+    dragIdByNodeIdRef,
+    getStableIdeationDragPosition,
+    ideationDropPreviewRef,
+    ideationDropTargetElementsRef,
+    localDraggingNodeIdsRef,
+    meetingId,
+    nodePositions,
+    queueIdeationDragFrame,
+    setAgendaDragPreview,
+    setIdeationDragGhost,
+    setIdeationDropPreview,
+    setIdeationNodeDragActive,
+    setNodes,
+    setProblemDropHighlight,
+    stableIdeationDragRef,
+    stage,
+    userId,
+  });
 
   const onNodeDragStop = (event: React.MouseEvent, node: Node) => {
     setProblemDropHighlight(null);
@@ -7974,7 +5304,7 @@ export default function MeetingCanvasTab({
             ? serializeSharedCanvasItems(nextCanvasItemsSnapshot)
             : undefined,
           problem_groups: nextProblemGroupsSnapshot
-            ? serializeSharedProblemGroups(nextProblemGroupsSnapshot)
+            ? buildWorkspaceProblemGroupsPayload(nextProblemGroupsSnapshot)
             : undefined,
           node_positions: nextPositionsSnapshot,
           imported_state: persistedSharedImportedState,
@@ -8125,91 +5455,6 @@ export default function MeetingCanvasTab({
       return;
     }
     await handleSaveAndEndMeeting(finalSummarySnapshot);
-  };
-
-  const onNodeDrag = (event: React.MouseEvent, node: Node) => {
-    if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
-      event.stopPropagation();
-      const stablePosition = getStableIdeationDragPosition(event, node);
-      queueIdeationDragFrame({
-        node,
-        itemId: node.id.slice("canvas-item-".length),
-        clientX: event.clientX,
-        clientY: event.clientY,
-        position: stablePosition,
-      });
-      return;
-    }
-
-    if (stage !== "problem-definition" || !node.id.startsWith("problem-discussion-")) {
-      setProblemDropHighlight(null);
-      ideationDropPreviewRef.current = null;
-      setIdeationDropPreview(null);
-      setIdeationDragGhost(null);
-      return;
-    }
-
-    setProblemDropHighlight(findProblemSourceDropTarget(event.clientX, event.clientY, node.id));
-  };
-
-  const onNodeDragStart = (event: React.MouseEvent, node: Node) => {
-    localDraggingNodeIdsRef.current.add(node.id);
-    dragIdByNodeIdRef.current[node.id] =
-      `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-    ideationDropPreviewRef.current = null;
-    setIdeationDropPreview(null);
-    cancelPendingIdeationDragFrame();
-    ideationDropTargetElementsRef.current = [];
-
-    if (stage === "ideation" && node.id.startsWith("canvas-item-")) {
-      event.stopPropagation();
-      ideationDropTargetElementsRef.current = collectIdeationDropTargetElements(node.id);
-      setIdeationNodeDragActive(true);
-      setIdeationDragGhost({
-        itemId: node.id.slice("canvas-item-".length),
-        x: event.clientX,
-        y: event.clientY,
-      });
-      stableIdeationDragRef.current = {
-        nodeId: node.id,
-        anchor: {
-          x: CANVAS_ITEM_NODE_WIDTH / 2,
-          y: 64,
-        },
-      };
-      const stablePosition = getStableIdeationDragPosition(event, node);
-      setNodes((current) =>
-        current.map((item) =>
-          item.id === node.id
-            ? {
-                ...item,
-                position: stablePosition,
-              }
-            : item,
-        ),
-      );
-      agendaDragPreviewRef.current = null;
-      setAgendaDragPreview(null);
-      return;
-    }
-
-    stableIdeationDragRef.current = null;
-    setIdeationNodeDragActive(false);
-    setIdeationDragGhost(null);
-
-    if (stage !== "ideation" || !node.id.startsWith("agenda-")) {
-      agendaDragPreviewRef.current = null;
-      setAgendaDragPreview(null);
-      return;
-    }
-
-    const agendaId = node.id.slice("agenda-".length);
-    const nextPreview = {
-      agendaId,
-      originPosition: nodePositions.ideation?.[node.id] || node.position,
-    };
-    agendaDragPreviewRef.current = nextPreview;
-    setAgendaDragPreview(nextPreview);
   };
 
   const rawCanvasStatusMessage = activityMessage || audioImportStatusText || recordingStatusText;
@@ -8523,6 +5768,8 @@ export default function MeetingCanvasTab({
             problemGroupsCount={problemGroups.length}
             problemStructureNodesCount={problemStructureNodes.length}
             finalSummaryDocument={finalSummaryDocument}
+            summaryDocumentDraftMarkdown={summaryDocumentDraftMarkdown}
+            summaryDocumentDraftDirty={summaryDocumentDraftDirty}
             summaryEligibleStructureGroups={summaryEligibleStructureGroups}
             summaryDocumentSectionByGroupId={summaryDocumentSectionByGroupId}
             problemStructureNodeById={problemStructureNodeById}
@@ -8530,6 +5777,7 @@ export default function MeetingCanvasTab({
             remoteEditPresenceByKey={remoteEditPresenceByKey}
             summaryDocumentEditMode={summaryDocumentEditMode}
             summaryDocumentPending={summaryDocumentPending}
+            summaryDocumentSaving={summaryDocumentSaving}
             solutionRightPaneRef={solutionRightPaneRef}
             problemDefinitionStagePending={problemDefinitionStagePending}
             problemStructureSetupOpen={problemStructureSetupOpen}
@@ -8583,6 +5831,7 @@ export default function MeetingCanvasTab({
             onSetSummaryDocumentEditMode={setSummaryDocumentEditMode}
             onRegenerateSummaryDocument={handleRegenerateSummaryDocument}
             onCopyFinalSolutionMarkdown={handleCopyFinalSolutionMarkdown}
+            onSaveSummaryDocument={handleSaveSummaryDocument}
             onSummaryDocumentMarkdownChange={handleSummaryDocumentMarkdownChange}
             renderSummaryMarkdownPreview={renderSummaryMarkdownPreview}
             onCloseProblemStructureSetup={() => setProblemStructureSetupOpen(false)}

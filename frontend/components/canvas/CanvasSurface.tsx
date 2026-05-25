@@ -88,6 +88,8 @@ type CanvasSurfaceProps = {
   problemGroupsCount: number;
   problemStructureNodesCount: number;
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  summaryDocumentDraftMarkdown: string;
+  summaryDocumentDraftDirty: boolean;
   summaryEligibleStructureGroups: SummaryProblemStructureGroup[];
   summaryDocumentSectionByGroupId: Map<string, SummaryDocumentSection>;
   problemStructureNodeById: Map<string, SummaryProblemStructureNode>;
@@ -95,6 +97,7 @@ type CanvasSurfaceProps = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   summaryDocumentEditMode: boolean;
   summaryDocumentPending: boolean;
+  summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
   problemDefinitionStagePending: boolean;
   problemStructureSetupOpen: boolean;
@@ -132,6 +135,7 @@ type CanvasSurfaceProps = {
   onSetSummaryDocumentEditMode: (editMode: boolean) => void;
   onRegenerateSummaryDocument: () => void | Promise<void>;
   onCopyFinalSolutionMarkdown: () => void | Promise<void>;
+  onSaveSummaryDocument: () => void | Promise<void>;
   onSummaryDocumentMarkdownChange: (markdown: string) => void;
   renderSummaryMarkdownPreview: (markdown: string, onEdit: () => void) => ReactNode;
   onCloseProblemStructureSetup: () => void;
@@ -265,6 +269,8 @@ export const CanvasSurface = memo(function CanvasSurface({
   problemGroupsCount,
   problemStructureNodesCount,
   finalSummaryDocument,
+  summaryDocumentDraftMarkdown,
+  summaryDocumentDraftDirty,
   summaryEligibleStructureGroups,
   summaryDocumentSectionByGroupId,
   problemStructureNodeById,
@@ -272,6 +278,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   remoteEditPresenceByKey,
   summaryDocumentEditMode,
   summaryDocumentPending,
+  summaryDocumentSaving,
   solutionRightPaneRef,
   problemDefinitionStagePending,
   problemStructureSetupOpen,
@@ -309,6 +316,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   onSetSummaryDocumentEditMode,
   onRegenerateSummaryDocument,
   onCopyFinalSolutionMarkdown,
+  onSaveSummaryDocument,
   onSummaryDocumentMarkdownChange,
   renderSummaryMarkdownPreview,
   onCloseProblemStructureSetup,
@@ -381,12 +389,16 @@ export const CanvasSurface = memo(function CanvasSurface({
             remoteEditPresenceByKey={remoteEditPresenceByKey}
             paneRef={solutionRightPaneRef}
             document={finalSummaryDocument}
+            draftMarkdown={summaryDocumentDraftMarkdown}
+            draftDirty={summaryDocumentDraftDirty}
             editMode={summaryDocumentEditMode}
             pending={summaryDocumentPending}
+            saving={summaryDocumentSaving}
             onToggleEvidence={onToggleSummaryEvidence}
             onSetEditMode={onSetSummaryDocumentEditMode}
             onRegenerate={onRegenerateSummaryDocument}
             onCopy={onCopyFinalSolutionMarkdown}
+            onSave={onSaveSummaryDocument}
             onMarkdownChange={onSummaryDocumentMarkdownChange}
             renderPreview={renderSummaryMarkdownPreview}
           />

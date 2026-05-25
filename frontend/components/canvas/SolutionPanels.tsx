@@ -29,12 +29,16 @@ type SolutionSummarySourceListProps = {
 type SolutionFinalDocumentPanelProps = {
   paneRef: RefObject<HTMLElement | null>;
   document: CanvasFinalSolutionSummary;
+  draftMarkdown: string;
+  draftDirty: boolean;
   editMode: boolean;
   pending: boolean;
+  saving: boolean;
   eligibleGroupCount: number;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
+  onSave: () => void | Promise<void>;
   onMarkdownChange: (markdown: string) => void;
   renderPreview: (markdown: string, onEdit: () => void) => ReactNode;
 };
@@ -169,16 +173,21 @@ export const SolutionSummarySourceList = memo(function SolutionSummarySourceList
 export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPanel({
   paneRef,
   document,
+  draftMarkdown,
+  draftDirty,
   editMode,
   pending,
+  saving,
   eligibleGroupCount,
   onSetEditMode,
   onRegenerate,
   onCopy,
+  onSave,
   onMarkdownChange,
   renderPreview,
 }: SolutionFinalDocumentPanelProps) {
-  const hasMarkdown = Boolean(document.markdown.trim());
+  const displayMarkdown = editMode || draftDirty ? draftMarkdown : document.markdown;
+  const hasMarkdown = Boolean(displayMarkdown.trim());
 
   return (
     <section ref={paneRef} className="flex min-h-[420px] flex-col overflow-hidden bg-white">
@@ -193,6 +202,9 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
           ) : null}
           {document.document_status === "edited" ? (
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">사용자 수정됨</span>
+          ) : null}
+          {draftDirty ? (
+            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">저장 안 됨</span>
           ) : null}
           <div className="flex overflow-hidden rounded-[8px] border border-black/10 bg-[#f5f6f8]">
             <button
@@ -217,8 +229,16 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
           </div>
           <button
             type="button"
+            onClick={() => void onSave()}
+            disabled={pending || saving || !draftDirty}
+            className="rounded-[8px] border border-[#a13ab8] bg-[#a13ab8] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#8d2fa3] disabled:cursor-not-allowed disabled:border-black/10 disabled:bg-[#f5f6f8] disabled:text-[#999]"
+          >
+            {saving ? "저장 중" : "저장"}
+          </button>
+          <button
+            type="button"
             onClick={() => void onRegenerate()}
-            disabled={pending || eligibleGroupCount === 0}
+            disabled={pending || saving || eligibleGroupCount === 0}
             className="rounded-[8px] border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-50"
           >
             다시 생성
@@ -241,7 +261,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
       <div className="min-h-0 flex-1 overflow-hidden bg-[#f5f6f8] p-5">
         {editMode || !hasMarkdown ? (
           <textarea
-            value={document.markdown}
+            value={draftMarkdown}
             onChange={(event) => onMarkdownChange(event.target.value)}
             placeholder={
               pending
@@ -251,7 +271,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
             className="h-full min-h-[360px] w-full resize-none border border-black/10 bg-white px-6 py-5 font-mono text-sm leading-7 text-[#1f2937] outline-none transition placeholder:font-sans placeholder:text-[#999] focus:border-[#a13ab8]/30 focus:ring-2 focus:ring-[#a13ab8]/10"
           />
         ) : (
-          renderPreview(document.markdown, () => onSetEditMode(true))
+          renderPreview(displayMarkdown, () => onSetEditMode(true))
         )}
       </div>
     </section>
