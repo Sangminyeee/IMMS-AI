@@ -661,7 +661,7 @@ export default function DashboardPage() {
                   <p className="mt-2 text-2xl font-semibold text-white">{selectedResultCount}</p>
                 </div>
                 <div className="rounded-[16px] border border-white/10 bg-white/8 px-4 py-3">
-                  <p className="text-xs font-semibold text-white/55">해결책 그룹</p>
+                  <p className="text-xs font-semibold text-white/55">문서 섹션</p>
                   <p className="mt-2 text-2xl font-semibold text-white">{selectedResultTopics.length}</p>
                 </div>
                 <div className="rounded-[16px] border border-white/10 bg-white/8 px-4 py-3">
@@ -716,7 +716,7 @@ export default function DashboardPage() {
                   </div>
                   <h3 className="mt-5 text-xl font-semibold text-black">저장된 최종 결과가 없습니다.</h3>
                   <p className="mx-auto mt-3 max-w-[520px] text-sm leading-6 text-[#4d4d4d]">
-                    해결책 단계에서 최종 결과로 남길 항목을 선택한 뒤 회의를 종료하면 이곳에 보고서 형태로 표시됩니다.
+                    요약 단계에서 최종 정리 문서를 생성하거나 직접 작성한 뒤 회의를 종료하면 이곳에 보고서 형태로 표시됩니다.
                   </p>
                   {selectedResultRebuildMessage ? (
                     <p className="mx-auto mt-5 max-w-[520px] rounded-[14px] bg-[#fbf4fd] px-4 py-3 text-sm font-semibold leading-6 text-[#a13ab8]">

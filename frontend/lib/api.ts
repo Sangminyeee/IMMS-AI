@@ -23,7 +23,7 @@ import type {
   CanvasProblemTaxonomyResponse,
   CanvasQuickAskResponse,
   CanvasSummaryDocumentResponse,
-  CanvasSolutionStageResponse,
+  CanvasSolutionTopicResponse,
   CanvasWorkspaceProblemGroup,
   CanvasWorkspaceStateResponse,
   LastLlmJsonResponse,
@@ -295,23 +295,6 @@ export async function generateMeetingGoal(payload: {
   });
 }
 
-export async function generateCanvasSolutionStage(payload: {
-  meeting_id: string;
-  meeting_topic: string;
-  topics: Array<{
-    group_id: string;
-    topic_no: number;
-    topic: string;
-    conclusion: string;
-  }>;
-}): Promise<CanvasSolutionStageResponse> {
-  return requestJson<CanvasSolutionStageResponse>("/api/canvas/solution-stage", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(payload),
-  });
-}
-
 export async function generateCanvasSummaryDocument(payload: {
   meeting_id: string;
   meeting_topic: string;
@@ -544,7 +527,7 @@ export async function saveCanvasWorkspaceState(payload: {
   custom_groups?: CanvasCustomGroup[];
   problem_groups: CanvasWorkspaceProblemGroup[];
   problem_structure?: CanvasProblemStructureState;
-  solution_topics: CanvasSolutionStageResponse["topics"];
+  solution_topics: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasWorkspaceStateResponse["final_solution_summary"];
   node_positions?: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;

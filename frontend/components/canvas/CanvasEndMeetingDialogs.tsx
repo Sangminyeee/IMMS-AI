@@ -38,28 +38,28 @@ export function CanvasEndMeetingDialogs({
             <div className="border-b border-black/10 px-7 py-6">
               <p className="text-sm font-semibold text-[#ef4e4e]">회의 종료 확인</p>
               <h2 className="mt-2 text-2xl font-semibold text-black">
-                {(preview?.finalCount || 0) > 0 ? "회의를 종료할까요?" : "최종 결과 없이 종료할까요?"}
+                {(preview?.finalCount || 0) > 0 ? "회의를 종료할까요?" : "최종 정리 문서 없이 종료할까요?"}
               </h2>
               <p className="mt-3 text-sm leading-6 text-[#4d4d4d]">
                 {(preview?.finalCount || 0) > 0
-                  ? `최종 결과 ${preview?.finalCount || 0}개가 대시보드 결과 확인에 저장됩니다.`
-                  : "현재 최종 결과로 선택된 항목이 없습니다. 그대로 종료하면 대시보드 결과 확인에 표시할 내용이 없습니다."}
+                  ? "현재 최종 정리 문서가 대시보드 결과 확인에 저장됩니다."
+                  : "현재 저장할 최종 정리 문서가 없습니다. 그대로 종료하면 대시보드 결과 확인에 표시할 내용이 없습니다."}
               </p>
             </div>
             <div className="space-y-3 px-7 py-5">
               <div className="rounded-[14px] bg-[#f9f9f9] px-4 py-3">
                 <div className="flex items-center justify-between gap-4 text-sm">
-                  <span className="font-medium text-[#4d4d4d]">저장될 최종 항목</span>
+                  <span className="font-medium text-[#4d4d4d]">저장될 문서 항목</span>
                   <span className="font-semibold text-black">{preview?.finalCount || 0}개</span>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-4 text-sm">
-                  <span className="font-medium text-[#4d4d4d]">포함된 해결책 그룹</span>
+                  <span className="font-medium text-[#4d4d4d]">포함된 문서 섹션</span>
                   <span className="font-semibold text-black">{preview?.topicCount || 0}개</span>
                 </div>
               </div>
               {(preview?.finalCount || 0) === 0 ? (
                 <p className="rounded-[14px] border border-[#f0c6c6] bg-[#fff5f5] px-4 py-3 text-sm font-medium leading-6 text-[#b23b3b]">
-                  결과를 남기려면 해결책 단계에서 카드의 `최종 결론` 표시를 먼저 선택해 주세요.
+                  결과를 남기려면 요약 단계에서 최종 정리 문서를 생성하거나 직접 작성해 주세요.
                 </p>
               ) : null}
             </div>

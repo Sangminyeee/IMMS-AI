@@ -2130,42 +2130,6 @@ function hydrateSolutionTopics(
   });
 }
 
-function pruneUnselectedSolutionSuggestions(
-  topics: SolutionTopicViewModel[],
-  targetTopicId = "",
-): { topics: SolutionTopicViewModel[]; removedCount: number } {
-  let removedCount = 0;
-  const nextTopics = topics.map((topic) => {
-    if (targetTopicId && topic.group_id !== targetTopicId) {
-      return topic;
-    }
-
-    const adoptedAiIds = new Set(
-      topic.notes
-        .filter((note) => note.source === "ai" && note.source_ai_id)
-        .map((note) => note.source_ai_id || ""),
-    );
-    const keptSuggestions = topic.ai_suggestions.filter(
-      (suggestion) => suggestion.status === "selected" || adoptedAiIds.has(suggestion.id),
-    );
-    removedCount += topic.ai_suggestions.length - keptSuggestions.length;
-
-    if (keptSuggestions.length === topic.ai_suggestions.length) {
-      return topic;
-    }
-
-    return {
-      ...topic,
-      ideas: keptSuggestions.map((suggestion) => suggestion.text),
-      ai_suggestions: keptSuggestions.map((suggestion) =>
-        makeSolutionAiSuggestion({ ...suggestion, status: "selected" }, suggestion.id),
-      ),
-    };
-  });
-
-  return { topics: nextTopics, removedCount };
-}
-
 function serializeSharedSolutionTopics(topics: SolutionTopicViewModel[]) {
   return topics.map((topic) => ({
     group_id: topic.group_id,
@@ -2571,7 +2535,7 @@ export default function MeetingCanvasTab({
     showEndMeetingSummaryPreview,
     handleCancelEndMeeting,
     handleBackToEndMeetingConfirm,
-  } = useCanvasEndMeetingState<SolutionTopicViewModel>();
+  } = useCanvasEndMeetingState();
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef, ideationLeftFlowRef, ideationRightFlowRef } = useCanvasFlowRefs();
   const ideationLeftPaneRef = useRef<HTMLDivElement | null>(null);
@@ -5921,63 +5885,6 @@ export default function MeetingCanvasTab({
 
     forceBroadcastSharedCanvas();
   }, [forceBroadcastSharedCanvas, incomingCanvasStateRequestId, sharedSyncEnabled]);
-
-  const handlePruneSolutionSuggestions = useCallback(
-    async (targetTopicId = "", persistImmediately = false, sourceTopics?: SolutionTopicViewModel[]) => {
-      const baseSolutionTopics = sourceTopics || latestSharedWorkspaceRef.current.solutionTopics || solutionTopics;
-      const { topics: nextSolutionTopics, removedCount } = pruneUnselectedSolutionSuggestions(
-        baseSolutionTopics,
-        targetTopicId,
-      );
-
-      if (removedCount === 0) {
-        setActivityMessage("정리할 미채택 AI 추천이 없습니다.");
-        return nextSolutionTopics;
-      }
-
-      setSolutionTopics(nextSolutionTopics);
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage,
-        solutionTopics: nextSolutionTopics,
-        importedState: persistedSharedImportedState,
-      };
-
-      if (sharedSyncEnabled) {
-        forceBroadcastSharedCanvas({
-          solutionTopics: nextSolutionTopics,
-        });
-
-        if (meetingId) {
-          const patch = {
-            meeting_id: meetingId,
-            solution_topics: serializeSharedSolutionTopics(nextSolutionTopics),
-            final_solution_summary: buildFinalSolutionSummaryPayload(nextSolutionTopics, finalSummaryDocument),
-            imported_state: persistedSharedImportedState,
-          };
-          if (persistImmediately) {
-            await saveCanvasWorkspacePatch(patch);
-          } else {
-            void saveCanvasWorkspacePatch(patch).catch((error) => {
-              console.error("Failed to prune solution suggestions:", error);
-            });
-          }
-        }
-      }
-
-      setActivityMessage(`미채택 AI 추천 ${removedCount}개를 정리했습니다.`);
-      return nextSolutionTopics;
-    },
-    [
-      forceBroadcastSharedCanvas,
-      finalSummaryDocument,
-      meetingId,
-      persistedSharedImportedState,
-      sharedSyncEnabled,
-      solutionTopics,
-      stage,
-    ],
-  );
 
   const handleCopyFinalSolutionMarkdown = useCallback(async () => {
     const markdown = finalSummaryDocument.markdown.trim();
@@ -9558,7 +9465,6 @@ export default function MeetingCanvasTab({
     openEndMeetingConfirm({
       finalCount: finalSolutionSummary.final_count,
       topicCount: finalSolutionSummary.sections?.length || finalSolutionSummary.topics.length,
-      solutionTopics: endingSolutionTopics,
     });
   };
 
@@ -9573,10 +9479,7 @@ export default function MeetingCanvasTab({
   const handleSaveAndEndMeeting = async (finalSummarySnapshot: CanvasFinalSolutionSummary) => {
     setEndMeetingSaving(true);
 
-    let endingSolutionTopics = endMeetingPreview?.solutionTopics || getEndingSolutionTopicsSnapshot();
-    if (endingSolutionTopics.some((topic) => topic.ai_suggestions.some((suggestion) => suggestion.status !== "selected"))) {
-      endingSolutionTopics = await handlePruneSolutionSuggestions("", true, endingSolutionTopics);
-    }
+    const endingSolutionTopics = getEndingSolutionTopicsSnapshot();
     if (meetingId) {
       const finalSolutionSummary = buildFinalSolutionSummaryPayload(
         endingSolutionTopics,

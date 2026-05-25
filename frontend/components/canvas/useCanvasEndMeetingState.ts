@@ -2,16 +2,15 @@
 
 import { useCallback, useState } from "react";
 
-export type CanvasEndMeetingPreview<TSolutionTopic> = {
+export type CanvasEndMeetingPreview = {
   finalCount: number;
   topicCount: number;
-  solutionTopics: TSolutionTopic[];
 };
 
-export function useCanvasEndMeetingState<TSolutionTopic>() {
+export function useCanvasEndMeetingState() {
   const [endMeetingConfirmOpen, setEndMeetingConfirmOpen] = useState(false);
   const [endMeetingSaving, setEndMeetingSaving] = useState(false);
-  const [endMeetingPreview, setEndMeetingPreview] = useState<CanvasEndMeetingPreview<TSolutionTopic> | null>(null);
+  const [endMeetingPreview, setEndMeetingPreview] = useState<CanvasEndMeetingPreview | null>(null);
   const [endMeetingSummaryPreviewMarkdown, setEndMeetingSummaryPreviewMarkdown] = useState("");
 
   const resetEndMeetingState = useCallback(() => {
@@ -21,7 +20,7 @@ export function useCanvasEndMeetingState<TSolutionTopic>() {
     setEndMeetingSummaryPreviewMarkdown("");
   }, []);
 
-  const openEndMeetingConfirm = useCallback((preview: CanvasEndMeetingPreview<TSolutionTopic>) => {
+  const openEndMeetingConfirm = useCallback((preview: CanvasEndMeetingPreview) => {
     setEndMeetingPreview(preview);
     setEndMeetingSummaryPreviewMarkdown("");
     setEndMeetingConfirmOpen(true);

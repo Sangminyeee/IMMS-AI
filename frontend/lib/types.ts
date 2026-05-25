@@ -744,14 +744,6 @@ export interface CanvasSolutionTopicResponse {
   }>;
 }
 
-export interface CanvasSolutionStageResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  topics: CanvasSolutionTopicResponse[];
-}
-
 export interface CanvasIdeationSuggestionResponse {
   ok: boolean;
   used_llm: boolean;
