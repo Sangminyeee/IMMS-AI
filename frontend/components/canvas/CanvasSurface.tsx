@@ -19,7 +19,7 @@ import {
   PlacementFeedbackOverlay,
   ProblemDefinitionPreparingOverlay,
   ProblemIdeaDragPreview,
-  SolutionStagePendingOverlay,
+  SummaryDocumentPendingOverlay,
 } from "@/components/canvas/CanvasStatusOverlays";
 import {
   ProblemCanvasToolbar,
@@ -94,7 +94,7 @@ type CanvasSurfaceProps = {
   summaryEvidenceOpenGroupIds: Set<string>;
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   summaryDocumentEditMode: boolean;
-  solutionStagePending: boolean;
+  summaryDocumentPending: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
   problemDefinitionStagePending: boolean;
   problemStructureSetupOpen: boolean;
@@ -271,7 +271,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   summaryEvidenceOpenGroupIds,
   remoteEditPresenceByKey,
   summaryDocumentEditMode,
-  solutionStagePending,
+  summaryDocumentPending,
   solutionRightPaneRef,
   problemDefinitionStagePending,
   problemStructureSetupOpen,
@@ -382,7 +382,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             paneRef={solutionRightPaneRef}
             document={finalSummaryDocument}
             editMode={summaryDocumentEditMode}
-            pending={solutionStagePending}
+            pending={summaryDocumentPending}
             onToggleEvidence={onToggleSummaryEvidence}
             onSetEditMode={onSetSummaryDocumentEditMode}
             onRegenerate={onRegenerateSummaryDocument}
@@ -426,7 +426,7 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {stage === "solution" && !finalSummaryDocument.markdown.trim() && !solutionStagePending ? (
+      {stage === "solution" && !finalSummaryDocument.markdown.trim() && !summaryDocumentPending ? (
         <CanvasStageEmptyOverlay
           eyebrow="Summary Stage"
           message={
@@ -471,7 +471,7 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {solutionStagePending ? <SolutionStagePendingOverlay /> : null}
+      {summaryDocumentPending ? <SummaryDocumentPendingOverlay /> : null}
 
       {canvasStatusMessage ? <CanvasStatusToast message={canvasStatusMessage} /> : null}
 

@@ -6,7 +6,6 @@ type ComposerTool = "note" | "comment" | "topic";
 type CanvasTool = ComposerTool | "group" | "problem-idea";
 type ProblemGroupStatus = "draft" | "review" | "final";
 type CanvasItemStatus = "discussion" | "confirmed" | "closed";
-type SolutionNoteSource = "ai" | "user";
 
 type CanvasItemViewModel = {
   id: string;
@@ -35,26 +34,6 @@ type ProblemGroupViewModel = {
   insight_lens?: string;
   conclusion?: string;
   status: ProblemGroupStatus;
-};
-
-type SolutionNoteViewModel = {
-  id: string;
-  text: string;
-  source: SolutionNoteSource;
-  source_ai_id?: string;
-  is_final_candidate: boolean;
-  final_comment: string;
-};
-
-type SolutionTopicViewModel = {
-  group_id: string;
-  topic_no: number;
-  topic: string;
-  conclusion: string;
-  problem_topic: string;
-  problem_conclusion: string;
-  agenda_titles: string[];
-  notes: SolutionNoteViewModel[];
 };
 
 type IdeationKeywordBubble = {
@@ -622,10 +601,6 @@ export function makeIdeationDragGhostLabel(item: CanvasItemViewModel, dropLabel 
       ) : null}
     </div>
   );
-}
-
-export function solutionTopicFinalNotes(topic: SolutionTopicViewModel) {
-  return (topic.notes || []).filter((note) => note.is_final_candidate);
 }
 
 export function estimateWrappedLines(text: string, charsPerLine: number) {

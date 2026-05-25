@@ -144,7 +144,7 @@ export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinition
   );
 });
 
-export const SolutionStagePendingOverlay = memo(function SolutionStagePendingOverlay() {
+export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendingOverlay() {
   return (
     <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
       <div className="w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]">
