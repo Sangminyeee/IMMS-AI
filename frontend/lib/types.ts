@@ -150,54 +150,6 @@ export interface AgendaMarkdownExportResponse {
   markdown: string;
 }
 
-export interface AgendaSnapshotExportResponse {
-  ok: boolean;
-  filename: string;
-  agenda_count: number;
-  transcript_count: number;
-  snapshot: Record<string, unknown>;
-}
-
-export interface AgendaSnapshotImportResponse {
-  ok: boolean;
-  state: MeetingState;
-  import_debug: {
-    filename: string;
-    meeting_goal: string;
-    transcript_count: number;
-    agenda_count: number;
-    reset_state: boolean;
-  };
-}
-
-export interface AudioImportJobStartResponse {
-  ok: boolean;
-  job_id: string;
-  meeting_id: string;
-  filename: string;
-  status: "queued" | "processing" | "completed" | "error" | string;
-  created_at: string;
-}
-
-export interface AudioImportJobStatusResponse {
-  ok: boolean;
-  job_id: string;
-  meeting_id: string;
-  filename: string;
-  status: "queued" | "processing" | "completed" | "error" | string;
-  progress: number;
-  step: string;
-  detail?: string;
-  created_at: string;
-  updated_at: string;
-  transcript_count?: number;
-  speaker_count?: number;
-  used_diarization?: boolean;
-  warning?: string;
-  error?: string;
-  state?: MeetingState | null;
-}
-
 export interface CanvasProblemDefinitionGroup {
   group_id: string;
   parent_group_id?: string;

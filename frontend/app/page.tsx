@@ -6,9 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
 import { supabase } from "@/lib/supabase";
-import { getAudioImportJobStatus, getCanvasWorkspaceState, startAudioImportJob, syncTranscript } from "@/lib/api";
+import { getCanvasWorkspaceState, syncTranscript } from "@/lib/api";
 import type {
-  AudioImportJobStatusResponse,
   CanvasEditPresencePayload,
   CanvasNodePreviewPayload,
   CanvasRealtimeSyncPayload,
@@ -140,19 +139,6 @@ function sortTranscriptsByTime(rows: Transcript[]) {
   });
 }
 
-function mapMeetingStateToTranscriptRows(state: MeetingState): Transcript[] {
-  return dedupeTranscripts(
-    (state.transcript || []).map((row, index) => ({
-      id: `import-${index}-${row.timestamp || Date.now()}`,
-      speaker: row.speaker || "알 수 없음",
-      text: row.text || "",
-      timestamp: row.timestamp || new Date().toISOString(),
-      canvas_stage: "ideation",
-      canvas_target_id: "",
-    })),
-  );
-}
-
 async function loadTranscriptRows(meetingId: string): Promise<{
   data: LoadedTranscriptRow[] | null;
   error: unknown;
@@ -267,8 +253,6 @@ function HomeContent() {
   const [liveSpeechPreview, setLiveSpeechPreview] = useState<LiveSpeechPreview | null>(null);
   const [sttProgressText, setSttProgressText] = useState("");
   const [sttFlowSummaries, setSttFlowSummaries] = useState<SttFlowSummaryItem[]>([]);
-  const [audioImportJob, setAudioImportJob] = useState<AudioImportJobStatusResponse | null>(null);
-  const [audioImportRevision, setAudioImportRevision] = useState(0);
   const [canvasStageContext, setCanvasStageContext] = useState<CanvasStageContext>({ stage: "ideation" });
 
   const wsClientRef = useRef<WebSocketClient | null>(null);
@@ -290,7 +274,6 @@ function HomeContent() {
   const deviceCalibratedRef = useRef(false);
   const speechDetectionProfileRef = useRef<SpeechDetectionProfile | null>(null);
   const liveSpeechClearTimerRef = useRef<number | null>(null);
-  const audioImportPollTimerRef = useRef<number | null>(null);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
 
@@ -349,18 +332,8 @@ function HomeContent() {
       if (liveSpeechClearTimerRef.current !== null) {
         window.clearTimeout(liveSpeechClearTimerRef.current);
       }
-      if (audioImportPollTimerRef.current !== null) {
-        window.clearTimeout(audioImportPollTimerRef.current);
-      }
       audioRecorderRef.current?.cleanup();
     };
-  }, []);
-
-  const stopAudioImportPolling = useCallback(() => {
-    if (audioImportPollTimerRef.current !== null) {
-      window.clearTimeout(audioImportPollTimerRef.current);
-      audioImportPollTimerRef.current = null;
-    }
   }, []);
 
   const applyMeetingStateToUi = useCallback((state: MeetingState) => {
@@ -392,9 +365,6 @@ function HomeContent() {
     setCanvasSyncStatus("실시간 전사가 저장되고 키워드 버블에 반영됩니다.");
     setSttProgressText("");
     setSttFlowSummaries([]);
-    setAudioImportJob(null);
-    setAudioImportRevision(0);
-    stopAudioImportPolling();
 
     const loadMeeting = async () => {
       setLoadingMeeting(true);
@@ -445,7 +415,7 @@ function HomeContent() {
     };
 
     void loadMeeting();
-  }, [applyMeetingStateToUi, user, meetingId, stopAudioImportPolling]);
+  }, [applyMeetingStateToUi, user, meetingId]);
 
   useEffect(() => {
     if (!user || !meetingId) return;
@@ -848,88 +818,6 @@ function HomeContent() {
     return state;
   };
 
-  const pollAudioImportJob = useCallback(
-    async (jobId: string) => {
-      try {
-        const result = await getAudioImportJobStatus(jobId);
-        setAudioImportJob(result);
-
-        if (result.status === "completed") {
-          stopAudioImportPolling();
-          if (result.state) {
-            const nextTranscripts = mapMeetingStateToTranscriptRows(result.state);
-            setTranscripts(nextTranscripts);
-            applyMeetingStateToUi(result.state);
-            lastSyncedSignatureRef.current = buildTranscriptSyncSignature(meetingGoalRef.current || meetingTitleRef.current, nextTranscripts);
-            queuedSyncSignatureRef.current = "";
-            setAudioImportRevision((prev) => prev + 1);
-            setCanvasSyncStatus(
-              `오디오 파일을 불러왔습니다. 발화 ${result.transcript_count || nextTranscripts.length}개가 반영되었습니다.`,
-            );
-          }
-          return;
-        }
-
-        if (result.status === "error") {
-          stopAudioImportPolling();
-          setCanvasSyncStatus(result.error || "오디오 파일 처리에 실패했습니다.");
-          return;
-        }
-
-        setCanvasSyncStatus(
-          result.detail || `오디오 파일 처리 중입니다. ${Math.round(result.progress || 0)}%`,
-        );
-        audioImportPollTimerRef.current = window.setTimeout(() => {
-          void pollAudioImportJob(jobId);
-        }, 1500);
-      } catch (error) {
-        console.error("Failed to poll audio import job:", error);
-        stopAudioImportPolling();
-        setCanvasSyncStatus("오디오 파일 처리 상태를 가져오지 못했습니다.");
-      }
-    },
-    [applyMeetingStateToUi, stopAudioImportPolling],
-  );
-
-  const handleAudioImport = useCallback(
-    async (file: File) => {
-      if (!user || !meetingId) return;
-      if (audioImportJob && (audioImportJob.status === "queued" || audioImportJob.status === "processing")) {
-        setCanvasSyncStatus("이미 다른 오디오 파일을 처리 중입니다. 완료 후 다시 시도해 주세요.");
-        return;
-      }
-
-      stopAudioImportPolling();
-      setAudioImportJob(null);
-      setCanvasSyncStatus(`오디오 파일을 업로드했습니다. ${file.name} 처리 작업을 시작합니다.`);
-
-      const started = await startAudioImportJob({
-        meeting_id: meetingId,
-        meeting_goal: buildSttContext(meetingGoalRef.current, meetingGoalContextRef.current, meetingTitleRef.current),
-        user_id: user.id,
-        file,
-        reset_state: true,
-        window_size: 12,
-      });
-
-      setAudioImportJob({
-        ok: true,
-        job_id: started.job_id,
-        meeting_id: started.meeting_id,
-        filename: started.filename,
-        status: started.status,
-        progress: 1,
-        step: "queued",
-        created_at: started.created_at,
-        updated_at: started.created_at,
-      });
-      audioImportPollTimerRef.current = window.setTimeout(() => {
-        void pollAudioImportJob(started.job_id);
-      }, 600);
-    },
-    [audioImportJob, meetingId, pollAudioImportJob, stopAudioImportPolling, user],
-  );
-
   useEffect(() => {
     if (autoSyncTimerRef.current !== null) {
       window.clearTimeout(autoSyncTimerRef.current);
@@ -1105,14 +993,6 @@ function HomeContent() {
       meeting_goal_context: context,
     });
   }, []);
-  const audioImportBusy = audioImportJob?.status === "queued" || audioImportJob?.status === "processing";
-  const audioImportStatusText = audioImportJob
-    ? audioImportJob.status === "completed"
-      ? `오디오 불러오기 완료 · 발화 ${audioImportJob.transcript_count || 0}개`
-      : audioImportJob.status === "error"
-      ? `오디오 불러오기 실패 · ${audioImportJob.error || "처리 중 오류"}`
-      : `${audioImportJob.detail || "오디오 파일 처리 중"} · ${Math.round(audioImportJob.progress || 0)}%`
-    : "";
 
   if (authLoading || !user || !meetingId || loadingMeeting) {
     return (
@@ -1151,10 +1031,6 @@ function HomeContent() {
         autoSyncing={autoSyncing}
         liveSpeechPreview={liveSpeechPreview}
         sttFlowSummaries={sttFlowSummaries}
-        onImportAudioFile={handleAudioImport}
-        audioImportBusy={audioImportBusy}
-        audioImportStatusText={audioImportStatusText}
-        audioImportRevision={audioImportRevision}
         isRecording={isRecording}
         onToggleRecording={toggleRecording}
         onStopRecording={toggleRecording}

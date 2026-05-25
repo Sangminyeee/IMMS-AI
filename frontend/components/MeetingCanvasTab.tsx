@@ -72,6 +72,7 @@ import { useCanvasNodePreviewSync } from "@/components/canvas/useCanvasNodePrevi
 import { useCanvasNodeChanges } from "@/components/canvas/useCanvasNodeChanges";
 import { useCanvasNodeDragCommit } from "@/components/canvas/useCanvasNodeDragCommit";
 import { useCanvasWorkspaceLoader } from "@/components/canvas/useCanvasWorkspaceLoader";
+import { useCanvasSelectionGuards } from "@/components/canvas/useCanvasSelectionGuards";
 import {
   buildMeetingStateSignature,
   buildWorkspaceProblemGroupsPayload,
@@ -138,8 +139,7 @@ type ProblemCanvasToolbarAction =
   | "structure-start"
   | "structure-back"
   | "structure-ai-group"
-  | "structure-add-group"
-  | "structure-refresh";
+  | "structure-add-group";
 type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
@@ -273,10 +273,6 @@ type MeetingCanvasTabProps = {
   autoSyncing: boolean;
   liveSpeechPreview: LiveSpeechPreview | null;
   sttFlowSummaries?: SttFlowSummaryItem[];
-  onImportAudioFile: (file: File) => Promise<void>;
-  audioImportBusy: boolean;
-  audioImportStatusText: string;
-  audioImportRevision: number;
   isRecording?: boolean;
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
@@ -718,8 +714,6 @@ export default function MeetingCanvasTab({
   incomingEditPresence,
   onEditPresenceSync,
   incomingCanvasStateRequestId,
-  audioImportStatusText,
-  audioImportRevision,
   isRecording = false,
   onToggleRecording,
   onEndMeeting,
@@ -1649,101 +1643,26 @@ export default function MeetingCanvasTab({
     workspaceLoadedRef,
   });
 
-  useEffect(() => {
-    if (audioImportRevision <= 0) {
-      return;
-    }
-
-    setAgendaOverrides({});
-    setCanvasItems([]);
-    setImportedState(null);
-    setImportOverrideActive(false);
-    setProblemGroups([]);
-    setNodePositions({});
-    setStage("ideation");
-    setSelectedProblemGroupId("");
-    setSelectedCanvasItemId("");
-    setSelectedNodeId("");
-    setEditingProblemGroupId("");
-    resetProblemStructureEditorState();
-    setCollapsedProblemGroupIds(new Set());
-    setProblemGroupingRationaleById({});
-    setProblemGroupingRationalePendingId("");
-    setProblemGroupingRationaleOpenGroupId("");
-    setAgendaOverrides({});
-    setEditingPersonalNoteId("");
-    setLeftPanelTab("detail");
-    setActivityMessage("새 오디오 전사를 기준으로 canvas를 초기화했습니다.");
-  }, [audioImportRevision, resetProblemStructureEditorState, setNodePositions]);
-
-  useEffect(() => {
-    if (problemGroups.length === 0) {
-      setSelectedProblemGroupId("");
-      setEditingProblemGroupId("");
-      return;
-    }
-
-    if (problemDefinitionPhase === "structure") {
-      return;
-    }
-
-    if (!selectedProblemGroupId || !problemGroups.some((group) => group.group_id === selectedProblemGroupId)) {
-      setSelectedProblemGroupId(problemGroups[0].group_id);
-    }
-  }, [problemDefinitionPhase, problemGroups, selectedProblemGroupId]);
-
-  useEffect(() => {
-    const validGroupIds = new Set(problemGroups.map((group) => group.group_id));
-    setCollapsedProblemGroupIds((prev) => {
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((groupId) => {
-        if (validGroupIds.has(groupId)) {
-          next.add(groupId);
-        } else {
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-    setProblemGroupingRationaleById((prev) => {
-      const nextEntries = Object.entries(prev).filter(([groupId]) => validGroupIds.has(groupId));
-      if (nextEntries.length === Object.keys(prev).length) return prev;
-      return Object.fromEntries(nextEntries);
-    });
-    setProblemGroupingRationaleOpenGroupId((prev) => (prev && !validGroupIds.has(prev) ? "" : prev));
-    setProblemGroupingRationalePendingId((prev) => (prev && !validGroupIds.has(prev) ? "" : prev));
-  }, [problemGroups]);
-
-  useEffect(() => {
-    if (canvasItems.length === 0) {
-      setSelectedCanvasItemId("");
-      return;
-    }
-
-    if (!selectedCanvasItemId || !canvasItems.some((item) => item.id === selectedCanvasItemId)) {
-      setSelectedCanvasItemId("");
-    }
-  }, [canvasItems, selectedCanvasItemId]);
-
-  useEffect(() => {
-    if (!selectedNodeId) return;
-    if (!nodes.some((node) => node.id === selectedNodeId)) {
-      setSelectedNodeId("");
-    }
-  }, [nodes, selectedNodeId]);
-
-  useEffect(() => {
-    if (stage !== "problem-definition") {
-      setEditingProblemGroupId("");
-    }
-  }, [stage]);
-
-  useEffect(() => {
-    if (sharedSyncEnabled) {
-      localNodeOverridesRef.current = createLocalNodeOverrideMap();
-    }
-  }, [sharedSyncEnabled]);
+  useCanvasSelectionGuards({
+    canvasItems,
+    localNodeOverridesRef,
+    nodes,
+    problemDefinitionPhase,
+    problemGroups,
+    selectedCanvasItemId,
+    selectedNodeId,
+    selectedProblemGroupId,
+    setCollapsedProblemGroupIds,
+    setEditingProblemGroupId,
+    setProblemGroupingRationaleById,
+    setProblemGroupingRationaleOpenGroupId,
+    setProblemGroupingRationalePendingId,
+    setSelectedCanvasItemId,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    sharedSyncEnabled,
+    stage,
+  });
 
   useEffect(() => {
     setMeetingGoalDraft(meetingGoal);
@@ -2300,7 +2219,6 @@ export default function MeetingCanvasTab({
   const {
     handleBackToProblemDefinitionExplore,
     handleOpenProblemStructureSetup,
-    handleRefreshProblemStructureNodes,
     handleStartProblemStructure,
     runProblemStructureGrouping,
   } = useProblemStructureGeneration({
@@ -2757,15 +2675,14 @@ export default function MeetingCanvasTab({
   const isProblemDefinitionExploreStage = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const problemCanvasToolbarActions: ProblemCanvasToolbarAction[] =
     problemDefinitionPhase === "structure"
-      ? ["structure-back", "structure-ai-group", "structure-add-group", "structure-refresh"]
+      ? ["structure-back", "structure-ai-group", "structure-add-group"]
       : ["structure-start"];
 
   const problemToolbarActionLabel = (action: ProblemCanvasToolbarAction) => {
     if (action === "structure-start") return "구조화 시작";
     if (action === "structure-back") return "정의 1단계";
     if (action === "structure-ai-group") return problemStructurePending ? "AI 묶는 중" : "AI 묶기";
-    if (action === "structure-add-group") return "그룹 추가";
-    return "다시 가져오기";
+    return "그룹 추가";
   };
 
   const isProblemToolbarActionActive = (action: ProblemCanvasToolbarAction) => {
@@ -2943,7 +2860,7 @@ export default function MeetingCanvasTab({
     await handleSaveAndEndMeeting(finalSummarySnapshot);
   };
 
-  const rawCanvasStatusMessage = activityMessage || audioImportStatusText || recordingStatusText;
+  const rawCanvasStatusMessage = activityMessage || recordingStatusText;
   const canvasStatusMessage = shouldHideCanvasStatusMessage(rawCanvasStatusMessage) ? "" : rawCanvasStatusMessage;
   const activeProblemGroupingRationale = problemGroupingRationaleOpenGroupId
     ? problemGroupingRationaleById[problemGroupingRationaleOpenGroupId] || null
@@ -3064,11 +2981,6 @@ export default function MeetingCanvasTab({
 
     if (action === "structure-add-group") {
       handleAddProblemStructureGroup();
-      return;
-    }
-
-    if (action === "structure-refresh") {
-      handleRefreshProblemStructureNodes();
     }
   };
 

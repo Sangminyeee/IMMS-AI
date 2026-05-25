@@ -10,8 +10,7 @@ export type ProblemCanvasToolbarActionId =
   | "structure-start"
   | "structure-back"
   | "structure-ai-group"
-  | "structure-add-group"
-  | "structure-refresh";
+  | "structure-add-group";
 
 type ProblemStructureSetupModalProps = {
   draftMethod: ProblemStructureMethodId;
@@ -142,7 +141,7 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
 
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-black/10 pt-4">
           <p className="text-sm leading-6 text-[#4d4d4d]">
-            정의 1단계 캔버스의 현재 노드 {problemGroupsCount}개를 모두 가져옵니다.
+            정의 1단계 캔버스의 현재 노드 {problemGroupsCount}개를 기준으로 구조화를 시작합니다.
           </p>
           <button
             type="button"

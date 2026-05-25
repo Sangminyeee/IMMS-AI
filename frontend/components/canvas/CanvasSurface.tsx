@@ -411,7 +411,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             (item === "structure-start" && problemGroupsCount === 0) ||
             (item === "structure-ai-group" &&
               (problemStructurePending || (problemStructureNodesCount === 0 && problemGroupsCount === 0))) ||
-            ((item === "structure-add-group" || item === "structure-refresh") && problemDefinitionPhase !== "structure")
+            (item === "structure-add-group" && problemDefinitionPhase !== "structure")
           }
           onAction={onProblemToolbarAction}
         />

@@ -478,16 +478,6 @@ export default function DashboardPage() {
             </svg>
             새 회의 생성
           </button>
-          <button
-            type="button"
-            onClick={() => alert("불러오기 기능은 추후 회의 파일/스냅샷 선택과 연결할 수 있습니다.")}
-            className="inline-flex h-[43px] items-center gap-[4.5px] rounded-[16px] bg-[#f4e8fb] px-[13.5px] py-[9px] text-[15.789px] font-semibold leading-[20.3px] text-[#a13ab8] transition hover:bg-[#ecd9f7]"
-          >
-            <svg aria-hidden="true" className="h-6 w-6 shrink-0" viewBox="0 0 24 24" fill="none">
-              <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5M5 19h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            불러오기
-          </button>
         </div>
 
         <section className="overflow-hidden rounded-[16px] border border-black/10 bg-white">
@@ -498,7 +488,7 @@ export default function DashboardPage() {
           {loading ? (
             <div className="p-12 text-center">
               <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-[#f4e8fb] border-t-[#a13ab8]" />
-              <p className="mt-4 text-sm font-medium text-[#4d4d4d]">회의 목록을 불러오는 중...</p>
+              <p className="mt-4 text-sm font-medium text-[#4d4d4d]">회의 목록을 확인하는 중...</p>
             </div>
           ) : meetings.length === 0 ? (
             <div className="p-12 text-center">
@@ -677,7 +667,7 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-4">
                     <div className="h-11 w-11 animate-spin rounded-full border-[3px] border-[#f4e8fb] border-t-[#a13ab8]" />
                     <div>
-                      <p className="text-base font-semibold text-black">최종 결과를 불러오는 중입니다.</p>
+                      <p className="text-base font-semibold text-black">최종 결과를 확인하는 중입니다.</p>
                       <p className="mt-1 text-sm text-[#4d4d4d]">회의 종료 시 저장된 워크스페이스 결과를 확인하고 있습니다.</p>
                     </div>
                   </div>
@@ -688,7 +678,7 @@ export default function DashboardPage() {
                 </div>
               ) : selectedResultError ? (
                 <div className="rounded-[20px] border border-[#f0c6c6] bg-white p-7">
-                  <div className="inline-flex rounded-full bg-[#fff5f5] px-3 py-1 text-xs font-semibold text-[#b23b3b]">불러오기 실패</div>
+                  <div className="inline-flex rounded-full bg-[#fff5f5] px-3 py-1 text-xs font-semibold text-[#b23b3b]">확인 실패</div>
                   <h3 className="mt-4 text-xl font-semibold text-black">최종 결과를 확인할 수 없습니다.</h3>
                   <p className="mt-3 text-sm leading-6 text-[#b23b3b]">{selectedResultError}</p>
                   <div className="mt-6 flex flex-wrap gap-3">
@@ -697,7 +687,7 @@ export default function DashboardPage() {
                       onClick={() => void handleOpenMeetingResult(selectedResultMeeting)}
                       className="inline-flex h-10 items-center rounded-[12px] border border-[#ead0f2] bg-[#f4e8fb] px-4 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7]"
                     >
-                      다시 불러오기
+                      다시 시도
                     </button>
                     <button
                       type="button"

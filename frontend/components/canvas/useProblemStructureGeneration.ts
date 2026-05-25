@@ -195,7 +195,7 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     setSelectedProblemGroupId("");
     setProblemGroupingRationaleOpenGroupId("");
     setActivityMessage(
-      `${problemStructureMethodLabel(problemStructureDraftMethod)} · ${problemDefinitionModeLabel(nextMode)} 방식으로 정의 2단계를 시작했습니다. 노드 ${nextNodes.length}개를 가져왔습니다.`,
+      `${problemStructureMethodLabel(problemStructureDraftMethod)} · ${problemDefinitionModeLabel(nextMode)} 방식으로 정의 2단계를 시작했습니다. 노드 ${nextNodes.length}개를 준비했습니다.`,
     );
     if (nextMode === "ai") {
       await runProblemStructureGrouping({
@@ -234,15 +234,9 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     setSelectedProblemGroupId,
   ]);
 
-  const handleRefreshProblemStructureNodes = useCallback(() => {
-    const nextNodes = syncProblemStructureNodesFromDefinition();
-    setActivityMessage(`정의 1단계의 현재 노드 ${nextNodes.length}개를 다시 가져왔습니다.`);
-  }, [setActivityMessage, syncProblemStructureNodesFromDefinition]);
-
   return {
     handleBackToProblemDefinitionExplore,
     handleOpenProblemStructureSetup,
-    handleRefreshProblemStructureNodes,
     handleStartProblemStructure,
     runProblemStructureGrouping,
     syncProblemStructureNodesFromDefinition,
