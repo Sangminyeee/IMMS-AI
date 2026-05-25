@@ -3,26 +3,6 @@
 import type * as React from "react";
 
 type ProblemGroupStatus = "draft" | "review" | "final";
-type CanvasItemStatus = "discussion" | "confirmed" | "closed";
-
-type CanvasItemViewModel = {
-  id: string;
-  agenda_id?: string;
-  kind?: string;
-  status?: string;
-  title: string;
-  body?: string;
-  keywords?: string[];
-  point_id?: string;
-  compacted_from_ids?: string[];
-  merged_children?: CanvasItemViewModel[];
-  child_item_ids?: string[];
-  parent_topic_id?: string;
-  topic_collapsed?: boolean;
-  evidence_utterance_ids?: string[];
-  ignored_utterance_ids?: string[];
-  ai_pending?: boolean;
-};
 
 type ProblemGroupViewModel = {
   group_id: string;
@@ -61,22 +41,6 @@ function stripLeadingTimestamp(text: string) {
       "",
     )
     .trim();
-}
-
-function makeStableSignature(value: unknown) {
-  const text = JSON.stringify(value);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${text.length}:${(hash >>> 0).toString(36)}`;
-}
-
-function normalizeCanvasItemStatus(raw: string | undefined): CanvasItemStatus {
-  if (raw === "confirmed" || raw === "final") return "confirmed";
-  if (raw === "closed") return "closed";
-  return "discussion";
 }
 
 function renderEditPresenceBadge(label = "수정중") {
@@ -139,23 +103,6 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
       </strong>
     </div>
   );
-}
-
-export function getCanvasItemChangeSignature(item: CanvasItemViewModel) {
-  return makeStableSignature({
-    id: item.id,
-    kind: item.kind,
-    status: normalizeCanvasItemStatus(item.status),
-    title: item.title,
-    body: item.body,
-    keywords: item.keywords || [],
-    parent_topic_id: item.parent_topic_id || "",
-    child_item_ids: item.child_item_ids || [],
-    compacted_from_ids: item.compacted_from_ids || [],
-    evidence_utterance_ids: item.evidence_utterance_ids || [],
-    ignored_utterance_ids: item.ignored_utterance_ids || [],
-    ai_pending: Boolean(item.ai_pending),
-  });
 }
 
 export function estimateWrappedLines(text: string, charsPerLine: number) {

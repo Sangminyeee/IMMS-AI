@@ -8,8 +8,6 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  getCanvasWorkspaceState,
-  getCanvasPersonalNotes,
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
   startCanvasProblemDiscussionWorkspace,
@@ -32,7 +30,6 @@ import {
   type CanvasNodeData,
   type CanvasNodeDescriptor,
 } from "@/components/canvas/CanvasGraphTypes";
-import { getCanvasItemChangeSignature } from "@/components/canvas/CanvasNodeLabels";
 import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
@@ -73,18 +70,16 @@ import { useSharedCanvasIncomingSync } from "@/components/canvas/useSharedCanvas
 import { useCanvasPersistence } from "@/components/canvas/useCanvasPersistence";
 import { useCanvasNodePreviewSync } from "@/components/canvas/useCanvasNodePreviewSync";
 import { useCanvasNodeChanges } from "@/components/canvas/useCanvasNodeChanges";
+import { useCanvasNodeDragCommit } from "@/components/canvas/useCanvasNodeDragCommit";
+import { useCanvasWorkspaceLoader } from "@/components/canvas/useCanvasWorkspaceLoader";
 import {
   buildMeetingStateSignature,
-  buildSharedCanvasSignature,
-  buildWorkspaceFieldSignatures,
   buildWorkspaceProblemGroupsPayload,
   createWorkspaceFieldSignatures,
   normalizeCanvasItemStatus,
   normalizeCanvasNodePositionsForComputedIdeation,
   normalizeIdeationSuggestionStatus,
   normalizeRefinedUtterances,
-  readSharedWorkspaceSessionCache,
-  serializeCustomGroups,
   summarizeNodePositionsForDebug,
   summarizeRenderedNodesForDebug,
   writeSharedWorkspaceSessionCache,
@@ -905,7 +900,6 @@ export default function MeetingCanvasTab({
   const lastIncomingSharedSyncIdRef = useRef("");
   const lastSharedSyncSignatureRef = useRef("");
   const localNodeOverridesRef = useRef(createLocalNodeOverrideMap());
-  const previousCanvasItemSignaturesRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!localEditPresenceTarget || !meetingId || !userId) return;
@@ -1443,7 +1437,6 @@ export default function MeetingCanvasTab({
     lastSharedSyncSignatureRef.current = "";
     applyingRemoteSharedSyncRef.current = false;
     localNodeOverridesRef.current = createLocalNodeOverrideMap();
-    previousCanvasItemSignaturesRef.current = {};
     lastWorkspaceFieldSignaturesRef.current = createWorkspaceFieldSignatures();
     workspaceLoadedRef.current = false;
     workspaceHydratingRef.current = false;
@@ -1571,26 +1564,6 @@ export default function MeetingCanvasTab({
   ]);
 
   useEffect(() => {
-    const nextSignatures = Object.fromEntries(
-      canvasItems.map((item) => [item.id, getCanvasItemChangeSignature(item)] as const),
-    );
-    const previousSignatures = previousCanvasItemSignaturesRef.current;
-    const hadPreviousItems = Object.keys(previousSignatures).length > 0;
-
-    previousCanvasItemSignaturesRef.current = nextSignatures;
-    if (!hadPreviousItems) {
-      return;
-    }
-
-    const changedItems = canvasItems.filter((item) => previousSignatures[item.id] !== nextSignatures[item.id]);
-    const removedItemIds = Object.keys(previousSignatures).filter((itemId) => !nextSignatures[itemId]);
-    if (changedItems.length === 0 && removedItemIds.length === 0) {
-      return;
-    }
-
-  }, [canvasItems]);
-
-  useEffect(() => {
     if (!importOverrideActive) {
       return;
     }
@@ -1624,307 +1597,57 @@ export default function MeetingCanvasTab({
     });
   }, [meetingId, nodePositions, nodes, stage]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    workspaceLoadedRef.current = false;
-    workspaceHydratingRef.current = true;
-    setProblemGroups([]);
-    setProblemDefinitionMode("");
-    setProblemDefinitionPhase("explore");
-    setProblemStructureMethod("affinity");
-    setProblemStructureDraftMethod("affinity");
-    setProblemStructureDraftMode("ai");
-    setProblemStructureSetupOpen(false);
-    setProblemStructureNodes([]);
-    setProblemStructureGroups([]);
-    setProblemStructurePending(false);
-    resetProblemStructureEditorState();
-    setFinalSummaryDocument(createEmptyFinalSolutionSummary());
-    setSummaryDocumentEditMode(false);
-    setSummaryEvidenceOpenGroupIds(new Set());
-    setPersonalNotes([]);
-    setAgendaOverrides({});
-    setCanvasItems([]);
-    setCustomGroups([]);
-    setNodePositions({});
-    setImportedState(null);
-    setStage("ideation");
-    setProblemDefinitionMode("");
-    setProblemDefinitionPhase("explore");
-    setProblemStructureMethod("affinity");
-    setProblemStructureDraftMethod("affinity");
-    setProblemStructureDraftMode("ai");
-    setProblemStructureSetupOpen(false);
-    setProblemStructureNodes([]);
-    setProblemStructureGroups([]);
-    setProblemStructurePending(false);
-    resetProblemStructureEditorState();
-    setProblemDefinitionStagePending(false);
-    setSummaryDocumentPending(false);
-    setSelectedProblemGroupId("");
-    setSelectedNodeId("");
-    setEditingProblemGroupId("");
-    setLoadingProblemGroupIds([]);
-    setCollapsedProblemGroupIds(new Set());
-    setProblemGroupingRationaleById({});
-    setProblemGroupingRationalePendingId("");
-    setProblemGroupingRationaleOpenGroupId("");
-
-    if (!meetingId) {
-      workspaceHydratingRef.current = false;
-      workspaceLoadedRef.current = true;
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void Promise.all([getCanvasWorkspaceState(meetingId), getCanvasPersonalNotes(meetingId, userId)])
-      .then(([saved, savedPersonalNotes]) => {
-        if (cancelled) return;
-
-        const cachedSharedWorkspace = readSharedWorkspaceSessionCache(meetingId);
-        const cachedNodePositions =
-          cachedSharedWorkspace && typeof cachedSharedWorkspace === "object"
-            ? (cachedSharedWorkspace.node_positions as CanvasNodePositionsByStage | undefined)
-            : undefined;
-
-        const sharedGroups = hydrateProblemGroups(saved.problem_groups || []);
-        const sharedStage =
-          saved.stage === "problem-definition" || saved.stage === "solution" || saved.stage === "ideation"
-            ? saved.stage
-            : "ideation";
-        const nextPersonalNotes: PersonalNote[] = (savedPersonalNotes.personal_notes || []).map((note) => {
-          const kind: ComposerTool =
-            note.kind === "comment" || note.kind === "topic" || note.kind === "note"
-              ? note.kind
-              : "note";
-          return {
-            id: note.id,
-            projectId: note.project_id || meetingId,
-            agendaId: note.agenda_id,
-            linkedCanvasItemId: note.linked_canvas_item_id || "",
-            linkedCanvasItemTitle: note.linked_canvas_item_title || "",
-            kind,
-            title: note.title,
-            body: note.body,
-          };
-        });
-        const savedLocalCanvasState = savedPersonalNotes.local_canvas_state || null;
-        const nextSharedSyncEnabled = savedLocalCanvasState?.shared_sync_enabled ?? true;
-        const shouldUseLocalCanvas = nextSharedSyncEnabled === false;
-        const savedLocalStage =
-          savedLocalCanvasState?.stage === "problem-definition" ||
-          savedLocalCanvasState?.stage === "solution" ||
-          savedLocalCanvasState?.stage === "ideation"
-            ? savedLocalCanvasState.stage
-            : "";
-        const nextAgendaOverrides = shouldUseLocalCanvas
-          ? savedLocalCanvasState?.agenda_overrides || {}
-          : saved.agenda_overrides || {};
-        const nextCanvasItems = shouldUseLocalCanvas
-          ? hydrateCanvasItems(savedLocalCanvasState?.canvas_items || [])
-          : hydrateCanvasItems(saved.canvas_items || []);
-        const nextCustomGroups = shouldUseLocalCanvas
-          ? hydrateCustomGroups(savedLocalCanvasState?.custom_groups || [])
-          : hydrateCustomGroups(saved.custom_groups || []);
-        const nextGroups = shouldUseLocalCanvas
-          ? hydrateProblemGroups(savedLocalCanvasState?.problem_groups || [], sharedGroups)
-          : sharedGroups;
-        const nextProblemStructure = hydrateProblemStructureState(
-          shouldUseLocalCanvas ? savedLocalCanvasState?.problem_structure : saved.problem_structure,
-          nextGroups,
-        );
-        const nextStage =
-          savedLocalStage || sharedStage;
-        const displayStage = captureStageOverride || nextStage;
-        const displayProblemStructure =
-          displayStage === "problem-definition" && captureProblemPhaseOverride
-            ? {
-                ...nextProblemStructure,
-                phase: captureProblemPhaseOverride,
-              }
-            : nextProblemStructure;
-        const nextFinalSummary = normalizeFinalSolutionSummaryPayload(
-          shouldUseLocalCanvas
-            ? savedLocalCanvasState?.final_solution_summary || saved.final_solution_summary || null
-            : saved.final_solution_summary || null,
-        );
-        const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(
-          shouldUseLocalCanvas
-            ? savedLocalCanvasState?.node_positions || {}
-            : Object.keys(saved.node_positions || {}).length > 0
-              ? saved.node_positions || {}
-              : cachedNodePositions || {},
-        );
-        const nextImportedState = shouldUseLocalCanvas
-          ? savedLocalCanvasState?.imported_state || null
-          : saved.imported_state || null;
-        const nextMeetingGoal = saved.meeting_goal || "";
-        const nextMeetingGoalContext = saved.meeting_goal_context || "";
-        const nextImportOverrideActive = shouldUseLocalCanvas
-          ? Boolean(savedLocalCanvasState?.import_override_active && nextImportedState)
-          : Boolean(saved.imported_state);
-
-        setProblemGroups(nextGroups);
-        setFinalSummaryDocument(nextFinalSummary);
-        setSummaryDocumentEditMode(false);
-        setSummaryEvidenceOpenGroupIds(new Set());
-        setPersonalNotes(nextPersonalNotes);
-        setAgendaOverrides(nextAgendaOverrides);
-        setCanvasItems(nextCanvasItems);
-        setCustomGroups(nextCustomGroups);
-        setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
-        onMeetingGoalChange(nextMeetingGoal);
-        onMeetingGoalContextChange(nextMeetingGoalContext);
-        setSharedSyncEnabled(nextSharedSyncEnabled);
-        setNodePositions(nextNodePositions);
-        setImportedState(nextImportedState);
-        setProblemDefinitionMode(displayProblemStructure.mode);
-        setProblemDefinitionPhase(displayProblemStructure.phase);
-        setProblemStructureMethod(displayProblemStructure.method);
-        setProblemStructureDraftMethod(displayProblemStructure.method);
-        setProblemStructureDraftMode(displayProblemStructure.mode || "ai");
-        setProblemStructureSetupOpen(false);
-        setProblemStructureNodes(displayProblemStructure.nodes);
-        setProblemStructureGroups(displayProblemStructure.groups);
-        setProblemStructurePending(false);
-        resetProblemStructureEditorState();
-        analysisSignatureAtImportRef.current = nextImportedState
-          ? buildMeetingStateSignature(nextImportedState)
-          : "";
-        setImportOverrideActive(nextImportOverrideActive);
-        setStage(displayStage);
-        lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
-          meeting_goal: nextMeetingGoal,
-          meeting_goal_context: nextMeetingGoalContext,
-          stage: displayStage,
-          agenda_overrides: nextAgendaOverrides,
-          canvas_items: nextCanvasItems,
-          custom_groups: serializeCustomGroups(nextCustomGroups),
-          problem_groups: nextGroups,
-          problem_structure: buildProblemStructureStatePayload(displayProblemStructure),
-          solution_topics: [],
-          final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
-          node_positions: nextNodePositions,
-          imported_state: nextImportedState,
-        });
-        lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
-          meetingGoal: nextMeetingGoal,
-          meetingGoalContext: nextMeetingGoalContext,
-          stage: displayStage,
-          agendaOverrides: nextAgendaOverrides,
-          canvasItems: nextCanvasItems,
-          customGroups: nextCustomGroups,
-          problemGroups: nextGroups,
-          problemStructure: buildProblemStructureStatePayload(displayProblemStructure),
-          finalSolutionSummary: nextFinalSummary,
-          nodePositions: nextNodePositions,
-          importedState: nextImportedState,
-        });
-        setSelectedProblemGroupId(displayProblemStructure.phase === "structure" ? "" : nextGroups[0]?.group_id || "");
-        setSelectedCanvasItemId("");
-        setSelectedNodeId(
-          displayStage === "problem-definition"
-            ? (displayProblemStructure.phase === "structure" ? "" : nextGroups[0] ? `problem-${nextGroups[0].group_id}` : "")
-            : "",
-        );
-        setEditingProblemGroupId("");
-
-        console.info("[canvas hydrate] loaded workspace", {
-          meetingId,
-          sharedSyncEnabled: nextSharedSyncEnabled,
-          usingLocalCanvas: shouldUseLocalCanvas,
-          stage: displayStage,
-          canvasItems: nextCanvasItems.length,
-          customGroups: nextCustomGroups.length,
-          usedCachedNodePositions:
-            !shouldUseLocalCanvas &&
-            Object.keys(saved.node_positions || {}).length === 0 &&
-            Boolean(cachedNodePositions && Object.keys(cachedNodePositions).length > 0),
-          nodePositions: summarizeNodePositionsForDebug(nextNodePositions),
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setProblemGroups([]);
-        setFinalSummaryDocument(createEmptyFinalSolutionSummary());
-        setSummaryDocumentEditMode(false);
-        setSummaryEvidenceOpenGroupIds(new Set());
-        setPersonalNotes([]);
-        setAgendaOverrides({});
-        setCanvasItems([]);
-        setCustomGroups([]);
-        setSharedSyncEnabled(true);
-        setNodePositions({});
-        setImportedState(null);
-        setStage("ideation");
-        setProblemDefinitionMode("");
-        setProblemDefinitionPhase("explore");
-        setProblemStructureMethod("affinity");
-        setProblemStructureDraftMethod("affinity");
-        setProblemStructureDraftMode("ai");
-        setProblemStructureSetupOpen(false);
-        setProblemStructureNodes([]);
-        setProblemStructureGroups([]);
-        setProblemStructurePending(false);
-        resetProblemStructureEditorState();
-        lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
-          meeting_goal: "",
-          meeting_goal_context: "",
-          stage: "ideation",
-          agenda_overrides: {},
-          canvas_items: [],
-          custom_groups: [],
-          problem_groups: [],
-          problem_structure: createDefaultProblemStructureState(),
-          solution_topics: [],
-          final_solution_summary: buildFinalSolutionSummaryPayload(createEmptyFinalSolutionSummary()),
-          node_positions: {},
-          imported_state: null,
-        });
-        lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
-          meetingGoal: "",
-          meetingGoalContext: "",
-          stage: "ideation",
-          agendaOverrides: {},
-          canvasItems: [],
-          customGroups: [],
-          problemGroups: [],
-          problemStructure: createDefaultProblemStructureState(),
-          finalSolutionSummary: createEmptyFinalSolutionSummary(),
-          nodePositions: {},
-          importedState: null,
-        });
-        setSelectedProblemGroupId("");
-        setSelectedCanvasItemId("");
-        setSelectedNodeId("");
-        setEditingProblemGroupId("");
-        setCollapsedProblemGroupIds(new Set());
-        setProblemGroupingRationaleById({});
-        setProblemGroupingRationalePendingId("");
-        setProblemGroupingRationaleOpenGroupId("");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        workspaceHydratingRef.current = false;
-        workspaceLoadedRef.current = true;
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
+  useCanvasWorkspaceLoader({
+    analysisSignatureAtImportRef,
     captureProblemPhaseOverride,
     captureStageOverride,
+    hydrateCanvasItems,
+    hydrateCustomGroups,
+    hydrateProblemGroups,
+    lastSharedSyncSignatureRef,
+    lastWorkspaceFieldSignaturesRef,
     meetingId,
     onMeetingGoalChange,
     onMeetingGoalContextChange,
     resetProblemStructureEditorState,
+    setAgendaOverrides,
+    setCanvasItems,
+    setCollapsedProblemGroupIds,
+    setCustomGroups,
+    setEditingProblemGroupId,
+    setFinalSummaryDocument,
+    setImportedState,
+    setImportOverrideActive,
+    setLoadingProblemGroupIds,
     setMeetingGoalDrafts,
     setNodePositions,
+    setPersonalNotes,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
+    setProblemDefinitionStagePending,
+    setProblemGroupingRationaleById,
+    setProblemGroupingRationaleOpenGroupId,
+    setProblemGroupingRationalePendingId,
+    setProblemGroups,
+    setProblemStructureDraftMethod,
+    setProblemStructureDraftMode,
+    setProblemStructureGroups,
+    setProblemStructureMethod,
+    setProblemStructureNodes,
+    setProblemStructurePending,
+    setProblemStructureSetupOpen,
+    setSelectedCanvasItemId,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    setSharedSyncEnabled,
+    setStage,
+    setSummaryDocumentEditMode,
+    setSummaryDocumentPending,
+    setSummaryEvidenceOpenGroupIds,
     userId,
-  ]);
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
 
   useEffect(() => {
     if (audioImportRevision <= 0) {
@@ -3064,126 +2787,30 @@ export default function MeetingCanvasTab({
     workspaceLoadedRef,
   });
 
-  const onNodeDragStart = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
-      if (stage !== "problem-definition") return;
-
-      localDraggingNodeIdsRef.current.add(node.id);
-      dragIdByNodeIdRef.current[node.id] =
-        `${meetingId}:${userId}:${node.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-    },
-    [dragIdByNodeIdRef, localDraggingNodeIdsRef, meetingId, stage, userId],
-  );
-
-  const onNodeDrag = useCallback(() => undefined, []);
-
-  const onNodeDragStop = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
-      localDraggingNodeIdsRef.current.delete(node.id);
-      const clearNodeDragSession = () => {
-        delete dragIdByNodeIdRef.current[node.id];
-      };
-
-      if (stage !== "problem-definition") {
-        clearNodeDragSession();
-        return;
-      }
-
-      if (!workspaceLoadedRef.current || workspaceHydratingRef.current || applyingRemoteSharedSyncRef.current) {
-        clearNodeDragSession();
-        return;
-      }
-
-      scheduleNodePreview(node.id, node.position);
-      flushPendingNodePreviews();
-      clearNodeDragSession();
-
-      const currentPosition = nodePositions[stage]?.[node.id];
-      if (currentPosition && currentPosition.x === node.position.x && currentPosition.y === node.position.y) {
-        return;
-      }
-
-      if (!sharedSyncEnabled) {
-        localNodeOverridesRef.current[stage].add(node.id);
-      }
-
-      const nextPositionsSnapshot = normalizeCanvasNodePositionsForComputedIdeation({
-        ...nodePositions,
-        [stage]: {
-          ...(nodePositions[stage] || {}),
-          [node.id]: {
-            x: node.position.x,
-            y: node.position.y,
-          },
-        },
-      });
-
-      liveNodePositionsRef.current = nextPositionsSnapshot;
-      latestSharedWorkspaceRef.current = {
-        ...latestSharedWorkspaceRef.current,
-        stage,
-        canvasItems,
-        problemGroups,
-        nodePositions: nextPositionsSnapshot,
-        importedState: persistedSharedImportedState,
-      };
-      console.info("[canvas drag stop] computed position", {
-        meetingId,
-        stage,
-        nodeId: node.id,
-        position: nextPositionsSnapshot[stage]?.[node.id],
-        nodePositions: summarizeNodePositionsForDebug(nextPositionsSnapshot),
-        renderedNodes: summarizeRenderedNodesForDebug(nodes),
-      });
-      setNodePositions(nextPositionsSnapshot);
-
-      if (!sharedSyncEnabled) {
-        return;
-      }
-
-      if (meetingId) {
-        writeSharedWorkspaceSessionCache(
-          meetingId,
-          buildCurrentWorkspacePatchPayload({
-            problemGroups,
-            nodePositions: nextPositionsSnapshot,
-          }),
-        );
-        void saveCanvasWorkspacePatch({
-          meeting_id: meetingId,
-          stage,
-          node_positions: nextPositionsSnapshot,
-          imported_state: persistedSharedImportedState,
-        }).catch((error) => {
-          console.error("Failed to save shared node positions:", error);
-        });
-      }
-
-      broadcastNodePositionCommit(stage, node.id, nextPositionsSnapshot);
-    },
-    [
-      applyingRemoteSharedSyncRef,
-      broadcastNodePositionCommit,
-      buildCurrentWorkspacePatchPayload,
-      canvasItems,
-      dragIdByNodeIdRef,
-      flushPendingNodePreviews,
-      liveNodePositionsRef,
-      localDraggingNodeIdsRef,
-      localNodeOverridesRef,
-      meetingId,
-      nodePositions,
-      nodes,
-      persistedSharedImportedState,
-      problemGroups,
-      scheduleNodePreview,
-      setNodePositions,
-      sharedSyncEnabled,
-      stage,
-      workspaceHydratingRef,
-      workspaceLoadedRef,
-    ],
-  );
+  const { onNodeDrag, onNodeDragStart, onNodeDragStop } = useCanvasNodeDragCommit({
+    applyingRemoteSharedSyncRef,
+    broadcastNodePositionCommit,
+    buildCurrentWorkspacePatchPayload,
+    canvasItems,
+    dragIdByNodeIdRef,
+    flushPendingNodePreviews,
+    latestSharedWorkspaceRef,
+    liveNodePositionsRef,
+    localDraggingNodeIdsRef,
+    localNodeOverridesRef,
+    meetingId,
+    nodePositions,
+    nodes,
+    persistedSharedImportedState,
+    problemGroups,
+    scheduleNodePreview,
+    setNodePositions,
+    sharedSyncEnabled,
+    stage,
+    userId,
+    workspaceHydratingRef,
+    workspaceLoadedRef,
+  });
 
   const handleDeletePersonalNote = (noteId: string) => {
     setPersonalNotes((prev) => prev.filter((item) => item.id !== noteId));
