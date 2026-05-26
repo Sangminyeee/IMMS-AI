@@ -11,7 +11,6 @@ import {
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
   startCanvasProblemDiscussionWorkspace,
-  extractCanvasIdeationKeywords,
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
 import { CanvasHeader } from "@/components/canvas/CanvasHeader";
@@ -34,8 +33,8 @@ import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
   CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH,
-  buildIdeationKeywordBubbles,
   buildStableIdeationBubbleVisuals,
+  type IdeationKeywordBubbleVisual,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
   buildProblemStructureStatePayload,
@@ -98,6 +97,7 @@ import {
 } from "@/components/canvas/summaryDocumentHelpers";
 import { useCanvasQuickAsk } from "@/components/canvas/useCanvasQuickAsk";
 import { useCanvasUiState } from "@/components/canvas/useCanvasUiState";
+import { useIdeationKeywordBubbles } from "@/components/canvas/useIdeationKeywordBubbles";
 import type {
   AgendaActionItemDetail,
   AgendaDecisionDetail,
@@ -144,15 +144,7 @@ type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
-const IDEATION_KEYWORD_BATCH_SIZE = 2;
-const IDEATION_KEYWORD_IDLE_FLUSH_MS = 18_000;
-const IDEATION_KEYWORD_MAX_KEYWORDS = 3;
-const IDEATION_KEYWORD_MAX_NEW_BUBBLES_PER_BATCH = 3;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
 
 function clipClientText(value: unknown, limit: number) {
   const text = String(value || "").trim();
@@ -215,32 +207,6 @@ type AgendaViewModel = {
 type ProblemGroupDisplayCard = {
   sourceNodeId: string;
   attachable: boolean;
-};
-
-type IdeationKeywordBubble = {
-  id: string;
-  text: string;
-  count: number;
-  weight: number;
-  related: string[];
-  kind?: "entity" | "topic" | "relation" | "action" | "off_topic";
-  importance?: number;
-  relevance?: number;
-  offTopic?: boolean;
-  offTopicReason?: string;
-  anchorText?: string;
-  activity?: number;
-  opacity?: number;
-};
-
-type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
-  activity: number;
-  opacity: number;
-  size: number;
-  targetX: number;
-  targetY: number;
-  firstSeenTick: number;
-  lastSeenTick: number;
 };
 
 type LocalEditPresenceTarget = {
@@ -412,153 +378,6 @@ function buildProblemTaxonomyUtterances(transcripts: MeetingTranscript[]) {
       text: stripLeadingTimestamp(row.text),
       timestamp: row.timestamp || "",
     }));
-}
-
-function buildIdeationKeywordUtterances(transcripts: MeetingTranscript[]) {
-  return normalizeTranscriptRows(transcripts)
-    .filter((row) => (!row.canvas_stage || row.canvas_stage === "ideation") && stripLeadingTimestamp(row.text).trim())
-    .slice(-180)
-    .map((row) => ({
-      id: row.id,
-      speaker: row.speaker || "참가자",
-      text: stripLeadingTimestamp(row.text),
-      timestamp: row.timestamp || "",
-    }));
-}
-
-function normalizeIdeationKeywordBubbleKind(value: unknown): IdeationKeywordBubble["kind"] {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "entity" || normalized === "topic" || normalized === "relation" || normalized === "action" || normalized === "off_topic") {
-    return normalized;
-  }
-  return "topic";
-}
-
-function normalizeIdeationKeywordBubblesFromResponse(
-  keywords: Array<{
-    text?: string;
-    count?: number;
-    related?: string[];
-    kind?: string;
-    importance?: number;
-    relevance?: number;
-    off_topic?: boolean;
-    offTopic?: boolean;
-    off_topic_reason?: string;
-    offTopicReason?: string;
-    anchor?: string;
-    anchor_text?: string;
-  }>,
-): IdeationKeywordBubble[] {
-  const normalized = keywords
-    .map((keyword) => {
-      const kind = normalizeIdeationKeywordBubbleKind(keyword.kind);
-      return {
-        text: String(keyword.text || "").trim(),
-        count: Math.max(1, Number(keyword.count || 1)),
-        related: (keyword.related || []).map((item) => String(item || "").trim()).filter(Boolean),
-        kind,
-        importance: clampNumber(Number(keyword.importance ?? 0.65), 0, 1),
-        relevance: clampNumber(Number(keyword.relevance ?? 1), 0, 1),
-        offTopic: Boolean(keyword.off_topic || keyword.offTopic || kind === "off_topic"),
-        offTopicReason: String(keyword.off_topic_reason || keyword.offTopicReason || "").trim(),
-        anchorText: String(keyword.anchor || keyword.anchor_text || "").trim(),
-      };
-    })
-    .filter((keyword) => keyword.text.length >= 2);
-  const maxCount = Math.max(1, ...normalized.map((keyword) => keyword.count));
-  const selectedTexts = new Set(normalized.map((keyword) => keyword.text));
-  return normalized.map((keyword) => ({
-    id: `ideation-keyword-${encodeURIComponent(keyword.text)}`,
-    text: keyword.text,
-    count: keyword.count,
-    weight: keyword.count / maxCount,
-    related: keyword.related.filter((item) => selectedTexts.has(item) && item !== keyword.text).slice(0, 5),
-    kind: keyword.offTopic ? "off_topic" : keyword.kind,
-    importance: keyword.importance,
-    relevance: keyword.relevance,
-    offTopic: keyword.offTopic,
-    offTopicReason: keyword.offTopicReason,
-    anchorText: selectedTexts.has(keyword.anchorText) && keyword.anchorText !== keyword.text ? keyword.anchorText : "",
-  }));
-}
-
-function mergeIdeationKeywordBubbleBatch(
-  currentBubbles: IdeationKeywordBubble[],
-  incomingBubbles: IdeationKeywordBubble[],
-) {
-  if (incomingBubbles.length === 0) {
-    return {
-      allBubbles: currentBubbles,
-      updatedBubbles: [],
-    };
-  }
-
-  const mergedByText = new Map(currentBubbles.map((bubble) => [bubble.text.trim().toLowerCase(), bubble] as const));
-  const updatedTextKeys = new Set<string>();
-  let newBubbleCount = 0;
-
-  const rankedIncoming = [...incomingBubbles].sort(
-    (left, right) =>
-      Number(right.importance || 0) - Number(left.importance || 0) ||
-      right.count - left.count ||
-      left.text.localeCompare(right.text),
-  );
-
-  rankedIncoming.forEach((incoming) => {
-    const text = incoming.text.trim();
-    if (!text) return;
-    const textKey = text.toLowerCase();
-    const existing = mergedByText.get(textKey);
-    if (!existing && newBubbleCount >= IDEATION_KEYWORD_MAX_NEW_BUBBLES_PER_BATCH) return;
-    if (!existing) newBubbleCount += 1;
-    const related = Array.from(new Set([...(existing?.related || []), ...(incoming.related || [])]))
-      .filter((item) => item && item !== text)
-      .slice(0, 8);
-
-    mergedByText.set(textKey, {
-      ...(existing || incoming),
-      ...incoming,
-      id: existing?.id || incoming.id,
-      text: existing?.text || incoming.text,
-      count: Math.max(1, Number(existing?.count || 0)) + Math.max(1, Number(incoming.count || 1)),
-      related,
-      kind: incoming.kind || existing?.kind,
-      importance: Math.max(Number(existing?.importance || 0), Number(incoming.importance || 0)),
-      relevance: Math.max(Number(existing?.relevance || 0), Number(incoming.relevance || 0)),
-      offTopic: Boolean(existing?.offTopic || incoming.offTopic),
-      offTopicReason: incoming.offTopicReason || existing?.offTopicReason || "",
-      anchorText: incoming.anchorText || existing?.anchorText || "",
-    });
-    updatedTextKeys.add(textKey);
-  });
-
-  const allBubbles = [...mergedByText.values()];
-  const maxCount = Math.max(1, ...allBubbles.map((bubble) => bubble.count));
-  const normalizedBubbles = allBubbles
-    .map((bubble) => ({
-      ...bubble,
-      weight: bubble.count / maxCount,
-    }))
-    .sort((left, right) => right.count - left.count || left.text.localeCompare(right.text));
-
-  return {
-    allBubbles: normalizedBubbles,
-    updatedBubbles: normalizedBubbles.filter((bubble) => updatedTextKeys.has(bubble.text.trim().toLowerCase())),
-  };
-}
-
-function buildExistingIdeationKeywordPayload(bubbles: IdeationKeywordBubble[]) {
-  return bubbles.slice(0, 24).map((bubble) => ({
-    text: bubble.text,
-    count: bubble.count,
-    related: bubble.related.slice(0, 6),
-    kind: bubble.kind,
-    importance: bubble.importance,
-    relevance: bubble.relevance,
-    off_topic: bubble.offTopic,
-    anchor: bubble.anchorText,
-  }));
 }
 
 function buildAgendaModels(
@@ -872,8 +691,6 @@ export default function MeetingCanvasTab({
   const [summaryDocumentDraftMarkdown, setSummaryDocumentDraftMarkdown] = useState("");
   const [summaryDocumentDraftDirty, setSummaryDocumentDraftDirty] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
-  const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
-  const [ideationKeywordStatusMessage, setIdeationKeywordStatusMessage] = useState("");
   const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
   const [ideationBubbleDebugEnabled, setIdeationBubbleDebugEnabled] = useState(false);
   const [ideationBubbleDebugGrowthById, setIdeationBubbleDebugGrowthById] = useState<Record<string, number>>({});
@@ -1061,11 +878,6 @@ export default function MeetingCanvasTab({
   const problemDiscussionFlushTimerRef = useRef<number | null>(null);
   const problemDiscussionInFlightRef = useRef(false);
   const problemStructureRequestSeqRef = useRef(0);
-  const ideationKeywordRequestSeqRef = useRef(0);
-  const ideationKeywordProcessedIdsRef = useRef<Set<string>>(new Set());
-  const ideationKeywordRequestInFlightRef = useRef(false);
-  const ideationKeywordBubbleStoreRef = useRef<IdeationKeywordBubble[]>([]);
-  const latestIdeationKeywordUtteranceCountRef = useRef(0);
   const latestSharedWorkspaceRef = useRef<{
     meetingGoal: string;
     meetingGoalContext: string;
@@ -1207,28 +1019,28 @@ export default function MeetingCanvasTab({
   );
   const activeMeetingGoal = meetingGoalDraft.trim();
   const meetingTopicForAi = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim() || "회의 주제";
-  const ideationKeywordUtterances = useMemo(() => buildIdeationKeywordUtterances(transcripts), [transcripts]);
-  const localIdeationKeywordBubbles = useMemo(() => buildIdeationKeywordBubbles(transcripts), [transcripts]);
+  const {
+    keywordBubbles: ideationKeywordBubbles,
+    statusMessage: ideationKeywordStatusMessage,
+  } = useIdeationKeywordBubbles({
+    transcripts,
+    meetingId,
+    meetingTopic: meetingTopicForAi,
+    stage,
+  });
   useEffect(() => {
     ideationBubbleUpdateTickRef.current = 0;
-    ideationKeywordProcessedIdsRef.current = new Set();
-    ideationKeywordRequestInFlightRef.current = false;
-    ideationKeywordBubbleStoreRef.current = [];
-    latestIdeationKeywordUtteranceCountRef.current = 0;
-    setLlmIdeationKeywordBubbles([]);
     setIdeationBubbleVisuals([]);
     setIdeationBubbleDebugGrowthById({});
-    setIdeationKeywordStatusMessage("");
   }, [ideationBubbleUpdateTickRef, meetingId]);
   useEffect(() => {
-    const incomingBubbles = meetingId ? llmIdeationKeywordBubbles : localIdeationKeywordBubbles;
-    if (incomingBubbles.length === 0) return;
+    if (ideationKeywordBubbles.length === 0) return;
     const tick = ideationBubbleUpdateTickRef.current + 1;
     ideationBubbleUpdateTickRef.current = tick;
     setIdeationBubbleVisuals((current) =>
       buildStableIdeationBubbleVisuals(
         current,
-        incomingBubbles,
+        ideationKeywordBubbles,
         ideationBubbleDebugGrowthById,
         tick,
       ),
@@ -1236,9 +1048,7 @@ export default function MeetingCanvasTab({
   }, [
     ideationBubbleDebugGrowthById,
     ideationBubbleUpdateTickRef,
-    llmIdeationKeywordBubbles,
-    localIdeationKeywordBubbles,
-    meetingId,
+    ideationKeywordBubbles,
   ]);
   const ideationBubbleVisualIdSignature = useMemo(
     () => ideationBubbleVisuals.map((bubble) => bubble.id).join("|"),
@@ -1408,104 +1218,6 @@ export default function MeetingCanvasTab({
     stage,
     buildContext: buildQuickAskContext,
   });
-  useEffect(() => {
-    latestIdeationKeywordUtteranceCountRef.current = ideationKeywordUtterances.length;
-    if (stage !== "ideation") {
-      setIdeationKeywordStatusMessage("");
-      return undefined;
-    }
-    if (!meetingId || ideationKeywordUtterances.length === 0) {
-      ideationKeywordProcessedIdsRef.current = new Set();
-      ideationKeywordBubbleStoreRef.current = [];
-      setLlmIdeationKeywordBubbles([]);
-      setIdeationKeywordStatusMessage("");
-      return undefined;
-    }
-
-    const knownIds = new Set(ideationKeywordUtterances.map((row) => row.id));
-    ideationKeywordProcessedIdsRef.current.forEach((id) => {
-      if (!knownIds.has(id)) {
-        ideationKeywordProcessedIdsRef.current.delete(id);
-      }
-    });
-
-    const pendingUtterances = ideationKeywordUtterances.filter((row) => !ideationKeywordProcessedIdsRef.current.has(row.id));
-    if (pendingUtterances.length === 0) {
-      setIdeationKeywordStatusMessage("");
-      return undefined;
-    }
-
-    if (ideationKeywordRequestInFlightRef.current) {
-      setIdeationKeywordStatusMessage("AI가 버블을 정리 중입니다.");
-      return undefined;
-    }
-
-    const runKeywordRequest = (reason: "batch" | "idle") => {
-      const requestUtterances =
-        reason === "batch"
-          ? pendingUtterances.slice(0, IDEATION_KEYWORD_BATCH_SIZE)
-          : pendingUtterances;
-      if (requestUtterances.length === 0) return;
-
-      const requestSeq = ideationKeywordRequestSeqRef.current + 1;
-      ideationKeywordRequestSeqRef.current = requestSeq;
-      ideationKeywordRequestInFlightRef.current = true;
-      setIdeationKeywordStatusMessage("AI가 버블을 정리 중입니다.");
-
-      void extractCanvasIdeationKeywords({
-        meeting_id: meetingId,
-        meeting_topic: meetingTopicForAi,
-        utterances: requestUtterances,
-        existing_keywords: buildExistingIdeationKeywordPayload(ideationKeywordBubbleStoreRef.current),
-        max_keywords: IDEATION_KEYWORD_MAX_KEYWORDS,
-      })
-        .then((result) => {
-          if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
-          const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || []);
-          requestUtterances.forEach((row) => ideationKeywordProcessedIdsRef.current.add(row.id));
-
-          if (nextBubbles.length > 0) {
-            const merged = mergeIdeationKeywordBubbleBatch(ideationKeywordBubbleStoreRef.current, nextBubbles);
-            ideationKeywordBubbleStoreRef.current = merged.allBubbles;
-            setLlmIdeationKeywordBubbles(merged.updatedBubbles);
-            setIdeationKeywordStatusMessage(
-              result.used_llm
-                ? `버블 ${merged.updatedBubbles.length}개를 업데이트했습니다.`
-                : `버블 후보 ${merged.updatedBubbles.length}개를 반영했습니다.`,
-            );
-            return;
-          }
-
-          setIdeationKeywordStatusMessage("이번 발화에서는 추가할 핵심 버블이 없었습니다.");
-        })
-        .catch((error) => {
-          if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
-          console.error("Failed to extract ideation keyword bubbles:", error);
-          setIdeationKeywordStatusMessage("기존 버블을 유지하고 다음 발화에서 다시 시도합니다.");
-        })
-        .finally(() => {
-          if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
-          ideationKeywordRequestInFlightRef.current = false;
-        });
-    };
-
-    if (pendingUtterances.length >= IDEATION_KEYWORD_BATCH_SIZE) {
-      runKeywordRequest("batch");
-      return undefined;
-    }
-
-    setIdeationKeywordStatusMessage(`버블 분석 대기 중 ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`);
-    const timer = window.setTimeout(() => {
-      runKeywordRequest("idle");
-    }, IDEATION_KEYWORD_IDLE_FLUSH_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [
-    ideationKeywordUtterances,
-    meetingId,
-    meetingTopicForAi,
-    stage,
-  ]);
   useEffect(() => {
     if (!selectedAgendaId && agendaModels[0]) {
       setSelectedAgendaId(agendaModels[0].id);

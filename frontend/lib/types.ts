@@ -563,6 +563,12 @@ export interface CanvasIdeationKeywordResponse {
   warning?: string;
   generated_at: string;
   source_signature: string;
+  merge_keywords?: Array<{
+    source: string;
+    target: string;
+    reason?: string;
+  }>;
+  remove_keywords?: string[];
   keywords: Array<{
     text: string;
     count: number;

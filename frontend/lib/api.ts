@@ -185,6 +185,13 @@ export async function extractCanvasIdeationKeywords(payload: {
     text: string;
     timestamp?: string;
   }>;
+  context_cache?: string;
+  context_utterances?: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
   existing_keywords?: Array<{
     text: string;
     count?: number;

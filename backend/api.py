@@ -2201,6 +2201,8 @@ class IdeationKeywordExtractInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
+    context_cache: str = Field(default="", max_length=20000)
+    context_utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     existing_keywords: list[IdeationExistingKeywordInput] = Field(default_factory=list, max_length=40)
     max_keywords: int = Field(default=18, ge=1, le=30)
 
@@ -5489,6 +5491,21 @@ def _ideation_keyword_rows(payload: IdeationKeywordExtractInput) -> list[dict[st
     return _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
 
 
+def _ideation_context_keyword_rows(payload: IdeationKeywordExtractInput) -> list[dict[str, str]]:
+    return _normalize_problem_taxonomy_utterance_rows(payload.context_utterances)[-180:]
+
+
+def _ideation_context_cache_text(payload: IdeationKeywordExtractInput) -> str:
+    cache = _safe_text(payload.context_cache)
+    if cache:
+        return _truncate_text(cache, 18000)
+    rows = _ideation_context_keyword_rows(payload)
+    return "\n".join(
+        f"{idx + 1}. {_safe_text(row.get('speaker'), '참가자')}: {_truncate_text(_strip_leading_timestamp(row.get('text')), 320)}"
+        for idx, row in enumerate(rows)
+    )
+
+
 def _ideation_existing_keyword_rows(payload: IdeationKeywordExtractInput) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in payload.existing_keywords or []:
@@ -5572,11 +5589,13 @@ def _build_local_ideation_keywords(rows: list[dict[str, str]], max_keywords: int
 
 def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput, rows: list[dict[str, str]]) -> str:
     existing_keywords = _ideation_existing_keyword_rows(payload)
+    context_cache = _ideation_context_cache_text(payload)
     input_payload = {
         "meeting_topic": _safe_text(payload.meeting_topic),
         "max_keywords": int(payload.max_keywords or 18),
+        "conversation_context_cache": context_cache,
         "existing_keywords": existing_keywords,
-        "utterances": [
+        "target_utterances": [
             {
                 "id": _safe_text(row.get("id")),
                 "speaker": _safe_text(row.get("speaker"), "참가자"),
@@ -5589,11 +5608,15 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
     return (
         "너는 아이디어 회의의 STT 전사에서 캔버스 버블로 보여줄 핵심 의미 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- 사람들이 지금 어떤 주제들을 말하고 있는지 보여줄 핵심 명사/고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
-        "- 반드시 실제 전사에 나온 내용에서만 뽑는다. 새 개념을 만들지 않는다.\n"
-        "- 동사, 형용사, 서술어, filler, 접속사, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
+        "- conversation_context_cache와 existing_keywords를 참고해 회의 흐름과 이미 잡힌 핵심어를 이해한다.\n"
+        "- 새로 반환할 keywords는 target_utterances에서 실제로 말한 핵심 명사/고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
+        "- 반드시 target_utterances에 나온 표현 또는 그 명사형 축약만 새 keywords로 뽑는다. 문맥 캐시에만 있고 target에는 없는 새 개념을 만들지 않는다.\n"
+        "- 동사, 형용사, 서술어, 문장, filler, 접속사, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
+        "- text는 반드시 명사, 고유명사, 또는 짧은 명사구여야 한다. '~하다', '~한다', '~해야', '~되는', '~보임' 같은 서술형/동사형은 금지한다.\n"
         "- 이번 batch 전체에서 반환할 버블은 1~3개만 고른다. 정말 핵심이 없을 때만 0개를 반환한다.\n"
         "- existing_keywords에 같은 의미, 동의어, 축약어, 상하위 표현이 있으면 새 버블을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- existing_keywords 안에서 중복/동의어/세부 표현이 따로 버블화되어 있으면 merge_keywords로 합병한다.\n"
+        "- existing_keywords 안에서 회의 흐름상 너무 범용적이거나 현재 의미 그래프를 흐리는 버블은 remove_keywords에 넣어 정리한다. 단, 한동안 언급이 적다는 이유만으로 핵심 주제를 지우지 않는다.\n"
         "- 기존 버블의 세부 표현에 불과한 문구는 기존 버블 count를 올리는 용도로 기존 text를 반환한다.\n"
         "- 정말 새로운 중심 개념이거나 기존 버블과 분리해서 보아야 할 관계/쟁점일 때만 새 text를 만든다.\n"
         "- 문장 안에서는 눈에 띄어도 meeting_topic과 최근 흐름에 약하면 relevance를 낮게 주거나 off_topic으로 표시한다.\n"
@@ -5603,6 +5626,8 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
         "{\n"
+        '  "merge_keywords": [{"source": "미중 갈등", "target": "갈등", "reason": "중복된 복합 표현을 관계 버블로 통합"}],\n'
+        '  "remove_keywords": ["잡담"],\n'
         '  "keywords": [\n'
         '    {"text": "미중", "count": 3, "kind": "entity", "importance": 0.95, "relevance": 0.98, "related": ["경쟁", "갈등"]},\n'
         '    {"text": "경쟁", "count": 2, "kind": "relation", "importance": 0.72, "relevance": 0.9, "anchor": "미중", "related": ["미중"]},\n'
@@ -5612,10 +5637,14 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         "[규칙]\n"
         f"- keywords는 최대 {int(payload.max_keywords or 18)}개.\n"
         "- 가능하면 existing_keywords의 text를 재사용한다. 재사용한 text는 기존 버블의 크기를 키우는 신호다.\n"
+        "- merge_keywords.source는 existing_keywords에 있는 text여야 한다. target은 existing_keywords 또는 이번 keywords에 있는 text여야 한다.\n"
+        "- remove_keywords에는 existing_keywords의 text만 넣는다. 이번 keywords나 merge target으로 반환한 text는 remove_keywords에 넣지 않는다.\n"
+        "- merge/remove는 확신이 높은 경우만 사용한다. 불확실하면 기존 버블을 유지한다.\n"
         "- 새 text는 이번 batch에서 정말 새 논점일 때만 만든다. 같은 의미의 중복 버블은 금지한다.\n"
         "- 3개를 초과해서 반환하지 않는다. 여러 표현이 있으면 중심 개념 1개와 관계 1~2개만 남긴다.\n"
-        "- count는 기존 count가 아니라 이번 입력 utterances에서 해당 의미가 나타난 발화 수다.\n"
-        "- text는 2~18자 정도의 명사 또는 짧은 명사구. 불필요하게 긴 문장은 금지한다.\n"
+        "- count는 기존 count가 아니라 target_utterances에서 해당 의미가 나타난 발화 수다.\n"
+        "- text는 2~18자 정도의 명사/고유명사/짧은 명사구만 허용한다. 문장, 서술어, 동사구, 형용사구는 금지한다.\n"
+        "- 좋은 text 예: '미중', '경쟁', '갈등', '방문 결과', '관세', '일정 조율'. 나쁜 text 예: '다른 양상을 보임', '해야 한다', '좋은 것 같다'.\n"
         "- count는 최소 1 이상.\n"
         "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
         "- importance는 회의 전체에서의 중요도, relevance는 현재 meeting_topic/최근 흐름과의 관련도이며 0~1 숫자다.\n"
@@ -5687,7 +5716,77 @@ def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]
         item["related"] = [value for value in item.get("related", []) if value in selected_texts and value != item["text"]]
         if item.get("anchor") not in selected_texts or item.get("anchor") == item["text"]:
             item["anchor"] = ""
-    return candidates or fallback
+    return candidates
+
+
+def _normalize_ideation_keyword_operations(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+    keywords: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[str]]:
+    if not isinstance(parsed, dict):
+        return [], []
+
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    keyword_texts = {_safe_text(item.get("text")) for item in keywords if _safe_text(item.get("text"))}
+    allowed_target_texts = existing_texts | keyword_texts
+
+    raw_merges = parsed.get("merge_keywords") or parsed.get("merges") or parsed.get("merge") or []
+    merge_keywords: list[dict[str, str]] = []
+    merge_sources: set[str] = set()
+    merge_targets: set[str] = set()
+    if isinstance(raw_merges, list):
+        for item in raw_merges:
+            if not isinstance(item, dict):
+                continue
+            source = _normalize_ideation_keyword_text(
+                item.get("source") or item.get("from") or item.get("source_text") or item.get("sourceText")
+            )
+            target = _normalize_ideation_keyword_text(
+                item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
+            )
+            if (
+                not source
+                or not target
+                or source == target
+                or source not in existing_texts
+                or target not in allowed_target_texts
+            ):
+                continue
+            merge_keywords.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "reason": _truncate_text(_safe_text(item.get("reason")), 120),
+                }
+            )
+            merge_sources.add(source)
+            merge_targets.add(target)
+            if len(merge_keywords) >= 8:
+                break
+
+    raw_removes = parsed.get("remove_keywords") or parsed.get("delete_keywords") or parsed.get("archive_keywords") or []
+    remove_keywords: list[str] = []
+    seen_removes: set[str] = set()
+    if isinstance(raw_removes, list):
+        for item in raw_removes:
+            raw_text = item.get("text") if isinstance(item, dict) else item
+            text = _normalize_ideation_keyword_text(raw_text)
+            if (
+                not text
+                or text not in existing_texts
+                or text in keyword_texts
+                or text in merge_targets
+                or text in merge_sources
+                or text in seen_removes
+            ):
+                continue
+            remove_keywords.append(text)
+            seen_removes.add(text)
+            if len(remove_keywords) >= 8:
+                break
+
+    return merge_keywords, remove_keywords
 
 
 def _summary_document_status_label(status: str) -> str:
@@ -11241,13 +11340,16 @@ def post_canvas_quick_ask(payload: CanvasQuickAskInput):
 def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
     rows = _ideation_keyword_rows(payload)
+    context_cache = _ideation_context_cache_text(payload)
+    existing_keyword_rows = _ideation_existing_keyword_rows(payload)
     max_keywords = int(payload.max_keywords or 18)
     signature = _canvas_llm_signature(
         {
-            "version": 2,
+            "version": 4,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "max_keywords": max_keywords,
-            "existing_keywords": _ideation_existing_keyword_rows(payload),
+            "existing_keywords": existing_keyword_rows,
+            "context_cache": context_cache,
             "rows": rows,
         }
     )
@@ -11257,6 +11359,8 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
         used_llm = False
         warning = ""
         keywords = fallback_keywords
+        merge_keywords: list[dict[str, str]] = []
+        remove_keywords: list[str] = []
 
         if not rows:
             return {
@@ -11265,6 +11369,8 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
                 "warning": "명사 버블을 추출할 아이디어 단계 발화가 없습니다.",
                 "generated_at": _now_ts(),
                 "source_signature": signature,
+                "merge_keywords": [],
+                "remove_keywords": [],
                 "keywords": [],
             }
 
@@ -11280,17 +11386,25 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
                     max_tokens=1400,
                 )
                 normalized_keywords = _normalize_ideation_keyword_items(parsed, fallback_keywords, max_keywords)
-                if normalized_keywords:
+                merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
+                    parsed,
+                    existing_keyword_rows,
+                    normalized_keywords,
+                )
+                if normalized_keywords or merge_keywords or remove_keywords:
                     keywords = normalized_keywords
                     used_llm = True
                     RT.last_llm_parsed_json = {
                         "stage": "canvas_ideation_keyword_extract",
                         "source_signature": signature,
+                        "merge_keywords": copy.deepcopy(merge_keywords),
+                        "remove_keywords": copy.deepcopy(remove_keywords),
                         "keywords": copy.deepcopy(keywords),
                     }
                     RT.last_llm_parsed_at = _now_ts()
                 else:
-                    warning = "LLM 명사 추출 결과가 비어 있어 로컬 버블을 사용했습니다."
+                    keywords = []
+                    warning = "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
             except Exception as exc:
                 warning = f"아이디어 명사 추출 LLM 실패: {exc}"
         else:
@@ -11302,6 +11416,8 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
             "warning": warning,
             "generated_at": _now_ts(),
             "source_signature": signature,
+            "merge_keywords": merge_keywords,
+            "remove_keywords": remove_keywords,
             "keywords": keywords,
         }
 
