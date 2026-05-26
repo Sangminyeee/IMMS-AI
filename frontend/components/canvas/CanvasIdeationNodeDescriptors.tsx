@@ -33,7 +33,6 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
             padding: 0,
             opacity: bubble.opacity ?? 1,
             transition: CANVAS_IDEATION_BUBBLE_TRANSITION,
-            willChange: "transform, opacity, width, height",
           },
           draggable: false,
           selectable: false,

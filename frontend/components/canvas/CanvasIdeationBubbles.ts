@@ -272,7 +272,7 @@ const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
 const CANVAS_IDEATION_BUBBLE_COLLISION_GAP = 0;
 const CANVAS_IDEATION_BUBBLE_COLLISION_ITERATIONS = 32;
 export const CANVAS_IDEATION_BUBBLE_TRANSITION =
-  "transform 560ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease, width 420ms ease, height 420ms ease";
+  "transform 560ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease";
 
 function stripKoreanKeywordSuffixes(token: string) {
   let normalized = token;
@@ -538,7 +538,7 @@ export function buildIdeationKeywordBubbles(transcripts: MeetingTranscript[], li
 function getIdeationKeywordBubbleSize(bubble: IdeationKeywordBubble, maxCount: number, growth = 1) {
   const countRatio = maxCount <= 1 ? 1 : bubble.count / maxCount;
   const emphasizedRatio = Math.pow(countRatio, 0.72);
-  return Math.round((58 + emphasizedRatio * 130) * growth);
+  return Math.round((72 + emphasizedRatio * 142) * growth);
 }
 
 function hashIdeationBubbleSeed(value: string) {

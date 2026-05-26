@@ -1,4 +1,4 @@
-export interface TranscriptUtterance {
+﻿export interface TranscriptUtterance {
   speaker: string;
   text: string;
   timestamp: string;
@@ -8,7 +8,6 @@ export interface AgendaItem {
   title: string;
   status: "PROPOSED" | "ACTIVE" | "CLOSING" | "CLOSED";
 }
-
 export interface LlmStatus {
   provider: string;
   model: string;
@@ -135,21 +134,6 @@ export interface MeetingState {
   analysis: AnalysisOutput | null;
 }
 
-export interface LastLlmJsonResponse {
-  ok: boolean;
-  received_at?: string;
-  has_json: boolean;
-  json: Record<string, unknown>;
-}
-
-export interface AgendaMarkdownExportResponse {
-  ok: boolean;
-  filename: string;
-  agenda_count: number;
-  transcript_count: number;
-  markdown: string;
-}
-
 export interface CanvasProblemDefinitionGroup {
   group_id: string;
   parent_group_id?: string;
@@ -197,14 +181,6 @@ export interface CanvasProblemDiscussionItem {
   created_at?: string;
 }
 
-export interface CanvasProblemDefinitionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  groups: CanvasProblemDefinitionGroup[];
-}
-
 export interface CanvasProblemTaxonomyResponse {
   ok: boolean;
   used_llm: boolean;
@@ -222,16 +198,6 @@ export interface CanvasPersonalNote {
   kind: string;
   title: string;
   body: string;
-}
-
-export interface CanvasProblemConclusionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  group_id: string;
-  insight_lens?: string;
-  conclusion: string;
 }
 
 export interface CanvasProblemGroupingRationaleResponse {
@@ -327,37 +293,6 @@ export interface CanvasIdeaAssimilationUtterance {
   speaker: string;
   text: string;
   timestamp: string;
-}
-
-export interface CanvasIdeaAssimilationIdea {
-  id: string;
-  title: string;
-  summary: string;
-  keywords: string[];
-  key_evidence?: string[];
-  refined_utterances?: CanvasRefinedUtterance[];
-  evidence_utterance_ids?: string[];
-  user_edited?: boolean;
-}
-
-export interface CanvasIdeaAssimilationUpdate {
-  action: "merge" | "create";
-  targetIdeaId?: string;
-  title: string;
-  summary: string;
-  keywords: string[];
-  keyEvidence: string[];
-  refinedUtterances?: CanvasRefinedUtterance[];
-  evidenceUtteranceIds: string[];
-  ignoredUtteranceIds: string[];
-}
-
-export interface CanvasIdeaAssimilationResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  updates: CanvasIdeaAssimilationUpdate[];
 }
 
 export interface CanvasCustomGroup {
@@ -640,35 +575,6 @@ export interface CanvasIdeationKeywordResponse {
     anchor?: string;
   }>;
 }
-
-export interface MeetingGoalSuggestionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  topic: string;
-  goal: string;
-  goals?: string[];
-}
-
-export interface CanvasPlacementConfirmResponse {
-  ok: boolean;
-  saved_at: string;
-  draft: {
-    tool: string;
-    ui_x: number;
-    ui_y: number;
-    flow_x: number;
-    flow_y: number;
-    agenda_id?: string;
-    point_id?: string;
-    title?: string;
-    body?: string;
-    saved_at: string;
-  };
-  state: MeetingState;
-}
-
 export interface CanvasSolutionTopicResponse {
   group_id: string;
   topic_no: number;
@@ -694,12 +600,4 @@ export interface CanvasSolutionTopicResponse {
     is_final_candidate?: boolean;
     final_comment?: string;
   }>;
-}
-
-export interface CanvasIdeationSuggestionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  suggestions: CanvasIdeationSuggestion[];
 }

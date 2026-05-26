@@ -115,7 +115,7 @@ import type {
   MeetingState,
   TranscriptUtterance,
 } from "@/lib/types";
-import type { LiveSpeechPreview, SttFlowSummaryItem } from "@/app/page";
+import type { LiveSpeechPreview } from "@/app/page";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export type MeetingTranscript = {
@@ -144,6 +144,10 @@ type LeftPanelTab = "detail";
 type ProblemGroupStatus = "draft" | "review" | "final";
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
+const IDEATION_KEYWORD_BATCH_SIZE = 2;
+const IDEATION_KEYWORD_IDLE_FLUSH_MS = 18_000;
+const IDEATION_KEYWORD_MAX_KEYWORDS = 3;
+const IDEATION_KEYWORD_MAX_NEW_BUBBLES_PER_BATCH = 3;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
 function clampNumber(value: number, min: number, max: number) {
@@ -261,7 +265,6 @@ type MeetingCanvasTabProps = {
   transcripts: MeetingTranscript[];
   agendas: MeetingAgenda[];
   analysisState: MeetingState | null;
-  onSyncFromMeeting: (analyze?: boolean) => Promise<MeetingState | null>;
   incomingSharedCanvasSync: CanvasRealtimeSyncPayload | null;
   onSharedCanvasSync: (payload: CanvasRealtimeSyncPayload) => void;
   incomingNodePreview: CanvasNodePreviewPayload | null;
@@ -269,15 +272,11 @@ type MeetingCanvasTabProps = {
   incomingEditPresence: CanvasEditPresencePayload | null;
   onEditPresenceSync: (payload: CanvasEditPresencePayload) => void;
   incomingCanvasStateRequestId: string;
-  syncStatusText: string;
-  autoSyncing: boolean;
   liveSpeechPreview: LiveSpeechPreview | null;
-  sttFlowSummaries?: SttFlowSummaryItem[];
   isRecording?: boolean;
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
   onStopRecording?: () => void | Promise<void>;
-  sttProgressText?: string;
   onCanvasStageContextChange?: (context: {
     stage: CanvasStage;
     targetId?: string;
@@ -392,16 +391,6 @@ function hydrateProblemGroups(
   });
 }
 
-function makeStableSignature(value: unknown) {
-  const text = JSON.stringify(value);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${text.length}:${(hash >>> 0).toString(36)}`;
-}
-
 function normalizeTranscriptRows(rows: MeetingTranscript[] | TranscriptUtterance[]) {
   return rows.map((row, index) => ({
     id: "id" in row ? row.id : `${row.timestamp || "turn"}-${index}`,
@@ -491,6 +480,84 @@ function normalizeIdeationKeywordBubblesFromResponse(
     offTopic: keyword.offTopic,
     offTopicReason: keyword.offTopicReason,
     anchorText: selectedTexts.has(keyword.anchorText) && keyword.anchorText !== keyword.text ? keyword.anchorText : "",
+  }));
+}
+
+function mergeIdeationKeywordBubbleBatch(
+  currentBubbles: IdeationKeywordBubble[],
+  incomingBubbles: IdeationKeywordBubble[],
+) {
+  if (incomingBubbles.length === 0) {
+    return {
+      allBubbles: currentBubbles,
+      updatedBubbles: [],
+    };
+  }
+
+  const mergedByText = new Map(currentBubbles.map((bubble) => [bubble.text.trim().toLowerCase(), bubble] as const));
+  const updatedTextKeys = new Set<string>();
+  let newBubbleCount = 0;
+
+  const rankedIncoming = [...incomingBubbles].sort(
+    (left, right) =>
+      Number(right.importance || 0) - Number(left.importance || 0) ||
+      right.count - left.count ||
+      left.text.localeCompare(right.text),
+  );
+
+  rankedIncoming.forEach((incoming) => {
+    const text = incoming.text.trim();
+    if (!text) return;
+    const textKey = text.toLowerCase();
+    const existing = mergedByText.get(textKey);
+    if (!existing && newBubbleCount >= IDEATION_KEYWORD_MAX_NEW_BUBBLES_PER_BATCH) return;
+    if (!existing) newBubbleCount += 1;
+    const related = Array.from(new Set([...(existing?.related || []), ...(incoming.related || [])]))
+      .filter((item) => item && item !== text)
+      .slice(0, 8);
+
+    mergedByText.set(textKey, {
+      ...(existing || incoming),
+      ...incoming,
+      id: existing?.id || incoming.id,
+      text: existing?.text || incoming.text,
+      count: Math.max(1, Number(existing?.count || 0)) + Math.max(1, Number(incoming.count || 1)),
+      related,
+      kind: incoming.kind || existing?.kind,
+      importance: Math.max(Number(existing?.importance || 0), Number(incoming.importance || 0)),
+      relevance: Math.max(Number(existing?.relevance || 0), Number(incoming.relevance || 0)),
+      offTopic: Boolean(existing?.offTopic || incoming.offTopic),
+      offTopicReason: incoming.offTopicReason || existing?.offTopicReason || "",
+      anchorText: incoming.anchorText || existing?.anchorText || "",
+    });
+    updatedTextKeys.add(textKey);
+  });
+
+  const allBubbles = [...mergedByText.values()];
+  const maxCount = Math.max(1, ...allBubbles.map((bubble) => bubble.count));
+  const normalizedBubbles = allBubbles
+    .map((bubble) => ({
+      ...bubble,
+      weight: bubble.count / maxCount,
+    }))
+    .sort((left, right) => right.count - left.count || left.text.localeCompare(right.text));
+
+  return {
+    allBubbles: normalizedBubbles,
+    updatedBubbles: normalizedBubbles.filter((bubble) => updatedTextKeys.has(bubble.text.trim().toLowerCase())),
+  };
+}
+
+function buildExistingIdeationKeywordPayload(bubbles: IdeationKeywordBubble[]) {
+  return bubbles.slice(0, 24).map((bubble) => ({
+    text: bubble.text,
+    count: bubble.count,
+    related: bubble.related.slice(0, 6),
+    kind: bubble.kind,
+    importance: bubble.importance,
+    relevance: bubble.relevance,
+    off_topic: bubble.offTopic,
+    anchor: bubble.anchorText,
   }));
 }
 
@@ -806,7 +873,7 @@ export default function MeetingCanvasTab({
   const [summaryDocumentDraftDirty, setSummaryDocumentDraftDirty] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
   const [llmIdeationKeywordBubbles, setLlmIdeationKeywordBubbles] = useState<IdeationKeywordBubble[]>([]);
-  const [llmIdeationKeywordSignature, setLlmIdeationKeywordSignature] = useState("");
+  const [ideationKeywordStatusMessage, setIdeationKeywordStatusMessage] = useState("");
   const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
   const [ideationBubbleDebugEnabled, setIdeationBubbleDebugEnabled] = useState(false);
   const [ideationBubbleDebugGrowthById, setIdeationBubbleDebugGrowthById] = useState<Record<string, number>>({});
@@ -995,6 +1062,10 @@ export default function MeetingCanvasTab({
   const problemDiscussionInFlightRef = useRef(false);
   const problemStructureRequestSeqRef = useRef(0);
   const ideationKeywordRequestSeqRef = useRef(0);
+  const ideationKeywordProcessedIdsRef = useRef<Set<string>>(new Set());
+  const ideationKeywordRequestInFlightRef = useRef(false);
+  const ideationKeywordBubbleStoreRef = useRef<IdeationKeywordBubble[]>([]);
+  const latestIdeationKeywordUtteranceCountRef = useRef(0);
   const latestSharedWorkspaceRef = useRef<{
     meetingGoal: string;
     meetingGoalContext: string;
@@ -1138,54 +1209,37 @@ export default function MeetingCanvasTab({
   const meetingTopicForAi = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim() || "회의 주제";
   const ideationKeywordUtterances = useMemo(() => buildIdeationKeywordUtterances(transcripts), [transcripts]);
   const localIdeationKeywordBubbles = useMemo(() => buildIdeationKeywordBubbles(transcripts), [transcripts]);
-  const ideationKeywordSourceSignature = useMemo(
-    () =>
-      makeStableSignature({
-        version: 2,
-        meetingTopic: meetingTopicForAi,
-        utterances: ideationKeywordUtterances.map((row) => ({
-          id: row.id,
-          text: row.text,
-        })),
-      }),
-    [ideationKeywordUtterances, meetingTopicForAi],
-  );
-  const activeIdeationKeywordBubbles = useMemo(() => {
-    if (
-      llmIdeationKeywordSignature === ideationKeywordSourceSignature &&
-      llmIdeationKeywordBubbles.length > 0
-    ) {
-      return llmIdeationKeywordBubbles;
-    }
-    if (!meetingId) {
-      return localIdeationKeywordBubbles;
-    }
-    return [];
-  }, [
-    ideationKeywordSourceSignature,
-    llmIdeationKeywordBubbles,
-    llmIdeationKeywordSignature,
-    localIdeationKeywordBubbles,
-    meetingId,
-  ]);
   useEffect(() => {
     ideationBubbleUpdateTickRef.current = 0;
+    ideationKeywordProcessedIdsRef.current = new Set();
+    ideationKeywordRequestInFlightRef.current = false;
+    ideationKeywordBubbleStoreRef.current = [];
+    latestIdeationKeywordUtteranceCountRef.current = 0;
+    setLlmIdeationKeywordBubbles([]);
     setIdeationBubbleVisuals([]);
     setIdeationBubbleDebugGrowthById({});
+    setIdeationKeywordStatusMessage("");
   }, [ideationBubbleUpdateTickRef, meetingId]);
   useEffect(() => {
-    if (activeIdeationKeywordBubbles.length === 0) return;
+    const incomingBubbles = meetingId ? llmIdeationKeywordBubbles : localIdeationKeywordBubbles;
+    if (incomingBubbles.length === 0) return;
     const tick = ideationBubbleUpdateTickRef.current + 1;
     ideationBubbleUpdateTickRef.current = tick;
     setIdeationBubbleVisuals((current) =>
       buildStableIdeationBubbleVisuals(
         current,
-        activeIdeationKeywordBubbles,
+        incomingBubbles,
         ideationBubbleDebugGrowthById,
         tick,
       ),
     );
-  }, [activeIdeationKeywordBubbles, ideationBubbleDebugGrowthById, ideationBubbleUpdateTickRef]);
+  }, [
+    ideationBubbleDebugGrowthById,
+    ideationBubbleUpdateTickRef,
+    llmIdeationKeywordBubbles,
+    localIdeationKeywordBubbles,
+    meetingId,
+  ]);
   const ideationBubbleVisualIdSignature = useMemo(
     () => ideationBubbleVisuals.map((bubble) => bubble.id).join("|"),
     [ideationBubbleVisuals],
@@ -1355,45 +1409,99 @@ export default function MeetingCanvasTab({
     buildContext: buildQuickAskContext,
   });
   useEffect(() => {
-    if (stage !== "ideation") return;
-    if (!meetingId || ideationKeywordUtterances.length === 0) {
-      setLlmIdeationKeywordBubbles([]);
-      setLlmIdeationKeywordSignature("");
-      return;
+    latestIdeationKeywordUtteranceCountRef.current = ideationKeywordUtterances.length;
+    if (stage !== "ideation") {
+      setIdeationKeywordStatusMessage("");
+      return undefined;
     }
-    if (llmIdeationKeywordSignature === ideationKeywordSourceSignature) return;
+    if (!meetingId || ideationKeywordUtterances.length === 0) {
+      ideationKeywordProcessedIdsRef.current = new Set();
+      ideationKeywordBubbleStoreRef.current = [];
+      setLlmIdeationKeywordBubbles([]);
+      setIdeationKeywordStatusMessage("");
+      return undefined;
+    }
 
-    const requestSeq = ideationKeywordRequestSeqRef.current + 1;
-    ideationKeywordRequestSeqRef.current = requestSeq;
-    const timer = window.setTimeout(() => {
+    const knownIds = new Set(ideationKeywordUtterances.map((row) => row.id));
+    ideationKeywordProcessedIdsRef.current.forEach((id) => {
+      if (!knownIds.has(id)) {
+        ideationKeywordProcessedIdsRef.current.delete(id);
+      }
+    });
+
+    const pendingUtterances = ideationKeywordUtterances.filter((row) => !ideationKeywordProcessedIdsRef.current.has(row.id));
+    if (pendingUtterances.length === 0) {
+      setIdeationKeywordStatusMessage("");
+      return undefined;
+    }
+
+    if (ideationKeywordRequestInFlightRef.current) {
+      setIdeationKeywordStatusMessage("AI가 버블을 정리 중입니다.");
+      return undefined;
+    }
+
+    const runKeywordRequest = (reason: "batch" | "idle") => {
+      const requestUtterances =
+        reason === "batch"
+          ? pendingUtterances.slice(0, IDEATION_KEYWORD_BATCH_SIZE)
+          : pendingUtterances;
+      if (requestUtterances.length === 0) return;
+
+      const requestSeq = ideationKeywordRequestSeqRef.current + 1;
+      ideationKeywordRequestSeqRef.current = requestSeq;
+      ideationKeywordRequestInFlightRef.current = true;
+      setIdeationKeywordStatusMessage("AI가 버블을 정리 중입니다.");
+
       void extractCanvasIdeationKeywords({
         meeting_id: meetingId,
         meeting_topic: meetingTopicForAi,
-        utterances: ideationKeywordUtterances,
-        max_keywords: 12,
+        utterances: requestUtterances,
+        existing_keywords: buildExistingIdeationKeywordPayload(ideationKeywordBubbleStoreRef.current),
+        max_keywords: IDEATION_KEYWORD_MAX_KEYWORDS,
       })
         .then((result) => {
           if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
-          if (!result.used_llm) {
-            setLlmIdeationKeywordBubbles([]);
-            setLlmIdeationKeywordSignature(ideationKeywordSourceSignature);
+          const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || []);
+          requestUtterances.forEach((row) => ideationKeywordProcessedIdsRef.current.add(row.id));
+
+          if (nextBubbles.length > 0) {
+            const merged = mergeIdeationKeywordBubbleBatch(ideationKeywordBubbleStoreRef.current, nextBubbles);
+            ideationKeywordBubbleStoreRef.current = merged.allBubbles;
+            setLlmIdeationKeywordBubbles(merged.updatedBubbles);
+            setIdeationKeywordStatusMessage(
+              result.used_llm
+                ? `버블 ${merged.updatedBubbles.length}개를 업데이트했습니다.`
+                : `버블 후보 ${merged.updatedBubbles.length}개를 반영했습니다.`,
+            );
             return;
           }
-          const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || []);
-          setLlmIdeationKeywordBubbles(nextBubbles);
-          setLlmIdeationKeywordSignature(ideationKeywordSourceSignature);
+
+          setIdeationKeywordStatusMessage("이번 발화에서는 추가할 핵심 버블이 없었습니다.");
         })
         .catch((error) => {
           if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
           console.error("Failed to extract ideation keyword bubbles:", error);
+          setIdeationKeywordStatusMessage("기존 버블을 유지하고 다음 발화에서 다시 시도합니다.");
+        })
+        .finally(() => {
+          if (ideationKeywordRequestSeqRef.current !== requestSeq) return;
+          ideationKeywordRequestInFlightRef.current = false;
         });
-    }, 6500);
+    };
+
+    if (pendingUtterances.length >= IDEATION_KEYWORD_BATCH_SIZE) {
+      runKeywordRequest("batch");
+      return undefined;
+    }
+
+    setIdeationKeywordStatusMessage(`버블 분석 대기 중 ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`);
+    const timer = window.setTimeout(() => {
+      runKeywordRequest("idle");
+    }, IDEATION_KEYWORD_IDLE_FLUSH_MS);
 
     return () => window.clearTimeout(timer);
   }, [
-    ideationKeywordSourceSignature,
     ideationKeywordUtterances,
-    llmIdeationKeywordSignature,
     meetingId,
     meetingTopicForAi,
     stage,
@@ -2860,7 +2968,7 @@ export default function MeetingCanvasTab({
     await handleSaveAndEndMeeting(finalSummarySnapshot);
   };
 
-  const rawCanvasStatusMessage = activityMessage || recordingStatusText;
+  const rawCanvasStatusMessage = activityMessage || ideationKeywordStatusMessage || recordingStatusText;
   const canvasStatusMessage = shouldHideCanvasStatusMessage(rawCanvasStatusMessage) ? "" : rawCanvasStatusMessage;
   const activeProblemGroupingRationale = problemGroupingRationaleOpenGroupId
     ? problemGroupingRationaleById[problemGroupingRationaleOpenGroupId] || null

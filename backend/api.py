@@ -1964,20 +1964,6 @@ class ReplayStepInput(BaseModel):
     auto_analyze: bool = True
 
 
-class TranscriptSyncItemInput(BaseModel):
-    speaker: str = "화자"
-    text: str
-    timestamp: str | None = None
-
-
-class TranscriptSyncInput(BaseModel):
-    meeting_goal: str = ""
-    window_size: int = Field(default=12, ge=4, le=80)
-    reset_state: bool = True
-    auto_analyze: bool = True
-    transcript: list[TranscriptSyncItemInput] = Field(default_factory=list)
-
-
 class SttFlowSummaryTurnInput(BaseModel):
     speaker: str = "화자"
     text: str = ""
@@ -2200,11 +2186,23 @@ class CanvasQuickAskInput(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class IdeationExistingKeywordInput(BaseModel):
+    text: str = ""
+    count: int = 1
+    related: list[str] = Field(default_factory=list)
+    kind: str = "topic"
+    importance: float = 0.65
+    relevance: float = 1.0
+    off_topic: bool = False
+    anchor: str = ""
+
+
 class IdeationKeywordExtractInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
-    max_keywords: int = Field(default=18, ge=4, le=30)
+    existing_keywords: list[IdeationExistingKeywordInput] = Field(default_factory=list, max_length=40)
+    max_keywords: int = Field(default=18, ge=1, le=30)
 
 
 class IdeationSuggestionTopicInput(BaseModel):
@@ -5491,6 +5489,37 @@ def _ideation_keyword_rows(payload: IdeationKeywordExtractInput) -> list[dict[st
     return _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
 
 
+def _ideation_existing_keyword_rows(payload: IdeationKeywordExtractInput) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in payload.existing_keywords or []:
+        text = _normalize_ideation_keyword_text(item.text)
+        if not text:
+            continue
+        kind = _safe_text(item.kind, "topic").lower()
+        rows.append(
+            {
+                "text": text,
+                "count": max(1, _safe_nonnegative_int(item.count, 1) or 1),
+                "kind": kind if kind in {"entity", "topic", "relation", "action", "off_topic"} else "topic",
+                "importance": max(0, min(1, _safe_float(item.importance, 0.65))),
+                "relevance": max(0, min(1, _safe_float(item.relevance, 1))),
+                "off_topic": bool(item.off_topic),
+                "anchor": _normalize_ideation_keyword_text(item.anchor),
+                "related": _dedup_preserve(
+                    [
+                        _normalize_ideation_keyword_text(value)
+                        for value in (item.related or [])
+                        if _normalize_ideation_keyword_text(value)
+                    ],
+                    limit=6,
+                ),
+            }
+        )
+        if len(rows) >= 30:
+            break
+    return rows
+
+
 def _build_local_ideation_keywords(rows: list[dict[str, str]], max_keywords: int) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     first_seen: dict[str, int] = {}
@@ -5542,9 +5571,11 @@ def _build_local_ideation_keywords(rows: list[dict[str, str]], max_keywords: int
 
 
 def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput, rows: list[dict[str, str]]) -> str:
+    existing_keywords = _ideation_existing_keyword_rows(payload)
     input_payload = {
         "meeting_topic": _safe_text(payload.meeting_topic),
         "max_keywords": int(payload.max_keywords or 18),
+        "existing_keywords": existing_keywords,
         "utterances": [
             {
                 "id": _safe_text(row.get("id")),
@@ -5558,13 +5589,16 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
     return (
         "너는 아이디어 회의의 STT 전사에서 캔버스 버블로 보여줄 핵심 의미 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- 사람들이 지금 어떤 주제들을 말하고 있는지 보여줄 핵심 명사/고유명사/짧은 명사구만 추출한다.\n"
+        "- 사람들이 지금 어떤 주제들을 말하고 있는지 보여줄 핵심 명사/고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
         "- 반드시 실제 전사에 나온 내용에서만 뽑는다. 새 개념을 만들지 않는다.\n"
         "- 동사, 형용사, 서술어, filler, 접속사, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
-        "- 한 발화에서 보통 1~3개만 고른다. 정말 핵심 개념이 많을 때만 더 고른다.\n"
+        "- 이번 batch 전체에서 반환할 버블은 1~3개만 고른다. 정말 핵심이 없을 때만 0개를 반환한다.\n"
+        "- existing_keywords에 같은 의미, 동의어, 축약어, 상하위 표현이 있으면 새 버블을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- 기존 버블의 세부 표현에 불과한 문구는 기존 버블 count를 올리는 용도로 기존 text를 반환한다.\n"
+        "- 정말 새로운 중심 개념이거나 기존 버블과 분리해서 보아야 할 관계/쟁점일 때만 새 text를 만든다.\n"
         "- 문장 안에서는 눈에 띄어도 meeting_topic과 최근 흐름에 약하면 relevance를 낮게 주거나 off_topic으로 표시한다.\n"
         "- 같은 문장이나 가까운 발화에서 함께 나온 명사는 related에 서로 연결한다.\n"
-        "- '미중 갈등', '미중 경쟁'처럼 복합 표현은 anchor='미중', related=['갈등','경쟁']처럼 중심 개체와 관계 단어가 붙도록 설계한다.\n\n"
+        "- '미중 갈등', '미중 경쟁'처럼 복합 표현은 '미중'이 기존에 있으면 text='미중'으로 흡수하거나, 관계 자체가 핵심이면 text='갈등'/'경쟁', anchor='미중'처럼 분리한다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
@@ -5577,8 +5611,12 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         "}\n\n"
         "[규칙]\n"
         f"- keywords는 최대 {int(payload.max_keywords or 18)}개.\n"
+        "- 가능하면 existing_keywords의 text를 재사용한다. 재사용한 text는 기존 버블의 크기를 키우는 신호다.\n"
+        "- 새 text는 이번 batch에서 정말 새 논점일 때만 만든다. 같은 의미의 중복 버블은 금지한다.\n"
+        "- 3개를 초과해서 반환하지 않는다. 여러 표현이 있으면 중심 개념 1개와 관계 1~2개만 남긴다.\n"
+        "- count는 기존 count가 아니라 이번 입력 utterances에서 해당 의미가 나타난 발화 수다.\n"
         "- text는 2~18자 정도의 명사 또는 짧은 명사구. 불필요하게 긴 문장은 금지한다.\n"
-        "- count는 해당 명사/동의 표현이 등장한 발화 수에 가깝게 추정한다. 최소 1 이상.\n"
+        "- count는 최소 1 이상.\n"
         "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
         "- importance는 회의 전체에서의 중요도, relevance는 현재 meeting_topic/최근 흐름과의 관련도이며 0~1 숫자다.\n"
         "- off_topic은 딴소리/논점 이탈일 때만 true로 둔다. 단순히 중요도가 낮다는 이유만으로 true로 두지 않는다.\n"
@@ -8344,11 +8382,14 @@ async def _collect_rows_from_uploads(files: list[UploadFile]) -> dict[str, Any]:
 
 
 def _load_whisper_model():
+    print(f"[STT][backend] loading whisper model name={WHISPER_MODEL_NAME}", flush=True)
     try:
         import whisper
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("whisper 패키지가 없습니다. `pip install openai-whisper` 후 다시 실행하세요.") from exc
-    return whisper.load_model(WHISPER_MODEL_NAME)
+    model = whisper.load_model(WHISPER_MODEL_NAME)
+    print(f"[STT][backend] whisper model loaded name={WHISPER_MODEL_NAME}", flush=True)
+    return model
 
 
 _WHISPER_MODEL = None
@@ -8364,6 +8405,11 @@ def _get_whisper_model():
 
 
 def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -> str:
+    print(
+        f"[STT][backend] transcribe function enter bytes={len(data)} suffix={suffix} "
+        f"meeting_goal={bool(_safe_text(meeting_goal))}",
+        flush=True,
+    )
     model = _get_whisper_model()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(data)
@@ -8379,7 +8425,16 @@ def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -
             kwargs["fp16"] = bool(torch.cuda.is_available())
         except Exception:
             kwargs["fp16"] = False
+        print(
+            f"[STT][backend] whisper.transcribe start path={tmp_path} "
+            f"fp16={kwargs.get('fp16')} prompt={bool(kwargs.get('initial_prompt'))}",
+            flush=True,
+        )
         result = model.transcribe(tmp_path, **kwargs)
+        print(
+            f"[STT][backend] whisper.transcribe done chars={len(_safe_text((result or {}).get('text')))}",
+            flush=True,
+        )
         return _safe_text((result or {}).get("text"))
     finally:
         try:
@@ -8594,17 +8649,6 @@ def get_health():
     }
 
 
-@app.get("/api/state")
-def get_state():
-    with RT.lock:
-        return _state_response(RT)
-
-
-@app.get("/api/llm/status")
-def get_llm_status():
-    return get_client().status()
-
-
 @app.post("/api/llm/connect")
 def post_llm_connect():
     with RT.lock:
@@ -8646,56 +8690,6 @@ def post_llm_ping():
     client = get_client()
     result = client.ping()
     return {"result": result, "llm_status": client.status()}
-
-
-@app.post("/api/config")
-def post_config(payload: ConfigInput):
-    with RT.lock:
-        RT.meeting_goal = _safe_text(payload.meeting_goal)
-        RT.window_size = int(payload.window_size)
-        return _state_response(RT)
-
-
-@app.post("/api/transcript/manual")
-def post_transcript_manual(payload: UtteranceInput):
-    with RT.lock:
-        _append_turn(RT, payload.speaker, payload.text, payload.timestamp)
-        _enqueue_windowed_with_backpressure(RT, source="manual_turn")
-        return _state_response(RT)
-
-
-@app.post("/api/transcript/sync")
-def post_transcript_sync(payload: TranscriptSyncInput):
-    with RT.lock:
-        if payload.reset_state:
-            RT.reset()
-
-        RT.meeting_goal = _safe_text(payload.meeting_goal)
-        RT.window_size = int(payload.window_size)
-        RT.transcript = []
-        for row in payload.transcript:
-            text = _safe_text(row.text)
-            if not text:
-                continue
-            RT.transcript.append(
-                {
-                    "speaker": _safe_text(row.speaker, "화자"),
-                    "text": text,
-                    "timestamp": _safe_text(row.timestamp, _now_ts()),
-                }
-            )
-
-        RT.transcript_version += 1
-        RT.last_analyzed_count = 0 if payload.auto_analyze else len(RT.transcript)
-        RT.last_analysis_warning = "meeting_transcript_sync"
-        RT.analysis_next_windowed_target = SUMMARY_INTERVAL
-
-        if payload.auto_analyze and RT.transcript:
-            ok = _run_analysis(RT, force=True, mode="full_document")
-            if not ok:
-                RT.last_analysis_warning = "meeting_sync_analyze_failed"
-
-    return _state_response(RT)
 
 
 @app.post("/api/stt/flow-summary")
@@ -8945,68 +8939,6 @@ def post_replay_step(payload: ReplayStepInput):
                 "warning": "",
             },
         }
-
-
-@app.post("/api/analysis/tick")
-def post_analysis_tick():
-    with RT.lock:
-        ok, _, err = _enqueue_analysis(RT, force=True, mode="full_document", source="manual_tick")
-        if not ok:
-            RT.analysis_last_error = _safe_text(err)
-            RT.last_analysis_warning = f"분석 요청 큐 적재 실패: {err}"
-        return _state_response(RT)
-
-
-@app.post("/api/canvas/placement-confirm")
-def post_canvas_placement_confirm(payload: CanvasPlacementConfirmInput):
-    with RT.lock:
-        saved_at = _now_ts()
-        RT.canvas_last_placement = {
-            "tool": _safe_text(payload.tool, "note"),
-            "ui_x": float(payload.ui_x or 0.0),
-            "ui_y": float(payload.ui_y or 0.0),
-            "flow_x": float(payload.flow_x or 0.0),
-            "flow_y": float(payload.flow_y or 0.0),
-            "agenda_id": _safe_text(payload.agenda_id),
-            "point_id": _safe_text(payload.point_id),
-            "title": _safe_text(payload.title),
-            "body": _safe_text(payload.body),
-            "saved_at": saved_at,
-        }
-        return {
-            "ok": True,
-            "saved_at": saved_at,
-            "draft": copy.deepcopy(RT.canvas_last_placement),
-            "state": _state_response(RT),
-        }
-
-
-@app.get("/api/analysis/last-llm-json")
-def get_last_llm_json():
-    with RT.lock:
-        return {
-            "ok": True,
-            "received_at": _safe_text(RT.last_llm_parsed_at),
-            "has_json": bool(RT.last_llm_parsed_json),
-            "json": RT.last_llm_parsed_json if isinstance(RT.last_llm_parsed_json, dict) else {},
-        }
-
-
-@app.post("/api/canvas/idea-assimilation")
-def post_canvas_idea_assimilation(payload: CanvasIdeaAssimilationInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    signature = _canvas_llm_signature(payload)
-
-    def _compute() -> dict[str, Any]:
-        return _compute_idea_assimilation_result(payload)
-
-    return _run_canvas_llm_cached_request(
-        RT,
-        normalized_meeting_id,
-        "idea_assimilation",
-        signature,
-        _compute,
-    )
 
 
 def _canvas_idea_processed_ids(workspace: dict[str, Any]) -> set[str]:
@@ -10577,287 +10509,6 @@ def _finalize_canvas_idea_workspace_job(
         )
 
 
-@app.post("/api/canvas/idea-assimilation-workspace/start")
-def post_canvas_idea_assimilation_workspace_start(payload: CanvasIdeaAssimilationWorkspaceStartInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    if not normalized_meeting_id:
-        raise HTTPException(status_code=400, detail="meeting_id is required")
-
-    with RT.lock:
-        meeting_jobs = RT.canvas_idea_jobs_by_meeting.setdefault(normalized_meeting_id, {})
-        running_job = next(
-            (
-                copy.deepcopy(job)
-                for job in meeting_jobs.values()
-                if isinstance(job, dict) and _safe_text(job.get("status")) == "processing"
-            ),
-            None,
-        )
-    if running_job:
-        workspace = running_job.get("workspace") if isinstance(running_job.get("workspace"), dict) else _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-        return _canvas_idea_job_response(running_job, workspace)
-
-    workspace = _clone_runtime_workspace_state(
-        normalized_meeting_id,
-        _warm_canvas_workspace_cache(RT, normalized_meeting_id),
-        _now_ts(),
-    )
-    processed_ids = _canvas_idea_processed_ids(workspace)
-    now_epoch = time.time()
-    cooling_failed_ids: set[str] = set()
-    with RT.lock:
-        meeting_jobs = RT.canvas_idea_jobs_by_meeting.setdefault(normalized_meeting_id, {})
-        for job in meeting_jobs.values():
-            if not isinstance(job, dict) or _safe_text(job.get("status")) != "error":
-                continue
-            failed_at = float(job.get("failed_at_epoch") or 0)
-            if now_epoch - failed_at >= CANVAS_IDEA_FAILURE_RETRY_DELAY_SECONDS:
-                continue
-            cooling_failed_ids.update(
-                _safe_text(item)
-                for item in _safe_text(job.get("target_signature")).split("|")
-                if _safe_text(item)
-            )
-    target_rows = [
-        item
-        for item in (payload.target_utterances or [])
-        if _safe_text(item.id)
-        and _safe_text(item.text)
-        and _safe_text(item.id) not in processed_ids
-        and _safe_text(item.id) not in cooling_failed_ids
-    ]
-    target_text_length = sum(len(_strip_leading_timestamp(_safe_text(item.text))) for item in target_rows)
-    if not target_rows or target_text_length < 40:
-        cooling_count = len(cooling_failed_ids)
-        wait_seconds = 0
-        if cooling_count > 0:
-            with RT.lock:
-                active_failed_at = [
-                    float(job.get("failed_at_epoch") or 0)
-                    for job in RT.canvas_idea_jobs_by_meeting.get(normalized_meeting_id, {}).values()
-                    if isinstance(job, dict)
-                    and _safe_text(job.get("status")) == "error"
-                    and now_epoch - float(job.get("failed_at_epoch") or 0) < CANVAS_IDEA_FAILURE_RETRY_DELAY_SECONDS
-                ]
-            if active_failed_at:
-                wait_seconds = max(
-                    1,
-                    int(CANVAS_IDEA_FAILURE_RETRY_DELAY_SECONDS - (now_epoch - max(active_failed_at))),
-                )
-        job = {
-            "job_id": "",
-            "meeting_id": normalized_meeting_id,
-            "status": "idle",
-            "detail": (
-                f"이전 LLM 실패 발화 재요청 대기 중 · {wait_seconds}초"
-                if wait_seconds > 0 and not target_rows
-                else f"아이디어 정리 대기 중 · {len(target_rows)}개 발화"
-            ),
-            "target_count": len(target_rows),
-            "updated_at": _now_ts(),
-        }
-        return _canvas_idea_job_response(job, workspace)
-
-    target_signature = "|".join([_safe_text(item.id) for item in target_rows if _safe_text(item.id)])
-    with RT.lock:
-        meeting_jobs = RT.canvas_idea_jobs_by_meeting.setdefault(normalized_meeting_id, {})
-        failed_same_target_jobs = [
-            copy.deepcopy(job)
-            for job in meeting_jobs.values()
-            if isinstance(job, dict)
-            and _safe_text(job.get("status")) == "error"
-            and _safe_text(job.get("target_signature")) == target_signature
-        ]
-    if failed_same_target_jobs:
-        latest_failed_job = max(
-            failed_same_target_jobs,
-            key=lambda job: float(job.get("failed_at_epoch") or 0),
-        )
-        retry_after = CANVAS_IDEA_FAILURE_RETRY_DELAY_SECONDS - (
-            now_epoch - float(latest_failed_job.get("failed_at_epoch") or 0)
-        )
-        if retry_after > 0:
-            retry_seconds = max(1, int(retry_after))
-            job = {
-                "job_id": _safe_text(latest_failed_job.get("job_id")),
-                "meeting_id": normalized_meeting_id,
-                "status": "error",
-                "detail": f"이전 LLM 실패로 같은 발화 재요청 대기 중 · {retry_seconds}초",
-                "warning": _safe_text(latest_failed_job.get("warning") or latest_failed_job.get("detail")),
-                "target_count": len(target_rows),
-                "target_signature": target_signature,
-                "updated_at": _now_ts(),
-            }
-            return _canvas_idea_job_response(job, workspace)
-
-    job_id = uuid4().hex
-    pending_item_id = f"ai-idea-pending-{job_id[:10]}"
-    canvas_items = [
-        copy.deepcopy(item)
-        for item in (workspace.get("canvas_items") or [])
-        if isinstance(item, dict)
-    ]
-    pending_item = {
-        "id": pending_item_id,
-        "agenda_id": _safe_text(payload.selected_agenda_id),
-        "point_id": "",
-        "kind": "note",
-        "title": "AI 정리 중",
-        "body": "",
-        "keywords": [],
-        "key_evidence": [],
-        "refined_utterances": [],
-        "evidence_utterance_ids": [_safe_text(item.id) for item in target_rows if _safe_text(item.id)][:400],
-        "ignored_utterance_ids": [],
-        "merged_children": [],
-        "compacted_from_ids": [],
-        "compaction_level": 0,
-        "parent_topic_id": "",
-        "parent_topic_source": "",
-        "parent_topic_locked": False,
-        "child_item_ids": [],
-        "topic_collapsed": False,
-        "created_by": "ai",
-        "manual_position": False,
-        "ai_generated": True,
-        "user_edited": False,
-        "ai_pending": True,
-    }
-    workspace["canvas_items"] = [*canvas_items, pending_item]
-    workspace["node_positions"] = _normalize_canvas_node_positions(workspace.get("node_positions") or {})
-    _save_canvas_workspace_runtime(normalized_meeting_id, workspace)
-
-    idea_payload = CanvasIdeaAssimilationInput(
-        meeting_id=normalized_meeting_id,
-        meeting_topic=_safe_text(payload.meeting_topic, "회의 주제"),
-        selected_agenda_id=_safe_text(payload.selected_agenda_id),
-        context_utterances=payload.context_utterances,
-        target_utterances=target_rows,
-        existing_ideas=_canvas_idea_existing_ideas_from_workspace(
-            workspace,
-            pending_item_id,
-            payload.selected_agenda_id,
-        ),
-    )
-    job = _mark_canvas_idea_job(
-        normalized_meeting_id,
-        job_id,
-        status="processing",
-        detail="AI가 키워드와 content를 생성 중",
-        pending_item_id=pending_item_id,
-        target_count=len(target_rows),
-        target_signature=target_signature,
-        created_at=_now_ts(),
-        workspace=copy.deepcopy(workspace),
-    )
-    threading.Thread(
-        target=_finalize_canvas_idea_workspace_job,
-        args=(normalized_meeting_id, job_id, pending_item_id, idea_payload),
-        daemon=True,
-        name=f"canvas-idea-{job_id[:8]}",
-    ).start()
-    return _canvas_idea_job_response(job, workspace)
-
-
-@app.post("/api/canvas/topic-summary-workspace/start")
-def post_canvas_topic_summary_workspace_start(payload: CanvasTopicSummaryWorkspaceStartInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    topic_item_id = _safe_text(payload.topic_item_id)
-    if not normalized_meeting_id or not topic_item_id:
-        raise HTTPException(status_code=400, detail="meeting_id and topic_item_id are required")
-
-    with RT.lock:
-        meeting_jobs = RT.canvas_idea_jobs_by_meeting.setdefault(normalized_meeting_id, {})
-        running_job = next(
-            (
-                copy.deepcopy(job)
-                for job in meeting_jobs.values()
-                if isinstance(job, dict)
-                and _safe_text(job.get("status")) == "processing"
-                and _safe_text(job.get("job_type")) == "topic_summary"
-                and _safe_text(job.get("pending_item_id")) == topic_item_id
-            ),
-            None,
-        )
-    if running_job:
-        workspace = running_job.get("workspace") if isinstance(running_job.get("workspace"), dict) else _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-        return _canvas_idea_job_response(running_job, workspace)
-
-    workspace = _clone_runtime_workspace_state(
-        normalized_meeting_id,
-        _warm_canvas_workspace_cache(RT, normalized_meeting_id),
-        _now_ts(),
-    )
-    canvas_items = [
-        copy.deepcopy(item)
-        for item in (workspace.get("canvas_items") or [])
-        if isinstance(item, dict)
-    ]
-    topic = next((item for item in canvas_items if _safe_text(item.get("id")) == topic_item_id), None)
-    if not topic or not _is_canvas_topic_item(topic):
-        raise HTTPException(status_code=404, detail="topic item not found")
-
-    workspace["canvas_items"] = [
-        {
-            **item,
-            "ai_pending": True,
-            "ai_generated": True,
-            "user_edited": False,
-        }
-        if _safe_text(item.get("id")) == topic_item_id
-        else item
-        for item in canvas_items
-    ]
-    workspace["node_positions"] = _normalize_canvas_node_positions(workspace.get("node_positions") or {})
-    _save_canvas_workspace_runtime(normalized_meeting_id, workspace)
-
-    job_id = uuid4().hex
-    job = _mark_canvas_idea_job(
-        normalized_meeting_id,
-        job_id,
-        job_type="topic_summary",
-        status="processing",
-        detail="AI가 topic 제목과 content를 생성 중",
-        pending_item_id=topic_item_id,
-        target_count=len(_canvas_topic_leaf_child_ids(workspace, topic_item_id)),
-        target_signature=topic_item_id,
-        created_at=_now_ts(),
-        workspace=copy.deepcopy(workspace),
-    )
-    threading.Thread(
-        target=_finalize_canvas_topic_summary_workspace_job,
-        args=(normalized_meeting_id, job_id, topic_item_id, _safe_text(payload.meeting_topic, "회의 주제")),
-        daemon=True,
-        name=f"canvas-topic-{job_id[:8]}",
-    ).start()
-    return _canvas_idea_job_response(job, workspace)
-
-
-@app.get("/api/canvas/idea-assimilation-workspace/jobs/{job_id}")
-def get_canvas_idea_assimilation_workspace_job(job_id: str, meeting_id: str):
-    normalized_meeting_id = _safe_text(meeting_id)
-    normalized_job_id = _safe_text(job_id)
-    if not normalized_meeting_id or not normalized_job_id:
-        raise HTTPException(status_code=400, detail="meeting_id and job_id are required")
-    with RT.lock:
-        job = copy.deepcopy(
-            (RT.canvas_idea_jobs_by_meeting.get(normalized_meeting_id) or {}).get(normalized_job_id) or {}
-        )
-    if not job:
-        return _canvas_idea_job_response(
-            {
-                "job_id": normalized_job_id,
-                "meeting_id": normalized_meeting_id,
-                "status": "missing",
-                "detail": "작업 정보를 찾을 수 없습니다.",
-                "updated_at": _now_ts(),
-            },
-            _warm_canvas_workspace_cache(RT, normalized_meeting_id),
-        )
-    workspace = job.get("workspace") if isinstance(job.get("workspace"), dict) else _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-    return _canvas_idea_job_response(job, workspace)
-
-
 def _finalize_canvas_problem_discussion_workspace_job(
     meeting_id: str,
     job_id: str,
@@ -11164,78 +10815,6 @@ def get_canvas_problem_discussion_workspace_job(job_id: str, meeting_id: str):
     return _canvas_problem_job_response(job, workspace)
 
 
-@app.post("/api/canvas/problem-definition")
-def post_canvas_problem_definition(payload: ProblemDefinitionGenerateInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    signature = _canvas_llm_signature(payload)
-
-    def _compute() -> dict[str, Any]:
-        groups = _build_problem_definition_groups_local(payload)
-        used_llm = False
-        warning = ""
-
-        if groups:
-            client, llm_ready, llm_note = _ensure_llm_ready(RT)
-            if llm_ready:
-                try:
-                    prompt = _build_problem_definition_prompt(payload.topic, groups)
-                    parsed = _call_llm_json(
-                        RT,
-                        client,
-                        prompt=prompt,
-                        stage="canvas_problem_definition",
-                        temperature=0.2,
-                        max_tokens=1200,
-                    )
-                    parsed_groups = parsed.get("groups") if isinstance(parsed, dict) else None
-                    if isinstance(parsed_groups, list):
-                        by_id = {
-                            _safe_text(item.get("group_id")): item
-                            for item in parsed_groups
-                            if isinstance(item, dict) and _safe_text(item.get("group_id"))
-                        }
-                        for group in groups:
-                            llm_item = by_id.get(_safe_text(group.get("group_id")))
-                            if not llm_item:
-                                continue
-                            llm_topic = _normalize_problem_topic_label(llm_item.get("topic"), _safe_text(group.get("topic"), "주제"))
-                            llm_insight_lens = _safe_text(llm_item.get("insight_lens"))
-                            llm_conclusion = _safe_text(llm_item.get("conclusion"))
-                            if llm_topic:
-                                group["topic"] = llm_topic
-                            if llm_insight_lens:
-                                group["insight_lens"] = llm_insight_lens
-                            if llm_conclusion:
-                                group["conclusion"] = llm_conclusion
-                        used_llm = True
-                        RT.last_llm_parsed_json = {
-                            "stage": "canvas_problem_definition",
-                            "groups": copy.deepcopy(groups),
-                        }
-                        RT.last_llm_parsed_at = _now_ts()
-                    else:
-                        warning = "LLM JSON 형식이 예상과 달라 로컬 결과를 사용했습니다."
-                except Exception as exc:
-                    warning = f"문제 정의 LLM 생성 실패: {exc}"
-            else:
-                warning = llm_note or "LLM 미연결 상태로 로컬 문제 정의 묶음을 사용했습니다."
-
-        return {
-            "ok": True,
-            "used_llm": used_llm,
-            "warning": warning,
-            "generated_at": _now_ts(),
-            "groups": groups,
-        }
-    return _run_canvas_llm_cached_request(
-        RT,
-        normalized_meeting_id,
-        "problem_definition",
-        signature,
-        _compute,
-    )
-
-
 @app.post("/api/canvas/problem-taxonomy")
 def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
@@ -11336,68 +10915,6 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
         RT,
         normalized_meeting_id,
         "problem_taxonomy",
-        signature,
-        _compute,
-    )
-
-
-@app.post("/api/canvas/problem-conclusion")
-def post_canvas_problem_conclusion(payload: ProblemConclusionGenerateInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    group_id = _safe_text(payload.group.group_id)
-    signature = _canvas_llm_signature(payload)
-
-    def _compute() -> dict[str, Any]:
-        conclusion = _build_problem_group_conclusion_local(payload)
-        insight_lens = _build_problem_group_insight_lens_local(payload)
-        used_llm = False
-        warning = ""
-
-        client, llm_ready, llm_note = _ensure_llm_ready(RT)
-        if llm_ready:
-            try:
-                parsed = _call_llm_json(
-                    RT,
-                    client,
-                    prompt=_build_problem_group_conclusion_prompt(payload),
-                    stage="canvas_problem_conclusion",
-                    temperature=0.2,
-                    max_tokens=260,
-                )
-                candidate = _safe_text(parsed.get("conclusion")) if isinstance(parsed, dict) else ""
-                candidate_lens = _safe_text(parsed.get("insight_lens")) if isinstance(parsed, dict) else ""
-                if candidate:
-                    conclusion = candidate
-                    if candidate_lens:
-                        insight_lens = candidate_lens
-                    used_llm = True
-                    RT.last_llm_parsed_json = {
-                        "stage": "canvas_problem_conclusion",
-                        "group_id": group_id,
-                        "insight_lens": insight_lens,
-                        "conclusion": conclusion,
-                    }
-                    RT.last_llm_parsed_at = _now_ts()
-                else:
-                    warning = "LLM JSON 형식이 예상과 달라 로컬 결론을 사용했습니다."
-            except Exception as exc:
-                warning = f"결론 LLM 생성 실패: {exc}"
-        else:
-            warning = llm_note or "LLM 미연결 상태로 로컬 결론을 사용했습니다."
-
-        return {
-            "ok": True,
-            "used_llm": used_llm,
-            "warning": warning,
-            "generated_at": _now_ts(),
-            "group_id": group_id,
-            "insight_lens": insight_lens,
-            "conclusion": conclusion,
-        }
-    return _run_canvas_llm_cached_request(
-        RT,
-        normalized_meeting_id,
-        f"problem_conclusion:{group_id}",
         signature,
         _compute,
     )
@@ -11568,76 +11085,6 @@ def post_canvas_problem_structure(payload: ProblemStructureGenerateInput):
     )
 
 
-@app.post("/api/canvas/meeting-goal")
-def post_canvas_meeting_goal(payload: MeetingGoalGenerateInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    topic = _safe_text(payload.topic)
-    signature = _canvas_llm_signature(payload)
-
-    def _compute() -> dict[str, Any]:
-        goal = _build_meeting_goal_local(topic)
-        goals = _build_meeting_goal_local_options(topic)
-        used_llm = False
-        warning = ""
-
-        client, llm_ready, llm_note = _ensure_llm_ready(RT)
-        if topic and llm_ready:
-            try:
-                parsed = _call_llm_json(
-                    RT,
-                    client,
-                    prompt=_build_meeting_goal_prompt(topic),
-                    stage="canvas_meeting_goal",
-                    temperature=0.2,
-                    max_tokens=420,
-                )
-                candidate = _safe_text(parsed.get("goal")) if isinstance(parsed, dict) else ""
-                raw_goals = parsed.get("goals") if isinstance(parsed, dict) else []
-                llm_goals = [
-                    _safe_text(value)
-                    for value in (raw_goals if isinstance(raw_goals, list) else [])
-                    if _safe_text(value)
-                ]
-                if not candidate and llm_goals:
-                    candidate = llm_goals[0]
-                if candidate:
-                    goals = _dedup_preserve([candidate, *llm_goals, *goals], limit=3)
-                    goal = goals[0] if goals else candidate
-                    used_llm = True
-                    RT.last_llm_parsed_json = {
-                        "stage": "canvas_meeting_goal",
-                        "topic": topic,
-                        "goal": goal,
-                        "goals": goals,
-                    }
-                    RT.last_llm_parsed_at = _now_ts()
-                else:
-                    warning = "LLM JSON 형식이 예상과 달라 로컬 회의 목표를 사용했습니다."
-            except Exception as exc:
-                warning = f"회의 목표 LLM 생성 실패: {exc}"
-        elif topic:
-            warning = llm_note or "LLM 미연결 상태로 로컬 회의 목표를 사용했습니다."
-        else:
-            warning = "회의 제목이 없어 기본 회의 목표를 사용했습니다."
-
-        return {
-            "ok": True,
-            "used_llm": used_llm,
-            "warning": warning,
-            "generated_at": _now_ts(),
-            "topic": topic,
-            "goal": goal,
-            "goals": goals,
-        }
-    return _run_canvas_llm_cached_request(
-        RT,
-        normalized_meeting_id,
-        "meeting_goal",
-        signature,
-        _compute,
-    )
-
-
 @app.post("/api/canvas/summary-document")
 def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
@@ -11800,6 +11247,7 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
             "version": 2,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "max_keywords": max_keywords,
+            "existing_keywords": _ideation_existing_keyword_rows(payload),
             "rows": rows,
         }
     )
@@ -11861,74 +11309,6 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
         RT,
         normalized_meeting_id,
         "ideation_keywords",
-        signature,
-        _compute,
-    )
-
-
-@app.post("/api/canvas/ideation-suggestions")
-def post_canvas_ideation_suggestions(payload: IdeationSuggestionGenerateInput):
-    normalized_meeting_id = _safe_text(payload.meeting_id)
-    signature = _canvas_llm_signature(payload)
-
-    def _compute() -> dict[str, Any]:
-        suggestions = _build_local_ideation_suggestions(payload)
-        used_llm = False
-        warning = ""
-
-        client, llm_ready, llm_note = _ensure_llm_ready(RT)
-        if llm_ready:
-            try:
-                parsed = _call_llm_json(
-                    RT,
-                    client,
-                    prompt=_build_ideation_suggestions_prompt(payload),
-                    stage="canvas_ideation_suggestions",
-                    temperature=0.35,
-                    max_tokens=900,
-                )
-                parsed_suggestions = parsed.get("suggestions") if isinstance(parsed, dict) else None
-                if isinstance(parsed_suggestions, list):
-                    normalized = _normalize_canvas_ideation_suggestions(
-                        [
-                            {
-                                "id": f"ideation-suggestion-{index + 1}",
-                                "text": _safe_text(item.get("text") if isinstance(item, dict) else item),
-                                "status": "draft",
-                            }
-                            for index, item in enumerate(parsed_suggestions)
-                        ],
-                        limit=5,
-                    )
-                    if normalized:
-                        suggestions = normalized
-                        used_llm = True
-                        RT.last_llm_parsed_json = {
-                            "stage": "canvas_ideation_suggestions",
-                            "suggestions": copy.deepcopy(suggestions),
-                        }
-                        RT.last_llm_parsed_at = _now_ts()
-                    else:
-                        warning = "LLM 추천 결과가 비어 있어 로컬 추천을 사용했습니다."
-                else:
-                    warning = "LLM JSON 형식이 예상과 달라 로컬 추천을 사용했습니다."
-            except Exception as exc:
-                warning = f"아이디어 추천 LLM 생성 실패: {exc}"
-        else:
-            warning = llm_note or "LLM 미연결 상태로 로컬 추천을 사용했습니다."
-
-        return {
-            "ok": True,
-            "used_llm": used_llm,
-            "warning": warning,
-            "generated_at": _now_ts(),
-            "suggestions": suggestions,
-        }
-
-    return _run_canvas_llm_cached_request(
-        RT,
-        normalized_meeting_id,
-        "ideation_suggestions",
         signature,
         _compute,
     )
@@ -12140,28 +11520,6 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     return _canvas_workspace_response(workspace)
 
 
-@app.get("/api/export/agenda-markdown")
-def get_export_agenda_markdown():
-    with RT.lock:
-        markdown = _build_agenda_markdown(RT)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        return {
-            "ok": True,
-            "filename": f"agenda_export_{stamp}.md",
-            "agenda_count": len(RT.agenda_outcomes),
-            "transcript_count": len(RT.transcript),
-            "markdown": markdown,
-        }
-
-@app.post("/api/reset")
-def post_reset():
-    with RT.lock:
-        llm_enabled = RT.llm_enabled
-        RT.reset()
-        RT.llm_enabled = llm_enabled
-        return _state_response(RT)
-
-
 @app.post("/api/stt/chunk")
 async def post_stt_chunk(
     audio: UploadFile = File(...),
@@ -12246,6 +11604,10 @@ async def post_transcribe_chunk(
             return {"text": "", "language": "ko", "error": "empty audio"}
         
         suffix = Path(audio_file.filename or "chunk.webm").suffix or ".webm"
+        print(
+            f"[STT] transcribe chunk start model={WHISPER_MODEL_NAME} "
+            f"bytes={len(blob)} suffix={suffix} meeting_goal={bool(_safe_text(meeting_goal))}"
+        )
         text = _transcribe_with_whisper(blob, suffix=suffix, meeting_goal=meeting_goal)
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         print(
@@ -12261,6 +11623,7 @@ async def post_transcribe_chunk(
             "model": WHISPER_MODEL_NAME,
         }
     except Exception as exc:
+        print(f"[STT][backend] transcribe chunk error: {exc}", flush=True)
         return {
             "text": "",
             "language": "ko",

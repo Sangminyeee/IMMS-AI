@@ -282,43 +282,60 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
     workspace = latest_canvas_workspace_by_meeting.get(str(candidate.get("meeting_id") or "")) or {}
     meeting_goal = str(candidate.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
     started_at = time.perf_counter()
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{AI_BACKEND_URL}/api/transcribe-chunk",
-            files={'audio_file': (audio_filename, audio_bytes, audio_mime)},
-            data={'meeting_goal': meeting_goal},
-        )
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-        if response.status_code != 200:
-            print(f"❌ Transcription failed: {response.status_code}")
-            return {
-                "text": "",
-                "status": "http_error",
-                "status_code": response.status_code,
-                "error": response.text[:300],
-                "elapsed_ms": elapsed_ms,
-            }
-        result = response.json()
-        if result.get("error"):
-            print(f"❌ Transcription error: {result.get('error')}")
-        if not (result.get('text') or '').strip():
-            meta = candidate.get("audio_meta") or {}
-            print(
-                "ℹ️ Empty transcription "
-                f"bytes={len(audio_bytes)} "
-                f"mime={audio_mime} "
-                f"rms={meta.get('rms')} speech_ratio={meta.get('speech_ratio')} "
-                f"duration_ms={meta.get('duration_ms')}"
+    print(
+        "[STT][gateway] backend transcription request start "
+        f"url={AI_BACKEND_URL}/api/transcribe-chunk bytes={len(audio_bytes)} "
+        f"mime={audio_mime} filename={audio_filename} meeting_goal={bool(meeting_goal)}",
+        flush=True,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{AI_BACKEND_URL}/api/transcribe-chunk",
+                files={'audio_file': (audio_filename, audio_bytes, audio_mime)},
+                data={'meeting_goal': meeting_goal},
             )
-        text = (result.get('text') or '').strip()
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        print(f"[STT][gateway] backend transcription request exception elapsed_ms={elapsed_ms} error={exc}", flush=True)
+        raise
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    print(
+        "[STT][gateway] backend transcription response "
+        f"status={response.status_code} elapsed_ms={elapsed_ms} body_preview={response.text[:160]!r}",
+        flush=True,
+    )
+    if response.status_code != 200:
+        print(f"❌ Transcription failed: {response.status_code}")
         return {
-            "text": text,
-            "status": "ok" if text else "empty",
+            "text": "",
+            "status": "http_error",
             "status_code": response.status_code,
-            "error": result.get("error") or "",
+            "error": response.text[:300],
             "elapsed_ms": elapsed_ms,
-            "backend_elapsed_ms": result.get("elapsed_ms"),
         }
+    result = response.json()
+    if result.get("error"):
+        print(f"❌ Transcription error: {result.get('error')}")
+    if not (result.get('text') or '').strip():
+        meta = candidate.get("audio_meta") or {}
+        print(
+            "ℹ️ Empty transcription "
+            f"bytes={len(audio_bytes)} "
+            f"mime={audio_mime} "
+            f"rms={meta.get('rms')} speech_ratio={meta.get('speech_ratio')} "
+            f"duration_ms={meta.get('duration_ms')}"
+        )
+    text = (result.get('text') or '').strip()
+    return {
+        "text": text,
+        "status": "ok" if text else "empty",
+        "status_code": response.status_code,
+        "error": result.get("error") or "",
+        "elapsed_ms": elapsed_ms,
+        "backend_elapsed_ms": result.get("elapsed_ms"),
+    }
 
 
 async def request_flow_summary(turns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -427,6 +444,12 @@ async def transcribe_and_broadcast_winner(
     canvas_stage = str(winner.get("canvas_stage") or "ideation")
     canvas_target_id = str(winner.get("canvas_target_id") or "")
 
+    print(
+        f"[STT][gateway] transcribe winner start meeting_id={meeting_id} bucket_id={bucket_id} "
+        f"user_id={winner.get('user_id')} stage={canvas_stage} target={canvas_target_id} audio_meta={audio_meta}",
+        flush=True,
+    )
+
     await send_stt_debug(
         meeting_id,
         winner["user_id"],
@@ -446,6 +469,12 @@ async def transcribe_and_broadcast_winner(
     )
     transcription = await transcribe_selected_chunk(winner)
     transcribed_text = transcription.get("text") or ""
+    print(
+        f"[STT][gateway] transcribe winner result bucket_id={bucket_id} "
+        f"status={transcription.get('status')} chars={len(transcribed_text)} "
+        f"elapsed_ms={transcription.get('elapsed_ms')} backend_elapsed_ms={transcription.get('backend_elapsed_ms')}",
+        flush=True,
+    )
     if not transcribed_text:
         await send_stt_debug(
             meeting_id,
@@ -472,6 +501,7 @@ async def transcribe_and_broadcast_winner(
         canvas_target_id=canvas_target_id,
     )
     if not saved_transcript:
+        print(f"[STT][gateway] transcript save failed bucket_id={bucket_id} chars={len(transcribed_text)}", flush=True)
         await send_stt_debug(
             meeting_id,
             winner["user_id"],
@@ -481,6 +511,11 @@ async def transcribe_and_broadcast_winner(
             text_length=len(transcribed_text),
         )
         return
+    print(
+        f"[STT][gateway] transcript saved bucket_id={bucket_id} transcript_id={saved_transcript.get('id')} "
+        f"chars={len(transcribed_text)}",
+        flush=True,
+    )
     await send_stt_debug(
         meeting_id,
         winner["user_id"],
@@ -542,6 +577,12 @@ async def flush_audio_bucket(meeting_id: str, bucket_id: int):
         sticky_user_id = state.get("last_winner_user_id")
         sticky_bucket = state.get("last_winner_bucket")
 
+    print(
+        f"[STT][gateway] flush bucket meeting_id={meeting_id} bucket_id={bucket_id} "
+        f"candidate_count={len(candidates)} sticky_user_id={sticky_user_id} sticky_bucket={sticky_bucket}",
+        flush=True,
+    )
+
     if not candidates:
         return
 
@@ -570,6 +611,12 @@ async def flush_audio_bucket(meeting_id: str, bucket_id: int):
             ],
         )
         return
+
+    print(
+        f"[STT][gateway] bucket winner user_id={winner.get('user_id')} speaker={winner.get('speaker')} "
+        f"bytes={len(winner.get('audio_bytes') or b'')} audio_meta={winner.get('audio_meta') or {}}",
+        flush=True,
+    )
 
     await send_stt_debug(
         meeting_id,
@@ -602,6 +649,13 @@ async def queue_audio_for_fusion(meeting_id: str, candidate: dict[str, Any]):
     async with state["lock"]:
         candidate["device_profile"] = dict(state["device_profiles"].get(candidate["user_id"], {}))
         state["buckets"].setdefault(bucket_id, []).append(candidate)
+        print(
+            f"[STT][gateway] queue audio meeting_id={meeting_id} bucket_id={bucket_id} "
+            f"user_id={candidate.get('user_id')} speaker={candidate.get('speaker')} "
+            f"bytes={len(candidate.get('audio_bytes') or b'')} queued={len(state['buckets'].get(bucket_id, []))} "
+            f"audio_meta={candidate.get('audio_meta') or {}}",
+            flush=True,
+        )
         if bucket_id not in state["tasks"]:
             state["tasks"][bucket_id] = asyncio.create_task(flush_audio_bucket(meeting_id, bucket_id))
 
@@ -699,19 +753,19 @@ async def save_transcript(
     normalized_text = (text or "").strip()
     if not normalized_text:
         return None
+    transcript_timestamp = transcript_timestamp or datetime.utcnow().isoformat()
+    insert_payload = {
+        'meeting_id': meeting_id,
+        'user_id': user_id,
+        'speaker': speaker,
+        'text': normalized_text,
+        'timestamp': transcript_timestamp,
+        'canvas_stage': canvas_stage,
+        'canvas_target_id': canvas_target_id,
+    }
 
     try:
         supabase = get_supabase()
-        transcript_timestamp = transcript_timestamp or datetime.utcnow().isoformat()
-        insert_payload = {
-            'meeting_id': meeting_id,
-            'user_id': user_id,
-            'speaker': speaker,
-            'text': normalized_text,
-            'timestamp': transcript_timestamp,
-            'canvas_stage': canvas_stage,
-            'canvas_target_id': canvas_target_id,
-        }
         try:
             response = supabase.table('transcripts').insert(insert_payload).execute()
         except Exception as exc:
@@ -735,7 +789,13 @@ async def save_transcript(
         return insert_payload
     except Exception as e:
         print(f"❌ Failed to save transcript: {e}")
-    return None
+    fallback_id = f"local-transcript-{meeting_id}-{user_id}-{int(time.time() * 1000)}"
+    print(f"[STT][gateway] using transient transcript fallback id={fallback_id}", flush=True)
+    return {
+        **insert_payload,
+        "id": fallback_id,
+        "persisted": False,
+    }
 
 
 @router.websocket("/ws/{meeting_id}")

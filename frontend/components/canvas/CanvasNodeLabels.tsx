@@ -71,7 +71,7 @@ export function getIdeationKeywordBubbleFontSize(text: string, size: number) {
   }, 0);
   const availableWidth = Math.max(42, size * 0.82);
   const fittedSize = Math.floor((availableWidth / Math.max(1, weightedLength)) * 0.95);
-  return clampNumber(fittedSize, 5, 23);
+  return clampNumber(fittedSize, 10, 28);
 }
 
 export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble, size: number) {
@@ -79,10 +79,10 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
   const offTopic = bubble.offTopic || bubble.kind === "off_topic";
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Inter','Noto_Sans_KR',sans-serif] backdrop-blur ${
+      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Inter','Noto_Sans_KR',sans-serif] ${
         offTopic
-          ? "border-[#ef4e4e]/35 bg-[#fff5f5]/92 shadow-[0_18px_44px_rgba(239,78,78,0.13)]"
-          : "border-[#a13ab8]/10 bg-white/90 shadow-[0_18px_44px_rgba(161,58,184,0.14)]"
+          ? "border-[#ef4e4e]/45 bg-[#fff5f5] shadow-[0_14px_32px_rgba(239,78,78,0.12)]"
+          : "border-[#a13ab8]/18 bg-white shadow-[0_14px_32px_rgba(161,58,184,0.12)]"
       }`}
     >
       {offTopic && size >= 92 ? (
@@ -91,11 +91,12 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
         </span>
       ) : null}
       <strong
-        className={`max-w-full whitespace-nowrap font-semibold ${offTopic ? "text-[#b23b3b]" : "text-[#a13ab8]"}`}
+        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : "text-[#8f2aa5]"}`}
         style={{
           fontSize,
           lineHeight: 1.08,
           maxWidth: Math.max(44, Math.round(size * 0.82)),
+          textRendering: "geometricPrecision",
           wordBreak: "keep-all",
         }}
       >
