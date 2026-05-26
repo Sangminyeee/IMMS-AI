@@ -46,14 +46,15 @@ type ProblemGroupingRationale = {
   warning?: string;
 };
 
-type CanvasSurfaceProps = {
-  canvasSurfaceRef: RefObject<HTMLDivElement | null>;
+export type CanvasSurfaceViewState = {
   stage: CanvasStage;
   nodes: Node[];
   problemSplitLeftEdges: Edge[];
   busy: boolean;
-  problemGroupsCount: number;
-  problemStructureNodesCount: number;
+  canvasStatusMessage: string;
+};
+
+export type CanvasSurfaceSolutionState = {
   finalSummaryDocument: CanvasFinalSolutionSummary;
   summaryDocumentDraftMarkdown: string;
   summaryDocumentDraftDirty: boolean;
@@ -66,6 +67,11 @@ type CanvasSurfaceProps = {
   summaryDocumentPending: boolean;
   summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
+};
+
+export type CanvasSurfaceProblemState = {
+  problemGroupsCount: number;
+  problemStructureNodesCount: number;
   problemDefinitionStagePending: boolean;
   problemStructureSetupOpen: boolean;
   problemStructureDraftMethod: ProblemStructureMethod;
@@ -76,9 +82,11 @@ type CanvasSurfaceProps = {
   problemDefinitionMode: ProblemDefinitionMode;
   activeProblemGroupingRationale: ProblemGroupingRationale | null;
   activeProblemGroupingRationaleTitle: string;
-  canvasStatusMessage: string;
   problemCanvasToolbarActions: ProblemCanvasToolbarActionId[];
   selectedProblemStatus: ProblemGroupStatus | "";
+};
+
+export type CanvasSurfaceFlowHandlers = {
   onFlowInit: (instance: ReactFlowInstance<Node, Edge>) => void;
   onNodeClick: (event: React.MouseEvent, node: Node) => void;
   onPaneClick: (event: React.MouseEvent) => void;
@@ -86,13 +94,18 @@ type CanvasSurfaceProps = {
   onNodeDragStart: (event: React.MouseEvent, node: Node) => void;
   onNodeDrag: (event: React.MouseEvent, node: Node) => void;
   onNodeDragStop: (event: React.MouseEvent, node: Node) => void;
+};
+
+export type CanvasSurfaceSolutionHandlers = {
   onToggleSummaryEvidence: (groupId: string) => void;
   onSetSummaryDocumentEditMode: (editMode: boolean) => void;
   onRegenerateSummaryDocument: () => void | Promise<void>;
   onCopyFinalSolutionMarkdown: () => void | Promise<void>;
   onSaveSummaryDocument: () => void | Promise<void>;
   onSummaryDocumentMarkdownChange: (markdown: string) => void;
-  renderSummaryMarkdownPreview: (markdown: string, onEdit: () => void) => ReactNode;
+};
+
+export type CanvasSurfaceProblemHandlers = {
   onCloseProblemStructureSetup: () => void;
   onProblemStructureDraftMethodChange: (method: ProblemStructureMethod) => void;
   onProblemStructureDraftModeChange: (mode: ConcreteProblemDefinitionMode) => void;
@@ -104,6 +117,17 @@ type CanvasSurfaceProps = {
   isProblemToolbarActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
   onProblemToolbarAction: (action: ProblemCanvasToolbarActionId) => void;
   onSetProblemGroupStatus: (status: ProblemGroupStatus) => void;
+};
+
+export type CanvasSurfaceProps = {
+  canvasSurfaceRef: RefObject<HTMLDivElement | null>;
+  view: CanvasSurfaceViewState;
+  solution: CanvasSurfaceSolutionState;
+  problem: CanvasSurfaceProblemState;
+  flowHandlers: CanvasSurfaceFlowHandlers;
+  solutionHandlers: CanvasSurfaceSolutionHandlers;
+  problemHandlers: CanvasSurfaceProblemHandlers;
+  renderSummaryMarkdownPreview: (markdown: string, onEdit: () => void) => ReactNode;
 };
 
 const EMPTY_EDGES: Edge[] = [];
@@ -128,10 +152,11 @@ function CanvasFloatingStatusControls({
   stage,
   selectedProblemStatus,
   onSetProblemGroupStatus,
-}: Pick<
-  CanvasSurfaceProps,
-  "stage" | "selectedProblemStatus" | "onSetProblemGroupStatus"
->) {
+}: {
+  stage: CanvasStage;
+  selectedProblemStatus: ProblemGroupStatus | "";
+  onSetProblemGroupStatus: (status: ProblemGroupStatus) => void;
+}) {
   const buttonClassName = (active: boolean, activeTone: string) =>
     `rounded-[8px] border px-3 py-1.5 text-xs font-semibold leading-none transition ${
       active ? activeTone : CANVAS_FLOATING_STATUS_INACTIVE_CLASS_NAME
@@ -217,63 +242,82 @@ function ProblemGroupingRationaleOverlay({
 
 export const CanvasSurface = memo(function CanvasSurface({
   canvasSurfaceRef,
-  stage,
-  nodes,
-  problemSplitLeftEdges,
-  busy,
-  problemGroupsCount,
-  problemStructureNodesCount,
-  finalSummaryDocument,
-  summaryDocumentDraftMarkdown,
-  summaryDocumentDraftDirty,
-  summaryEligibleStructureGroups,
-  summaryDocumentSectionByGroupId,
-  problemStructureNodeById,
-  summaryEvidenceOpenGroupIds,
-  remoteEditPresenceByKey,
-  summaryDocumentEditMode,
-  summaryDocumentPending,
-  summaryDocumentSaving,
-  solutionRightPaneRef,
-  problemDefinitionStagePending,
-  problemStructureSetupOpen,
-  problemStructureDraftMethod,
-  problemStructureDraftMode,
-  problemStructurePending,
-  problemDefinitionPhase,
-  problemStructureMethod,
-  problemDefinitionMode,
-  activeProblemGroupingRationale,
-  activeProblemGroupingRationaleTitle,
-  canvasStatusMessage,
-  problemCanvasToolbarActions,
-  selectedProblemStatus,
-  onFlowInit,
-  onNodeClick,
-  onPaneClick,
-  onNodesChange,
-  onNodeDragStart,
-  onNodeDrag,
-  onNodeDragStop,
-  onToggleSummaryEvidence,
-  onSetSummaryDocumentEditMode,
-  onRegenerateSummaryDocument,
-  onCopyFinalSolutionMarkdown,
-  onSaveSummaryDocument,
-  onSummaryDocumentMarkdownChange,
+  view,
+  solution,
+  problem,
+  flowHandlers,
+  solutionHandlers,
+  problemHandlers,
   renderSummaryMarkdownPreview,
-  onCloseProblemStructureSetup,
-  onProblemStructureDraftMethodChange,
-  onProblemStructureDraftModeChange,
-  onStartProblemStructure,
-  onProblemStructureMethodChange,
-  onProblemDefinitionModeChange,
-  onCloseProblemGroupingRationale,
-  getProblemToolbarActionLabel,
-  isProblemToolbarActionActive,
-  onProblemToolbarAction,
-  onSetProblemGroupStatus,
 }: CanvasSurfaceProps) {
+  const {
+    stage,
+    nodes,
+    problemSplitLeftEdges,
+    busy,
+    canvasStatusMessage,
+  } = view;
+  const {
+    finalSummaryDocument,
+    summaryDocumentDraftMarkdown,
+    summaryDocumentDraftDirty,
+    summaryEligibleStructureGroups,
+    summaryDocumentSectionByGroupId,
+    problemStructureNodeById,
+    summaryEvidenceOpenGroupIds,
+    remoteEditPresenceByKey,
+    summaryDocumentEditMode,
+    summaryDocumentPending,
+    summaryDocumentSaving,
+    solutionRightPaneRef,
+  } = solution;
+  const {
+    problemGroupsCount,
+    problemStructureNodesCount,
+    problemDefinitionStagePending,
+    problemStructureSetupOpen,
+    problemStructureDraftMethod,
+    problemStructureDraftMode,
+    problemStructurePending,
+    problemDefinitionPhase,
+    problemStructureMethod,
+    problemDefinitionMode,
+    activeProblemGroupingRationale,
+    activeProblemGroupingRationaleTitle,
+    problemCanvasToolbarActions,
+    selectedProblemStatus,
+  } = problem;
+  const {
+    onFlowInit,
+    onNodeClick,
+    onPaneClick,
+    onNodesChange,
+    onNodeDragStart,
+    onNodeDrag,
+    onNodeDragStop,
+  } = flowHandlers;
+  const {
+    onToggleSummaryEvidence,
+    onSetSummaryDocumentEditMode,
+    onRegenerateSummaryDocument,
+    onCopyFinalSolutionMarkdown,
+    onSaveSummaryDocument,
+    onSummaryDocumentMarkdownChange,
+  } = solutionHandlers;
+  const {
+    onCloseProblemStructureSetup,
+    onProblemStructureDraftMethodChange,
+    onProblemStructureDraftModeChange,
+    onStartProblemStructure,
+    onProblemStructureMethodChange,
+    onProblemDefinitionModeChange,
+    onCloseProblemGroupingRationale,
+    getProblemToolbarActionLabel,
+    isProblemToolbarActionActive,
+    onProblemToolbarAction,
+    onSetProblemGroupStatus,
+  } = problemHandlers;
+
   return (
     <section ref={canvasSurfaceRef} className="relative order-1 flex min-h-[min(72vh,720px)] flex-col overflow-hidden border-b border-black/10 bg-[#f9f9f9] shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:h-full xl:min-h-0 xl:border-b-0">
       <div className="relative min-h-0 w-full flex-1">

@@ -1,0 +1,329 @@
+"use client";
+
+import { useMemo } from "react";
+import type {
+  CanvasRightDrawerComposerHandlers,
+  CanvasRightDrawerComposerState,
+  CanvasRightDrawerLayoutHandlers,
+  CanvasRightDrawerLayoutState,
+  CanvasRightDrawerNoteHandlers,
+  CanvasRightDrawerNotesState,
+} from "@/components/canvas/CanvasRightDrawer";
+import type {
+  CanvasSurfaceFlowHandlers,
+  CanvasSurfaceProblemHandlers,
+  CanvasSurfaceProblemState,
+  CanvasSurfaceSolutionHandlers,
+  CanvasSurfaceSolutionState,
+  CanvasSurfaceViewState,
+} from "@/components/canvas/CanvasSurface";
+import type {
+  CanvasWorkspacePanelsProps,
+  CanvasWorkspaceQuickAskHandlers,
+  CanvasWorkspaceQuickAskState,
+} from "@/components/canvas/CanvasWorkspacePanels";
+
+type UseCanvasWorkspacePanelModelsInput = CanvasWorkspacePanelsProps;
+
+export function useCanvasWorkspacePanelModels({
+  isDesktopLayout,
+  workspaceGridColumns,
+  canvasSurfaceRef,
+  surfaceView: incomingSurfaceView,
+  surfaceSolution: incomingSurfaceSolution,
+  surfaceProblem: incomingSurfaceProblem,
+  surfaceFlowHandlers: incomingSurfaceFlowHandlers,
+  surfaceSolutionHandlers: incomingSurfaceSolutionHandlers,
+  surfaceProblemHandlers: incomingSurfaceProblemHandlers,
+  renderSummaryMarkdownPreview,
+  rightDrawerLayout: incomingRightDrawerLayout,
+  rightDrawerComposer: incomingRightDrawerComposer,
+  rightDrawerNotesState: incomingRightDrawerNotesState,
+  rightDrawerLayoutHandlers: incomingRightDrawerLayoutHandlers,
+  rightDrawerComposerHandlers: incomingRightDrawerComposerHandlers,
+  rightDrawerNoteHandlers: incomingRightDrawerNoteHandlers,
+  quickAskState: incomingQuickAskState,
+  quickAskHandlers: incomingQuickAskHandlers,
+}: UseCanvasWorkspacePanelModelsInput): CanvasWorkspacePanelsProps {
+  const surfaceView = useMemo<CanvasSurfaceViewState>(() => ({
+    stage: incomingSurfaceView.stage,
+    nodes: incomingSurfaceView.nodes,
+    problemSplitLeftEdges: incomingSurfaceView.problemSplitLeftEdges,
+    busy: incomingSurfaceView.busy,
+    canvasStatusMessage: incomingSurfaceView.canvasStatusMessage,
+  }), [
+    incomingSurfaceView.busy,
+    incomingSurfaceView.canvasStatusMessage,
+    incomingSurfaceView.nodes,
+    incomingSurfaceView.problemSplitLeftEdges,
+    incomingSurfaceView.stage,
+  ]);
+
+  const surfaceSolution = useMemo<CanvasSurfaceSolutionState>(() => ({
+    finalSummaryDocument: incomingSurfaceSolution.finalSummaryDocument,
+    summaryDocumentDraftMarkdown: incomingSurfaceSolution.summaryDocumentDraftMarkdown,
+    summaryDocumentDraftDirty: incomingSurfaceSolution.summaryDocumentDraftDirty,
+    summaryEligibleStructureGroups: incomingSurfaceSolution.summaryEligibleStructureGroups,
+    summaryDocumentSectionByGroupId: incomingSurfaceSolution.summaryDocumentSectionByGroupId,
+    problemStructureNodeById: incomingSurfaceSolution.problemStructureNodeById,
+    summaryEvidenceOpenGroupIds: incomingSurfaceSolution.summaryEvidenceOpenGroupIds,
+    remoteEditPresenceByKey: incomingSurfaceSolution.remoteEditPresenceByKey,
+    summaryDocumentEditMode: incomingSurfaceSolution.summaryDocumentEditMode,
+    summaryDocumentPending: incomingSurfaceSolution.summaryDocumentPending,
+    summaryDocumentSaving: incomingSurfaceSolution.summaryDocumentSaving,
+    solutionRightPaneRef: incomingSurfaceSolution.solutionRightPaneRef,
+  }), [
+    incomingSurfaceSolution.finalSummaryDocument,
+    incomingSurfaceSolution.problemStructureNodeById,
+    incomingSurfaceSolution.remoteEditPresenceByKey,
+    incomingSurfaceSolution.solutionRightPaneRef,
+    incomingSurfaceSolution.summaryDocumentDraftDirty,
+    incomingSurfaceSolution.summaryDocumentDraftMarkdown,
+    incomingSurfaceSolution.summaryDocumentEditMode,
+    incomingSurfaceSolution.summaryDocumentPending,
+    incomingSurfaceSolution.summaryDocumentSaving,
+    incomingSurfaceSolution.summaryDocumentSectionByGroupId,
+    incomingSurfaceSolution.summaryEligibleStructureGroups,
+    incomingSurfaceSolution.summaryEvidenceOpenGroupIds,
+  ]);
+
+  const surfaceProblem = useMemo<CanvasSurfaceProblemState>(() => ({
+    problemGroupsCount: incomingSurfaceProblem.problemGroupsCount,
+    problemStructureNodesCount: incomingSurfaceProblem.problemStructureNodesCount,
+    problemDefinitionStagePending: incomingSurfaceProblem.problemDefinitionStagePending,
+    problemStructureSetupOpen: incomingSurfaceProblem.problemStructureSetupOpen,
+    problemStructureDraftMethod: incomingSurfaceProblem.problemStructureDraftMethod,
+    problemStructureDraftMode: incomingSurfaceProblem.problemStructureDraftMode,
+    problemStructurePending: incomingSurfaceProblem.problemStructurePending,
+    problemDefinitionPhase: incomingSurfaceProblem.problemDefinitionPhase,
+    problemStructureMethod: incomingSurfaceProblem.problemStructureMethod,
+    problemDefinitionMode: incomingSurfaceProblem.problemDefinitionMode,
+    activeProblemGroupingRationale: incomingSurfaceProblem.activeProblemGroupingRationale,
+    activeProblemGroupingRationaleTitle: incomingSurfaceProblem.activeProblemGroupingRationaleTitle,
+    problemCanvasToolbarActions: incomingSurfaceProblem.problemCanvasToolbarActions,
+    selectedProblemStatus: incomingSurfaceProblem.selectedProblemStatus,
+  }), [
+    incomingSurfaceProblem.activeProblemGroupingRationale,
+    incomingSurfaceProblem.activeProblemGroupingRationaleTitle,
+    incomingSurfaceProblem.problemCanvasToolbarActions,
+    incomingSurfaceProblem.problemDefinitionMode,
+    incomingSurfaceProblem.problemDefinitionPhase,
+    incomingSurfaceProblem.problemDefinitionStagePending,
+    incomingSurfaceProblem.problemGroupsCount,
+    incomingSurfaceProblem.problemStructureDraftMethod,
+    incomingSurfaceProblem.problemStructureDraftMode,
+    incomingSurfaceProblem.problemStructureMethod,
+    incomingSurfaceProblem.problemStructureNodesCount,
+    incomingSurfaceProblem.problemStructurePending,
+    incomingSurfaceProblem.problemStructureSetupOpen,
+    incomingSurfaceProblem.selectedProblemStatus,
+  ]);
+
+  const surfaceFlowHandlers = useMemo<CanvasSurfaceFlowHandlers>(() => ({
+    onFlowInit: incomingSurfaceFlowHandlers.onFlowInit,
+    onNodeClick: incomingSurfaceFlowHandlers.onNodeClick,
+    onPaneClick: incomingSurfaceFlowHandlers.onPaneClick,
+    onNodesChange: incomingSurfaceFlowHandlers.onNodesChange,
+    onNodeDragStart: incomingSurfaceFlowHandlers.onNodeDragStart,
+    onNodeDrag: incomingSurfaceFlowHandlers.onNodeDrag,
+    onNodeDragStop: incomingSurfaceFlowHandlers.onNodeDragStop,
+  }), [
+    incomingSurfaceFlowHandlers.onFlowInit,
+    incomingSurfaceFlowHandlers.onNodeClick,
+    incomingSurfaceFlowHandlers.onNodeDrag,
+    incomingSurfaceFlowHandlers.onNodeDragStart,
+    incomingSurfaceFlowHandlers.onNodeDragStop,
+    incomingSurfaceFlowHandlers.onNodesChange,
+    incomingSurfaceFlowHandlers.onPaneClick,
+  ]);
+
+  const surfaceSolutionHandlers = useMemo<CanvasSurfaceSolutionHandlers>(() => ({
+    onToggleSummaryEvidence: incomingSurfaceSolutionHandlers.onToggleSummaryEvidence,
+    onSetSummaryDocumentEditMode: incomingSurfaceSolutionHandlers.onSetSummaryDocumentEditMode,
+    onRegenerateSummaryDocument: incomingSurfaceSolutionHandlers.onRegenerateSummaryDocument,
+    onCopyFinalSolutionMarkdown: incomingSurfaceSolutionHandlers.onCopyFinalSolutionMarkdown,
+    onSaveSummaryDocument: incomingSurfaceSolutionHandlers.onSaveSummaryDocument,
+    onSummaryDocumentMarkdownChange: incomingSurfaceSolutionHandlers.onSummaryDocumentMarkdownChange,
+  }), [
+    incomingSurfaceSolutionHandlers.onCopyFinalSolutionMarkdown,
+    incomingSurfaceSolutionHandlers.onRegenerateSummaryDocument,
+    incomingSurfaceSolutionHandlers.onSaveSummaryDocument,
+    incomingSurfaceSolutionHandlers.onSetSummaryDocumentEditMode,
+    incomingSurfaceSolutionHandlers.onSummaryDocumentMarkdownChange,
+    incomingSurfaceSolutionHandlers.onToggleSummaryEvidence,
+  ]);
+
+  const surfaceProblemHandlers = useMemo<CanvasSurfaceProblemHandlers>(() => ({
+    onCloseProblemStructureSetup: incomingSurfaceProblemHandlers.onCloseProblemStructureSetup,
+    onProblemStructureDraftMethodChange: incomingSurfaceProblemHandlers.onProblemStructureDraftMethodChange,
+    onProblemStructureDraftModeChange: incomingSurfaceProblemHandlers.onProblemStructureDraftModeChange,
+    onStartProblemStructure: incomingSurfaceProblemHandlers.onStartProblemStructure,
+    onProblemStructureMethodChange: incomingSurfaceProblemHandlers.onProblemStructureMethodChange,
+    onProblemDefinitionModeChange: incomingSurfaceProblemHandlers.onProblemDefinitionModeChange,
+    onCloseProblemGroupingRationale: incomingSurfaceProblemHandlers.onCloseProblemGroupingRationale,
+    getProblemToolbarActionLabel: incomingSurfaceProblemHandlers.getProblemToolbarActionLabel,
+    isProblemToolbarActionActive: incomingSurfaceProblemHandlers.isProblemToolbarActionActive,
+    onProblemToolbarAction: incomingSurfaceProblemHandlers.onProblemToolbarAction,
+    onSetProblemGroupStatus: incomingSurfaceProblemHandlers.onSetProblemGroupStatus,
+  }), [
+    incomingSurfaceProblemHandlers.getProblemToolbarActionLabel,
+    incomingSurfaceProblemHandlers.isProblemToolbarActionActive,
+    incomingSurfaceProblemHandlers.onCloseProblemGroupingRationale,
+    incomingSurfaceProblemHandlers.onCloseProblemStructureSetup,
+    incomingSurfaceProblemHandlers.onProblemDefinitionModeChange,
+    incomingSurfaceProblemHandlers.onProblemStructureDraftMethodChange,
+    incomingSurfaceProblemHandlers.onProblemStructureDraftModeChange,
+    incomingSurfaceProblemHandlers.onProblemStructureMethodChange,
+    incomingSurfaceProblemHandlers.onProblemToolbarAction,
+    incomingSurfaceProblemHandlers.onSetProblemGroupStatus,
+    incomingSurfaceProblemHandlers.onStartProblemStructure,
+  ]);
+
+  const rightDrawerLayout = useMemo<CanvasRightDrawerLayoutState>(() => ({
+    collapsed: incomingRightDrawerLayout.collapsed,
+    contentVisible: incomingRightDrawerLayout.contentVisible,
+    notesCollapsed: incomingRightDrawerLayout.notesCollapsed,
+    expandedWidth: incomingRightDrawerLayout.expandedWidth,
+    isDesktopLayout: incomingRightDrawerLayout.isDesktopLayout,
+  }), [
+    incomingRightDrawerLayout.collapsed,
+    incomingRightDrawerLayout.contentVisible,
+    incomingRightDrawerLayout.expandedWidth,
+    incomingRightDrawerLayout.isDesktopLayout,
+    incomingRightDrawerLayout.notesCollapsed,
+  ]);
+
+  const rightDrawerComposer = useMemo<CanvasRightDrawerComposerState>(() => ({
+    title: incomingRightDrawerComposer.title,
+    body: incomingRightDrawerComposer.body,
+    bodyRef: incomingRightDrawerComposer.bodyRef,
+  }), [
+    incomingRightDrawerComposer.body,
+    incomingRightDrawerComposer.bodyRef,
+    incomingRightDrawerComposer.title,
+  ]);
+
+  const rightDrawerNotesState = useMemo<CanvasRightDrawerNotesState>(() => ({
+    notes: incomingRightDrawerNotesState.notes,
+    stage: incomingRightDrawerNotesState.stage,
+    editingPersonalNoteId: incomingRightDrawerNotesState.editingPersonalNoteId,
+    draggingPersonalNoteId: incomingRightDrawerNotesState.draggingPersonalNoteId,
+    personalNoteDraftTitle: incomingRightDrawerNotesState.personalNoteDraftTitle,
+    personalNoteDraftBody: incomingRightDrawerNotesState.personalNoteDraftBody,
+  }), [
+    incomingRightDrawerNotesState.draggingPersonalNoteId,
+    incomingRightDrawerNotesState.editingPersonalNoteId,
+    incomingRightDrawerNotesState.notes,
+    incomingRightDrawerNotesState.personalNoteDraftBody,
+    incomingRightDrawerNotesState.personalNoteDraftTitle,
+    incomingRightDrawerNotesState.stage,
+  ]);
+
+  const rightDrawerLayoutHandlers = useMemo<CanvasRightDrawerLayoutHandlers>(() => ({
+    onToggleDrawer: incomingRightDrawerLayoutHandlers.onToggleDrawer,
+    onStartResize: incomingRightDrawerLayoutHandlers.onStartResize,
+    onToggleNotesCollapsed: incomingRightDrawerLayoutHandlers.onToggleNotesCollapsed,
+  }), [
+    incomingRightDrawerLayoutHandlers.onStartResize,
+    incomingRightDrawerLayoutHandlers.onToggleDrawer,
+    incomingRightDrawerLayoutHandlers.onToggleNotesCollapsed,
+  ]);
+
+  const rightDrawerComposerHandlers = useMemo<CanvasRightDrawerComposerHandlers>(() => ({
+    onTitleChange: incomingRightDrawerComposerHandlers.onTitleChange,
+    onBodyChange: incomingRightDrawerComposerHandlers.onBodyChange,
+    onSave: incomingRightDrawerComposerHandlers.onSave,
+  }), [
+    incomingRightDrawerComposerHandlers.onBodyChange,
+    incomingRightDrawerComposerHandlers.onSave,
+    incomingRightDrawerComposerHandlers.onTitleChange,
+  ]);
+
+  const rightDrawerNoteHandlers = useMemo<CanvasRightDrawerNoteHandlers>(() => ({
+    onDragStart: incomingRightDrawerNoteHandlers.onDragStart,
+    onDragEnd: incomingRightDrawerNoteHandlers.onDragEnd,
+    onDraftTitleChange: incomingRightDrawerNoteHandlers.onDraftTitleChange,
+    onDraftBodyChange: incomingRightDrawerNoteHandlers.onDraftBodyChange,
+    onCancelEdit: incomingRightDrawerNoteHandlers.onCancelEdit,
+    onSaveEdit: incomingRightDrawerNoteHandlers.onSaveEdit,
+    onStartEdit: incomingRightDrawerNoteHandlers.onStartEdit,
+    onDelete: incomingRightDrawerNoteHandlers.onDelete,
+  }), [
+    incomingRightDrawerNoteHandlers.onCancelEdit,
+    incomingRightDrawerNoteHandlers.onDelete,
+    incomingRightDrawerNoteHandlers.onDraftBodyChange,
+    incomingRightDrawerNoteHandlers.onDraftTitleChange,
+    incomingRightDrawerNoteHandlers.onDragEnd,
+    incomingRightDrawerNoteHandlers.onDragStart,
+    incomingRightDrawerNoteHandlers.onSaveEdit,
+    incomingRightDrawerNoteHandlers.onStartEdit,
+  ]);
+
+  const quickAskState = useMemo<CanvasWorkspaceQuickAskState>(() => ({
+    open: incomingQuickAskState.open,
+    messages: incomingQuickAskState.messages,
+    draft: incomingQuickAskState.draft,
+    unreadCount: incomingQuickAskState.unreadCount,
+    pendingCount: incomingQuickAskState.pendingCount,
+    scrollRef: incomingQuickAskState.scrollRef,
+  }), [
+    incomingQuickAskState.draft,
+    incomingQuickAskState.messages,
+    incomingQuickAskState.open,
+    incomingQuickAskState.pendingCount,
+    incomingQuickAskState.scrollRef,
+    incomingQuickAskState.unreadCount,
+  ]);
+
+  const quickAskHandlers = useMemo<CanvasWorkspaceQuickAskHandlers>(() => ({
+    onClose: incomingQuickAskHandlers.onClose,
+    onToggle: incomingQuickAskHandlers.onToggle,
+    onDraftChange: incomingQuickAskHandlers.onDraftChange,
+    onSubmit: incomingQuickAskHandlers.onSubmit,
+  }), [
+    incomingQuickAskHandlers.onClose,
+    incomingQuickAskHandlers.onDraftChange,
+    incomingQuickAskHandlers.onSubmit,
+    incomingQuickAskHandlers.onToggle,
+  ]);
+
+  return useMemo<CanvasWorkspacePanelsProps>(() => ({
+    isDesktopLayout,
+    workspaceGridColumns,
+    canvasSurfaceRef,
+    surfaceView,
+    surfaceSolution,
+    surfaceProblem,
+    surfaceFlowHandlers,
+    surfaceSolutionHandlers,
+    surfaceProblemHandlers,
+    renderSummaryMarkdownPreview,
+    rightDrawerLayout,
+    rightDrawerComposer,
+    rightDrawerNotesState,
+    rightDrawerLayoutHandlers,
+    rightDrawerComposerHandlers,
+    rightDrawerNoteHandlers,
+    quickAskState,
+    quickAskHandlers,
+  }), [
+    canvasSurfaceRef,
+    isDesktopLayout,
+    quickAskHandlers,
+    quickAskState,
+    renderSummaryMarkdownPreview,
+    rightDrawerComposer,
+    rightDrawerComposerHandlers,
+    rightDrawerLayout,
+    rightDrawerLayoutHandlers,
+    rightDrawerNoteHandlers,
+    rightDrawerNotesState,
+    surfaceFlowHandlers,
+    surfaceProblem,
+    surfaceProblemHandlers,
+    surfaceSolution,
+    surfaceSolutionHandlers,
+    surfaceView,
+    workspaceGridColumns,
+  ]);
+}

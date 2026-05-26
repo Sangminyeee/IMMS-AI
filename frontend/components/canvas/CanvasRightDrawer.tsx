@@ -245,69 +245,112 @@ function PersonalNoteList({
   );
 }
 
-type CanvasRightDrawerProps = {
+export type CanvasRightDrawerLayoutState = {
   collapsed: boolean;
   contentVisible: boolean;
   notesCollapsed: boolean;
   expandedWidth: string;
   isDesktopLayout: boolean;
-  composerTitle: string;
-  composerBody: string;
-  composerBodyRef: RefObject<HTMLTextAreaElement | null>;
+};
+
+export type CanvasRightDrawerComposerState = {
+  title: string;
+  body: string;
+  bodyRef: RefObject<HTMLTextAreaElement | null>;
+};
+
+export type CanvasRightDrawerNotesState = {
   notes: CanvasRightDrawerPersonalNote[];
   stage: CanvasStage;
   editingPersonalNoteId: string;
   draggingPersonalNoteId: string;
   personalNoteDraftTitle: string;
   personalNoteDraftBody: string;
-  quickAskSlot: ReactNode;
+};
+
+export type CanvasRightDrawerLayoutHandlers = {
   onToggleDrawer: () => void;
   onStartResize: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onToggleNotesCollapsed: () => void;
-  onComposerTitleChange: (value: string) => void;
-  onComposerBodyChange: (value: string) => void;
-  onSavePersonalNote: () => void;
-  onDragStartNote: (noteId: string) => void;
-  onDragEndNote: () => void;
-  onPersonalNoteDraftTitleChange: (value: string) => void;
-  onPersonalNoteDraftBodyChange: (value: string) => void;
-  onCancelPersonalNoteEdit: () => void;
-  onSavePersonalNoteEdit: (noteId: string) => void;
-  onStartPersonalNoteEdit: (note: CanvasRightDrawerPersonalNote) => void;
-  onDeletePersonalNote: (noteId: string) => void;
+};
+
+export type CanvasRightDrawerComposerHandlers = {
+  onTitleChange: (value: string) => void;
+  onBodyChange: (value: string) => void;
+  onSave: () => void;
+};
+
+export type CanvasRightDrawerNoteHandlers = {
+  onDragStart: (noteId: string) => void;
+  onDragEnd: () => void;
+  onDraftTitleChange: (value: string) => void;
+  onDraftBodyChange: (value: string) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (noteId: string) => void;
+  onStartEdit: (note: CanvasRightDrawerPersonalNote) => void;
+  onDelete: (noteId: string) => void;
+};
+
+type CanvasRightDrawerProps = {
+  layout: CanvasRightDrawerLayoutState;
+  composer: CanvasRightDrawerComposerState;
+  notesState: CanvasRightDrawerNotesState;
+  quickAskSlot: ReactNode;
+  layoutHandlers: CanvasRightDrawerLayoutHandlers;
+  composerHandlers: CanvasRightDrawerComposerHandlers;
+  noteHandlers: CanvasRightDrawerNoteHandlers;
 };
 
 export function CanvasRightDrawer({
-  collapsed,
-  contentVisible,
-  notesCollapsed,
-  expandedWidth,
-  isDesktopLayout,
-  composerTitle,
-  composerBody,
-  composerBodyRef,
-  notes,
-  stage,
-  editingPersonalNoteId,
-  draggingPersonalNoteId,
-  personalNoteDraftTitle,
-  personalNoteDraftBody,
+  layout,
+  composer,
+  notesState,
   quickAskSlot,
-  onToggleDrawer,
-  onStartResize,
-  onToggleNotesCollapsed,
-  onComposerTitleChange,
-  onComposerBodyChange,
-  onSavePersonalNote,
-  onDragStartNote,
-  onDragEndNote,
-  onPersonalNoteDraftTitleChange,
-  onPersonalNoteDraftBodyChange,
-  onCancelPersonalNoteEdit,
-  onSavePersonalNoteEdit,
-  onStartPersonalNoteEdit,
-  onDeletePersonalNote,
+  layoutHandlers,
+  composerHandlers,
+  noteHandlers,
 }: CanvasRightDrawerProps) {
+  const {
+    collapsed,
+    contentVisible,
+    notesCollapsed,
+    expandedWidth,
+    isDesktopLayout,
+  } = layout;
+  const {
+    title: composerTitle,
+    body: composerBody,
+    bodyRef: composerBodyRef,
+  } = composer;
+  const {
+    notes,
+    stage,
+    editingPersonalNoteId,
+    draggingPersonalNoteId,
+    personalNoteDraftTitle,
+    personalNoteDraftBody,
+  } = notesState;
+  const {
+    onToggleDrawer,
+    onStartResize,
+    onToggleNotesCollapsed,
+  } = layoutHandlers;
+  const {
+    onTitleChange,
+    onBodyChange,
+    onSave,
+  } = composerHandlers;
+  const {
+    onDragStart,
+    onDragEnd,
+    onDraftTitleChange,
+    onDraftBodyChange,
+    onCancelEdit,
+    onSaveEdit,
+    onStartEdit,
+    onDelete,
+  } = noteHandlers;
+
   const bodyClassName = contentVisible
     ? "imms-drawer-body imms-overlay-scroll box-border h-full max-h-none translate-x-0 overflow-y-auto px-[clamp(1rem,1.6vw,1.35rem)] py-[clamp(1rem,2vh,1.5rem)] opacity-100 xl:overflow-y-auto"
     : `imms-drawer-body ${collapsed ? "hidden " : ""}pointer-events-none translate-x-8 opacity-0`;
@@ -357,9 +400,9 @@ export function CanvasRightDrawer({
               composerTitle={composerTitle}
               composerBody={composerBody}
               composerBodyRef={composerBodyRef}
-              onTitleChange={onComposerTitleChange}
-              onBodyChange={onComposerBodyChange}
-              onSave={onSavePersonalNote}
+              onTitleChange={onTitleChange}
+              onBodyChange={onBodyChange}
+              onSave={onSave}
             />
           </RightDrawerNotesPanel>
 
@@ -371,14 +414,14 @@ export function CanvasRightDrawer({
               draggingPersonalNoteId={draggingPersonalNoteId}
               personalNoteDraftTitle={personalNoteDraftTitle}
               personalNoteDraftBody={personalNoteDraftBody}
-              onDragStartNote={onDragStartNote}
-              onDragEndNote={onDragEndNote}
-              onDraftTitleChange={onPersonalNoteDraftTitleChange}
-              onDraftBodyChange={onPersonalNoteDraftBodyChange}
-              onCancelEdit={onCancelPersonalNoteEdit}
-              onSaveEdit={onSavePersonalNoteEdit}
-              onStartEdit={onStartPersonalNoteEdit}
-              onDelete={onDeletePersonalNote}
+              onDragStartNote={onDragStart}
+              onDragEndNote={onDragEnd}
+              onDraftTitleChange={onDraftTitleChange}
+              onDraftBodyChange={onDraftBodyChange}
+              onCancelEdit={onCancelEdit}
+              onSaveEdit={onSaveEdit}
+              onStartEdit={onStartEdit}
+              onDelete={onDelete}
             />
           )}
         </RightDrawerPanel>

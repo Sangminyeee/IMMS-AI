@@ -14,9 +14,8 @@ import {
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
 import { CanvasHeader } from "@/components/canvas/CanvasHeader";
-import { CanvasQuickAskPanel } from "@/components/canvas/CanvasQuickAskPanel";
-import { CanvasRightDrawer } from "@/components/canvas/CanvasRightDrawer";
-import { CanvasSurface } from "@/components/canvas/CanvasSurface";
+import { CanvasWorkspacePanels } from "@/components/canvas/CanvasWorkspacePanels";
+import { useCanvasWorkspacePanelModels } from "@/components/canvas/useCanvasWorkspacePanelModels";
 import {
   buildProblemExploreLayout,
 } from "@/components/canvas/CanvasGraphLayouts";
@@ -62,6 +61,7 @@ import { useProblemChildGeneration } from "@/components/canvas/useProblemChildGe
 import { useProblemGroupActions } from "@/components/canvas/useProblemGroupActions";
 import { useProblemGroupingRationale } from "@/components/canvas/useProblemGroupingRationale";
 import { useProblemGroupRelationships } from "@/components/canvas/useProblemGroupRelationships";
+import { useCanvasPersonalNotePanelActions } from "@/components/canvas/useCanvasPersonalNotePanelActions";
 import { usePersonalNoteCanvasLinking } from "@/components/canvas/usePersonalNoteCanvasLinking";
 import { useSummaryDocumentActions } from "@/components/canvas/useSummaryDocumentActions";
 import { useSharedCanvasBroadcast } from "@/components/canvas/useSharedCanvasBroadcast";
@@ -2469,47 +2469,59 @@ export default function MeetingCanvasTab({
     ],
   );
 
-  const handleAddPersonalNote = () => {
-    const nextNote: PersonalNote = {
-      id: `note-${Date.now()}`,
-      projectId: meetingId,
-      agendaId: "",
-      linkedCanvasItemId: "",
-      linkedCanvasItemTitle: "",
-      kind: "note",
-      title: composerTitle.trim() || `개인 메모 ${projectPersonalNotes.length + 1}`,
-      body: composerBody.trim() || "개인 메모를 입력해 두면 나중에 그룹 보드로 이동시킬 수 있습니다.",
-    };
-
-    setPersonalNotes((prev) => [nextNote, ...prev]);
-    setComposerTitle("");
-    setComposerBody("");
-    setComposerLinkedCanvasItemId("");
-    setComposerLinkedCanvasItemTitle("");
-    if (pendingPersonalNoteLinkId === COMPOSER_PERSONAL_NOTE_LINK_ID) {
-      setPendingPersonalNoteLinkId("");
-    }
-    setActivityMessage("개인 메모에 저장했습니다.");
-  };
+  const {
+    handleAddPersonalNote,
+    handleDeletePersonalNote,
+    handleStartPersonalNoteEdit,
+    handleCancelPersonalNoteEdit,
+    handleSavePersonalNoteEdit,
+    handlePersonalNoteDragEnd,
+  } = useCanvasPersonalNotePanelActions<PersonalNote>({
+    meetingId,
+    composerTitle,
+    composerBody,
+    projectPersonalNoteCount: projectPersonalNotes.length,
+    composerPersonalNoteLinkId: COMPOSER_PERSONAL_NOTE_LINK_ID,
+    pendingPersonalNoteLinkId,
+    editingPersonalNoteId,
+    personalNoteDraftTitle,
+    personalNoteDraftBody,
+    setActivityMessage,
+    setComposerTitle,
+    setComposerBody,
+    setComposerLinkedCanvasItemId,
+    setComposerLinkedCanvasItemTitle,
+    setPendingPersonalNoteLinkId,
+    setPersonalNotes,
+    setEditingPersonalNoteId,
+    setPersonalNoteDraftAgendaId,
+    setPersonalNoteDraftTitle,
+    setPersonalNoteDraftBody,
+    setDraggingPersonalNoteId,
+    setDropProblemGroupId,
+  });
 
   const isProblemDefinitionExploreStage = stage === "problem-definition" && problemDefinitionPhase !== "structure";
-  const problemCanvasToolbarActions: ProblemCanvasToolbarAction[] =
-    problemDefinitionPhase === "structure"
-      ? ["structure-back", "structure-ai-group", "structure-add-group"]
-      : ["structure-start"];
+  const problemCanvasToolbarActions = useMemo<ProblemCanvasToolbarAction[]>(
+    () =>
+      problemDefinitionPhase === "structure"
+        ? ["structure-back", "structure-ai-group", "structure-add-group"]
+        : ["structure-start"],
+    [problemDefinitionPhase],
+  );
 
-  const problemToolbarActionLabel = (action: ProblemCanvasToolbarAction) => {
+  const problemToolbarActionLabel = useCallback((action: ProblemCanvasToolbarAction) => {
     if (action === "structure-start") return "구조화 시작";
     if (action === "structure-back") return "정의 1단계";
     if (action === "structure-ai-group") return problemStructurePending ? "AI 묶는 중" : "AI 묶기";
     return "그룹 추가";
-  };
+  }, [problemStructurePending]);
 
-  const isProblemToolbarActionActive = (action: ProblemCanvasToolbarAction) => {
+  const isProblemToolbarActionActive = useCallback((action: ProblemCanvasToolbarAction) => {
     if (action === "structure-start") return problemDefinitionPhase === "structure" || problemStructureSetupOpen;
     if (action === "structure-ai-group") return problemStructurePending;
     return false;
-  };
+  }, [problemDefinitionPhase, problemStructurePending, problemStructureSetupOpen]);
 
   const onNodesChange = useCanvasNodeChanges({
     applyingRemoteSharedSyncRef,
@@ -2548,52 +2560,6 @@ export default function MeetingCanvasTab({
     workspaceHydratingRef,
     workspaceLoadedRef,
   });
-
-  const handleDeletePersonalNote = (noteId: string) => {
-    setPersonalNotes((prev) => prev.filter((item) => item.id !== noteId));
-    if (pendingPersonalNoteLinkId === noteId) {
-      setPendingPersonalNoteLinkId("");
-    }
-    if (editingPersonalNoteId === noteId) {
-      setEditingPersonalNoteId("");
-      setPersonalNoteDraftAgendaId("");
-      setPersonalNoteDraftTitle("");
-      setPersonalNoteDraftBody("");
-    }
-  };
-
-  const handleStartPersonalNoteEdit = (note: PersonalNote) => {
-    setEditingPersonalNoteId(note.id);
-    setPersonalNoteDraftAgendaId(note.agendaId);
-    setPersonalNoteDraftTitle(note.title);
-    setPersonalNoteDraftBody(note.body);
-  };
-
-  const handleCancelPersonalNoteEdit = () => {
-    setEditingPersonalNoteId("");
-    setPersonalNoteDraftAgendaId("");
-    setPersonalNoteDraftTitle("");
-    setPersonalNoteDraftBody("");
-  };
-
-  const handleSavePersonalNoteEdit = (noteId: string) => {
-    setPersonalNotes((prev) =>
-      prev.map((note) =>
-        note.id === noteId
-          ? {
-              ...note,
-              title: personalNoteDraftTitle.trim() || note.title,
-              body: personalNoteDraftBody.trim() || note.body,
-            }
-          : note,
-      ),
-    );
-    setEditingPersonalNoteId("");
-    setPersonalNoteDraftAgendaId("");
-    setPersonalNoteDraftTitle("");
-    setPersonalNoteDraftBody("");
-    setActivityMessage("개인 메모를 수정했습니다.");
-  };
 
   useEffect(() => {
     if (stage !== "problem-definition") {
@@ -2783,7 +2749,7 @@ export default function MeetingCanvasTab({
   const handleNodeDragStable = useStableEvent(onNodeDrag);
   const handleNodeDragStopStable = useStableEvent(onNodeDragStop);
 
-  const handleProblemToolbarAction = (action: ProblemCanvasToolbarAction) => {
+  const handleProblemToolbarAction = useCallback((action: ProblemCanvasToolbarAction) => {
     if (action === "structure-start") {
       handleOpenProblemStructureSetup();
       return;
@@ -2802,7 +2768,168 @@ export default function MeetingCanvasTab({
     if (action === "structure-add-group") {
       handleAddProblemStructureGroup();
     }
-  };
+  }, [
+    handleAddProblemStructureGroup,
+    handleBackToProblemDefinitionExplore,
+    handleOpenProblemStructureSetup,
+    runProblemStructureGrouping,
+  ]);
+  const handleCloseProblemStructureSetup = useCallback(() => {
+    setProblemStructureSetupOpen(false);
+  }, [setProblemStructureSetupOpen]);
+  const handleProblemStructureMethodChange = useCallback((method: ProblemStructureMethod) => {
+    setProblemStructureMethod(method);
+    setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
+  }, [setActivityMessage, setProblemStructureMethod]);
+  const handleProblemDefinitionModeChange = useCallback((mode: Exclude<ProblemDefinitionMode, "">) => {
+    setProblemDefinitionMode(mode);
+    if (mode === "ai") {
+      void runProblemStructureGrouping();
+      return;
+    }
+    setActivityMessage("직접 구성 모드로 표시했습니다.");
+  }, [runProblemStructureGrouping, setActivityMessage, setProblemDefinitionMode]);
+  const handleCloseProblemGroupingRationale = useCallback(() => {
+    setProblemGroupingRationaleOpenGroupId("");
+  }, [setProblemGroupingRationaleOpenGroupId]);
+  const handleToggleRightDrawerNotesCollapsed = useCallback(() => {
+    setRightDrawerNotesCollapsed((prev) => !prev);
+  }, [setRightDrawerNotesCollapsed]);
+  const handleCloseQuickAsk = useCallback(() => {
+    setQuickAskOpen(false);
+  }, [setQuickAskOpen]);
+  const handleRightDrawerResizeStart = useMemo(
+    () => startPanelResize("right"),
+    [startPanelResize],
+  );
+
+  const workspacePanelProps = useCanvasWorkspacePanelModels({
+    isDesktopLayout,
+    workspaceGridColumns,
+    canvasSurfaceRef,
+    surfaceView: {
+      stage,
+      nodes,
+      problemSplitLeftEdges: problemSplitEdges.left,
+      busy,
+      canvasStatusMessage,
+    },
+    surfaceSolution: {
+      finalSummaryDocument,
+      summaryDocumentDraftMarkdown,
+      summaryDocumentDraftDirty,
+      summaryEligibleStructureGroups,
+      summaryDocumentSectionByGroupId,
+      problemStructureNodeById,
+      summaryEvidenceOpenGroupIds,
+      remoteEditPresenceByKey,
+      summaryDocumentEditMode,
+      summaryDocumentPending,
+      summaryDocumentSaving,
+      solutionRightPaneRef,
+    },
+    surfaceProblem: {
+      problemGroupsCount: problemGroups.length,
+      problemStructureNodesCount: problemStructureNodes.length,
+      problemDefinitionStagePending,
+      problemStructureSetupOpen,
+      problemStructureDraftMethod,
+      problemStructureDraftMode,
+      problemStructurePending,
+      problemDefinitionPhase,
+      problemStructureMethod,
+      problemDefinitionMode,
+      activeProblemGroupingRationale,
+      activeProblemGroupingRationaleTitle: activeProblemGroupingRationaleGroup?.topic || "",
+      problemCanvasToolbarActions,
+      selectedProblemStatus: selectedProblemGroup?.status || "",
+    },
+    surfaceFlowHandlers: {
+      onFlowInit: handleFlowInitStable,
+      onNodeClick: handleCanvasNodeClickStable,
+      onPaneClick: handleCanvasPaneClickStable,
+      onNodesChange: handleNodesChangeStable,
+      onNodeDragStart: handleNodeDragStartStable,
+      onNodeDrag: handleNodeDragStable,
+      onNodeDragStop: handleNodeDragStopStable,
+    },
+    surfaceSolutionHandlers: {
+      onToggleSummaryEvidence: handleToggleSummaryEvidence,
+      onSetSummaryDocumentEditMode: setSummaryDocumentEditMode,
+      onRegenerateSummaryDocument: handleRegenerateSummaryDocument,
+      onCopyFinalSolutionMarkdown: handleCopyFinalSolutionMarkdown,
+      onSaveSummaryDocument: handleSaveSummaryDocument,
+      onSummaryDocumentMarkdownChange: handleSummaryDocumentMarkdownChange,
+    },
+    surfaceProblemHandlers: {
+      onCloseProblemStructureSetup: handleCloseProblemStructureSetup,
+      onProblemStructureDraftMethodChange: setProblemStructureDraftMethod,
+      onProblemStructureDraftModeChange: setProblemStructureDraftMode,
+      onStartProblemStructure: handleStartProblemStructure,
+      onProblemStructureMethodChange: handleProblemStructureMethodChange,
+      onProblemDefinitionModeChange: handleProblemDefinitionModeChange,
+      onCloseProblemGroupingRationale: handleCloseProblemGroupingRationale,
+      getProblemToolbarActionLabel: problemToolbarActionLabel,
+      isProblemToolbarActionActive,
+      onProblemToolbarAction: handleProblemToolbarAction,
+      onSetProblemGroupStatus: handleSetProblemGroupStatus,
+    },
+    renderSummaryMarkdownPreview,
+    rightDrawerLayout: {
+      collapsed: rightDrawerCollapsed,
+      contentVisible: rightDrawerContentVisible,
+      notesCollapsed: rightDrawerNotesCollapsed,
+      expandedWidth: rightDrawerExpandedWidth,
+      isDesktopLayout,
+    },
+    rightDrawerComposer: {
+      title: composerTitle,
+      body: composerBody,
+      bodyRef: composerBodyRef,
+    },
+    rightDrawerNotesState: {
+      notes: projectPersonalNotes,
+      stage,
+      editingPersonalNoteId,
+      draggingPersonalNoteId,
+      personalNoteDraftTitle,
+      personalNoteDraftBody,
+    },
+    rightDrawerLayoutHandlers: {
+      onToggleDrawer: toggleRightDrawer,
+      onStartResize: handleRightDrawerResizeStart,
+      onToggleNotesCollapsed: handleToggleRightDrawerNotesCollapsed,
+    },
+    rightDrawerComposerHandlers: {
+      onTitleChange: setComposerTitle,
+      onBodyChange: setComposerBody,
+      onSave: handleAddPersonalNote,
+    },
+    rightDrawerNoteHandlers: {
+      onDragStart: setDraggingPersonalNoteId,
+      onDragEnd: handlePersonalNoteDragEnd,
+      onDraftTitleChange: setPersonalNoteDraftTitle,
+      onDraftBodyChange: setPersonalNoteDraftBody,
+      onCancelEdit: handleCancelPersonalNoteEdit,
+      onSaveEdit: handleSavePersonalNoteEdit,
+      onStartEdit: handleStartPersonalNoteEdit,
+      onDelete: handleDeletePersonalNote,
+    },
+    quickAskState: {
+      open: quickAskOpen,
+      messages: quickAskMessages,
+      draft: quickAskDraft,
+      unreadCount: quickAskUnreadCount,
+      pendingCount: quickAskPendingCount,
+      scrollRef: quickAskScrollRef,
+    },
+    quickAskHandlers: {
+      onClose: handleCloseQuickAsk,
+      onToggle: handleToggleQuickAsk,
+      onDraftChange: setQuickAskDraft,
+      onSubmit: handleSubmitQuickAsk,
+    },
+  });
 
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
@@ -2846,129 +2973,7 @@ export default function MeetingCanvasTab({
           onStageSelect={(nextStage) => void handleStageSelect(nextStage)}
         />
 
-        <div
-          className="imms-workspace-grid grid flex-1 min-h-0 grid-cols-1 overflow-y-auto bg-black/10 xl:grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:overflow-hidden xl:gap-[clamp(0.25rem,0.45vw,0.5rem)] xl:border-x xl:border-b xl:border-black/10"
-          style={isDesktopLayout ? { gridTemplateColumns: workspaceGridColumns } : undefined}
-        >
-          <CanvasSurface
-            canvasSurfaceRef={canvasSurfaceRef}
-            stage={stage}
-            nodes={nodes}
-            problemSplitLeftEdges={problemSplitEdges.left}
-            busy={busy}
-            problemGroupsCount={problemGroups.length}
-            problemStructureNodesCount={problemStructureNodes.length}
-            finalSummaryDocument={finalSummaryDocument}
-            summaryDocumentDraftMarkdown={summaryDocumentDraftMarkdown}
-            summaryDocumentDraftDirty={summaryDocumentDraftDirty}
-            summaryEligibleStructureGroups={summaryEligibleStructureGroups}
-            summaryDocumentSectionByGroupId={summaryDocumentSectionByGroupId}
-            problemStructureNodeById={problemStructureNodeById}
-            summaryEvidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
-            remoteEditPresenceByKey={remoteEditPresenceByKey}
-            summaryDocumentEditMode={summaryDocumentEditMode}
-            summaryDocumentPending={summaryDocumentPending}
-            summaryDocumentSaving={summaryDocumentSaving}
-            solutionRightPaneRef={solutionRightPaneRef}
-            problemDefinitionStagePending={problemDefinitionStagePending}
-            problemStructureSetupOpen={problemStructureSetupOpen}
-            problemStructureDraftMethod={problemStructureDraftMethod}
-            problemStructureDraftMode={problemStructureDraftMode}
-            problemStructurePending={problemStructurePending}
-            problemDefinitionPhase={problemDefinitionPhase}
-            problemStructureMethod={problemStructureMethod}
-            problemDefinitionMode={problemDefinitionMode}
-            activeProblemGroupingRationale={activeProblemGroupingRationale}
-            activeProblemGroupingRationaleTitle={activeProblemGroupingRationaleGroup?.topic || ""}
-            canvasStatusMessage={canvasStatusMessage}
-            problemCanvasToolbarActions={problemCanvasToolbarActions}
-            selectedProblemStatus={selectedProblemGroup?.status || ""}
-            onFlowInit={handleFlowInitStable}
-            onNodeClick={handleCanvasNodeClickStable}
-            onPaneClick={handleCanvasPaneClickStable}
-            onNodesChange={handleNodesChangeStable}
-            onNodeDragStart={handleNodeDragStartStable}
-            onNodeDrag={handleNodeDragStable}
-            onNodeDragStop={handleNodeDragStopStable}
-            onToggleSummaryEvidence={handleToggleSummaryEvidence}
-            onSetSummaryDocumentEditMode={setSummaryDocumentEditMode}
-            onRegenerateSummaryDocument={handleRegenerateSummaryDocument}
-            onCopyFinalSolutionMarkdown={handleCopyFinalSolutionMarkdown}
-            onSaveSummaryDocument={handleSaveSummaryDocument}
-            onSummaryDocumentMarkdownChange={handleSummaryDocumentMarkdownChange}
-            renderSummaryMarkdownPreview={renderSummaryMarkdownPreview}
-            onCloseProblemStructureSetup={() => setProblemStructureSetupOpen(false)}
-            onProblemStructureDraftMethodChange={setProblemStructureDraftMethod}
-            onProblemStructureDraftModeChange={setProblemStructureDraftMode}
-            onStartProblemStructure={handleStartProblemStructure}
-            onProblemStructureMethodChange={(method) => {
-              setProblemStructureMethod(method);
-              setActivityMessage(`${problemStructureMethodLabel(method)} 방식으로 시각 표현을 바꿨습니다. 기존 그룹은 유지됩니다.`);
-            }}
-            onProblemDefinitionModeChange={(mode) => {
-              setProblemDefinitionMode(mode);
-              if (mode === "ai") {
-                void runProblemStructureGrouping();
-                return;
-              }
-              setActivityMessage("직접 구성 모드로 표시했습니다.");
-            }}
-            onCloseProblemGroupingRationale={() => setProblemGroupingRationaleOpenGroupId("")}
-            getProblemToolbarActionLabel={problemToolbarActionLabel}
-            isProblemToolbarActionActive={isProblemToolbarActionActive}
-            onProblemToolbarAction={handleProblemToolbarAction}
-            onSetProblemGroupStatus={handleSetProblemGroupStatus}
-          />
-
-          <CanvasRightDrawer
-            collapsed={rightDrawerCollapsed}
-            contentVisible={rightDrawerContentVisible}
-            notesCollapsed={rightDrawerNotesCollapsed}
-            expandedWidth={rightDrawerExpandedWidth}
-            isDesktopLayout={isDesktopLayout}
-            composerTitle={composerTitle}
-            composerBody={composerBody}
-            composerBodyRef={composerBodyRef}
-            notes={projectPersonalNotes}
-            stage={stage}
-            editingPersonalNoteId={editingPersonalNoteId}
-            draggingPersonalNoteId={draggingPersonalNoteId}
-            personalNoteDraftTitle={personalNoteDraftTitle}
-            personalNoteDraftBody={personalNoteDraftBody}
-            quickAskSlot={
-              <CanvasQuickAskPanel
-                open={quickAskOpen}
-                rightDrawerCollapsed={rightDrawerCollapsed}
-                messages={quickAskMessages}
-                draft={quickAskDraft}
-                unreadCount={quickAskUnreadCount}
-                pendingCount={quickAskPendingCount}
-                scrollRef={quickAskScrollRef}
-                onClose={() => setQuickAskOpen(false)}
-                onToggle={handleToggleQuickAsk}
-                onDraftChange={setQuickAskDraft}
-                onSubmit={handleSubmitQuickAsk}
-              />
-            }
-            onToggleDrawer={toggleRightDrawer}
-            onStartResize={startPanelResize("right")}
-            onToggleNotesCollapsed={() => setRightDrawerNotesCollapsed((prev) => !prev)}
-            onComposerTitleChange={setComposerTitle}
-            onComposerBodyChange={setComposerBody}
-            onSavePersonalNote={handleAddPersonalNote}
-            onDragStartNote={setDraggingPersonalNoteId}
-            onDragEndNote={() => {
-              setDraggingPersonalNoteId("");
-              setDropProblemGroupId("");
-            }}
-            onPersonalNoteDraftTitleChange={setPersonalNoteDraftTitle}
-            onPersonalNoteDraftBodyChange={setPersonalNoteDraftBody}
-            onCancelPersonalNoteEdit={handleCancelPersonalNoteEdit}
-            onSavePersonalNoteEdit={handleSavePersonalNoteEdit}
-            onStartPersonalNoteEdit={handleStartPersonalNoteEdit}
-            onDeletePersonalNote={handleDeletePersonalNote}
-          />
-        </div>
+        <CanvasWorkspacePanels {...workspacePanelProps} />
       </section>
 
       <CanvasEndMeetingDialogs
