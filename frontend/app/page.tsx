@@ -22,6 +22,9 @@ interface Transcript {
   timestamp: string;
   canvas_stage?: "ideation" | "problem-definition" | "solution" | string;
   canvas_target_id?: string;
+  transcript_status?: "final" | "processing" | string;
+  persisted?: boolean;
+  persistence_status?: "saving" | "retrying" | "persisted" | "persist_failed" | string;
 }
 
 type LoadedTranscriptRow = {
@@ -179,6 +182,10 @@ function readNumber(value: unknown, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function readBoolean(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function getSpeechDetectionDecision(
   metrics: RecordedAudioChunk["metrics"],
   profile: SpeechDetectionProfile | null,
@@ -234,6 +241,7 @@ function HomeContent() {
   const [fusionSelectedSpeaker, setFusionSelectedSpeaker] = useState<string>("");
   const [liveSpeechPreview, setLiveSpeechPreview] = useState<LiveSpeechPreview | null>(null);
   const [canvasStageContext, setCanvasStageContext] = useState<CanvasStageContext>({ stage: "ideation" });
+  const [transcriptPersistenceStatusText, setTranscriptPersistenceStatusText] = useState("");
 
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
@@ -250,6 +258,7 @@ function HomeContent() {
   const deviceCalibratedRef = useRef(false);
   const speechDetectionProfileRef = useRef<SpeechDetectionProfile | null>(null);
   const liveSpeechClearTimerRef = useRef<number | null>(null);
+  const transcriptPersistenceStatusTimerRef = useRef<number | null>(null);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
 
@@ -297,6 +306,17 @@ function HomeContent() {
     }, 5200);
   }, []);
 
+  const showTranscriptPersistenceStatus = useCallback((message: string, durationMs = 7000) => {
+    setTranscriptPersistenceStatusText(message);
+    if (transcriptPersistenceStatusTimerRef.current !== null) {
+      window.clearTimeout(transcriptPersistenceStatusTimerRef.current);
+    }
+    transcriptPersistenceStatusTimerRef.current = window.setTimeout(() => {
+      setTranscriptPersistenceStatusText("");
+      transcriptPersistenceStatusTimerRef.current = null;
+    }, durationMs);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (calibrationFinishTimerRef.current !== null) {
@@ -307,6 +327,9 @@ function HomeContent() {
       }
       if (liveSpeechClearTimerRef.current !== null) {
         window.clearTimeout(liveSpeechClearTimerRef.current);
+      }
+      if (transcriptPersistenceStatusTimerRef.current !== null) {
+        window.clearTimeout(transcriptPersistenceStatusTimerRef.current);
       }
       audioRecorderRef.current?.cleanup();
     };
@@ -361,6 +384,9 @@ function HomeContent() {
             timestamp: row.timestamp || row.created_at || new Date().toISOString(),
             canvas_stage: row.canvas_stage || "ideation",
             canvas_target_id: row.canvas_target_id || "",
+            transcript_status: "final",
+            persisted: true,
+            persistence_status: "persisted",
           })),
         );
 
@@ -415,6 +441,12 @@ function HomeContent() {
       const chunkIndex = readNumber(transcriptPayload.audio_chunk_index || audioMetaPayload.chunk_index, -1);
       const canvasStage = readString(transcriptPayload.canvas_stage || payload.canvas_stage, "ideation");
       const canvasTargetId = readString(transcriptPayload.canvas_target_id || payload.canvas_target_id);
+      const persisted = readBoolean(transcriptPayload.persisted ?? payload.persisted, true);
+      const persistenceStatus = readString(
+        transcriptPayload.persistence_status || payload.persistence_status,
+        persisted ? "persisted" : "saving",
+      );
+      const transcriptStatus = readString(transcriptPayload.transcript_status || payload.transcript_status, "final");
       const recordingNow = isRecordingRef.current || Boolean(audioRecorderRef.current?.isRecording());
       console.info("[STT] 서버 전사 수신", {
         id: transcriptId,
@@ -432,6 +464,8 @@ function HomeContent() {
         originalDurationMs: audioMetaPayload.original_duration_ms,
         removedSilenceMs: audioMetaPayload.removed_silence_ms,
         combinedChunkCount: audioMetaPayload.combined_chunk_count,
+        persisted,
+        persistenceStatus,
       });
       setTranscripts((prev) =>
         dedupeTranscripts([
@@ -443,10 +477,87 @@ function HomeContent() {
             timestamp: nextTimestamp,
             canvas_stage: canvasStage,
             canvas_target_id: canvasTargetId,
+            transcript_status: transcriptStatus,
+            persisted,
+            persistence_status: persistenceStatus,
           },
         ]),
       );
       showLiveSpeechPreview(speaker, text, nextTimestamp);
+    });
+
+    wsClient.on("transcript_persistence_updated", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      const transcriptPayload = isRecord(payload.transcript) ? payload.transcript : {};
+      const transientId = readString(payload.transient_id);
+      const transcriptId = readString(transcriptPayload.id, transientId);
+      const speaker = readString(transcriptPayload.speaker);
+      const text = readString(transcriptPayload.text);
+      const nextTimestamp = readString(
+        transcriptPayload.timestamp || transcriptPayload.created_at,
+        new Date().toISOString(),
+      );
+      const persisted = readBoolean(transcriptPayload.persisted ?? payload.persisted, false);
+      const persistenceStatus = readString(
+        transcriptPayload.persistence_status || payload.persistence_status,
+        persisted ? "persisted" : "retrying",
+      );
+      const canvasStage = readString(transcriptPayload.canvas_stage || payload.canvas_stage, "ideation");
+      const canvasTargetId = readString(transcriptPayload.canvas_target_id || payload.canvas_target_id);
+
+      console.info("[STT] 전사 저장 상태 업데이트", {
+        transientId,
+        transcriptId,
+        persisted,
+        persistenceStatus,
+      });
+
+      setTranscripts((prev) => {
+        let matched = false;
+        const nextRows = prev.map((row) => {
+          const sameId = Boolean(transcriptId && row.id === transcriptId);
+          const sameTransient = Boolean(transientId && row.id === transientId);
+          const sameContent = Boolean(speaker && text && row.speaker === speaker && row.text === text && row.timestamp === nextTimestamp);
+          if (!sameId && !sameTransient && !sameContent) return row;
+          matched = true;
+          return {
+            ...row,
+            id: transcriptId || row.id,
+            speaker: speaker || row.speaker,
+            text: text || row.text,
+            timestamp: nextTimestamp || row.timestamp,
+            canvas_stage: canvasStage || row.canvas_stage,
+            canvas_target_id: canvasTargetId || row.canvas_target_id,
+            transcript_status: "final",
+            persisted,
+            persistence_status: persistenceStatus,
+          };
+        });
+
+        if (!matched && text.trim()) {
+          nextRows.push({
+            id: transcriptId || transientId || `${nextTimestamp}-${speaker}-${text}`,
+            speaker: speaker || "알 수 없음",
+            text,
+            timestamp: nextTimestamp,
+            canvas_stage: canvasStage,
+            canvas_target_id: canvasTargetId,
+            transcript_status: "final",
+            persisted,
+            persistence_status: persistenceStatus,
+          });
+        }
+
+        return dedupeTranscripts(nextRows);
+      });
+
+      if (persistenceStatus === "retrying") {
+        showTranscriptPersistenceStatus("전사 저장 재시도 중");
+      } else if (persistenceStatus === "persist_failed") {
+        showTranscriptPersistenceStatus("전사 임시 표시 중 · 저장 실패", 10000);
+      }
     });
 
     wsClient.on("meeting_goal_updated", (message) => {
@@ -561,6 +672,18 @@ function HomeContent() {
         return;
       }
 
+      if (stage === "transcript_finalized") {
+        console.info("[STT] 전사 확정 - 화면 반영 및 저장 대기", {
+          preview: payload.text_preview,
+          length: payload.text_length,
+          transcriptId: payload.transcript_id,
+          persistenceStatus: payload.persistence_status,
+          elapsedMs: payload.elapsed_ms,
+          backendElapsedMs: payload.backend_elapsed_ms,
+        });
+        return;
+      }
+
       if (stage === "transcript_saved") {
         console.info("[STT] 전사 저장 완료", {
           preview: payload.text_preview,
@@ -664,7 +787,7 @@ function HomeContent() {
       wsClient.disconnect();
       setWsConnected(false);
     };
-  }, [user, meetingId, showLiveSpeechPreview, applyMeetingStateToUi]);
+  }, [user, meetingId, showLiveSpeechPreview, showTranscriptPersistenceStatus, applyMeetingStateToUi]);
 
   const finishCalibration = useCallback(() => {
     if (!user) return;
@@ -966,7 +1089,8 @@ function HomeContent() {
         onEndMeeting={endMeeting}
         onCanvasStageContextChange={setCanvasStageContext}
         recordingStatusText={
-          calibrationState === "running"
+          transcriptPersistenceStatusText ||
+          (calibrationState === "running"
             ? `마이크 캘리브레이션 ${calibrationSecondsLeft}s`
             : fusionSelectedUserId === user.id
             ? "내 마이크가 현재 선택됨"
@@ -974,7 +1098,7 @@ function HomeContent() {
             ? `${fusionSelectedSpeaker || "다른 화자"} 마이크 선택 중`
             : wsConnected
             ? "WebSocket 연결됨"
-            : "WebSocket 연결 안 됨"
+            : "WebSocket 연결 안 됨")
         }
       />
     </div>

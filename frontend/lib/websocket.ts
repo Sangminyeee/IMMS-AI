@@ -64,6 +64,7 @@ export class WebSocketClient {
           messageType !== 'audio_selection' &&
           messageType !== 'transcript' &&
           messageType !== 'transcript_created' &&
+          messageType !== 'transcript_persistence_updated' &&
           messageType !== 'stt_summary_updated' &&
           messageType !== 'canvas_node_preview'
         ) {
