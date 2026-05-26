@@ -10,7 +10,7 @@ function stageLabel(stage: CanvasStage) {
   return "해결책";
 }
 
-type CanvasHeaderProps = {
+export type CanvasHeaderViewState = {
   meetingTitle: string;
   isRecording: boolean;
   endMeetingSaving: boolean;
@@ -19,12 +19,18 @@ type CanvasHeaderProps = {
   problemDefinitionStagePending: boolean;
   isProblemDefinitionExploreStage: boolean;
   ideationBubbleDebugEnabled: boolean;
+};
+
+export type CanvasHeaderMeetingGoalState = {
   meetingGoalDraft: string;
   meetingGoalContextDraft: string;
   meetingGoalEditorOpen: boolean;
   meetingGoalEditorDraft: string;
   meetingGoalContextEditorDraft: string;
   meetingGoalSaving: boolean;
+};
+
+export type CanvasHeaderHandlers = {
   onEndMeetingClick: () => void;
   onRecordingToggle: () => void;
   onBackToDashboard: () => void;
@@ -40,35 +46,51 @@ type CanvasHeaderProps = {
   onStageSelect: (stage: CanvasStage) => void;
 };
 
+export type CanvasHeaderProps = {
+  view: CanvasHeaderViewState;
+  meetingGoal: CanvasHeaderMeetingGoalState;
+  handlers: CanvasHeaderHandlers;
+};
+
 export function CanvasHeader({
-  meetingTitle,
-  isRecording,
-  endMeetingSaving,
-  stage,
-  busy,
-  problemDefinitionStagePending,
-  isProblemDefinitionExploreStage,
-  ideationBubbleDebugEnabled,
-  meetingGoalDraft,
-  meetingGoalContextDraft,
-  meetingGoalEditorOpen,
-  meetingGoalEditorDraft,
-  meetingGoalContextEditorDraft,
-  meetingGoalSaving,
-  onEndMeetingClick,
-  onRecordingToggle,
-  onBackToDashboard,
-  onRecomputeIdeationBubbles,
-  onToggleIdeationBubbleDebug,
-  onRefreshProblemChunkSummaries,
-  onDebugRegenerateProblemDefinition,
-  onOpenMeetingGoalEditor,
-  onCancelMeetingGoalEdit,
-  onSaveMeetingGoalEdit,
-  onMeetingGoalEditorDraftChange,
-  onMeetingGoalContextEditorDraftChange,
-  onStageSelect,
+  view,
+  meetingGoal,
+  handlers,
 }: CanvasHeaderProps) {
+  const {
+    meetingTitle,
+    isRecording,
+    endMeetingSaving,
+    stage,
+    busy,
+    problemDefinitionStagePending,
+    isProblemDefinitionExploreStage,
+    ideationBubbleDebugEnabled,
+  } = view;
+  const {
+    meetingGoalDraft,
+    meetingGoalContextDraft,
+    meetingGoalEditorOpen,
+    meetingGoalEditorDraft,
+    meetingGoalContextEditorDraft,
+    meetingGoalSaving,
+  } = meetingGoal;
+  const {
+    onEndMeetingClick,
+    onRecordingToggle,
+    onBackToDashboard,
+    onRecomputeIdeationBubbles,
+    onToggleIdeationBubbleDebug,
+    onRefreshProblemChunkSummaries,
+    onDebugRegenerateProblemDefinition,
+    onOpenMeetingGoalEditor,
+    onCancelMeetingGoalEdit,
+    onSaveMeetingGoalEdit,
+    onMeetingGoalEditorDraftChange,
+    onMeetingGoalContextEditorDraftChange,
+    onStageSelect,
+  } = handlers;
+
   return (
     <div className="relative z-20 border border-black/10 bg-white shadow-[0_1px_0_rgba(0,0,0,0.04)]">
       <div className="grid min-h-[clamp(96px,13vh,141px)] grid-cols-1 items-center justify-items-center gap-3 px-[clamp(16px,2.4vw,33px)] py-[clamp(12px,1.8vh,16px)] lg:grid-cols-[minmax(0,1fr)_minmax(260px,1.35fr)_minmax(0,1fr)] lg:justify-items-stretch">

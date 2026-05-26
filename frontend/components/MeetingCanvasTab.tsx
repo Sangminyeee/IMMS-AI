@@ -14,6 +14,8 @@ import {
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
 import { CanvasHeader } from "@/components/canvas/CanvasHeader";
+import { useCanvasHeaderActions } from "@/components/canvas/useCanvasHeaderActions";
+import { useCanvasHeaderModels } from "@/components/canvas/useCanvasHeaderModels";
 import { CanvasWorkspacePanels } from "@/components/canvas/CanvasWorkspacePanels";
 import { useCanvasWorkspacePanelModels } from "@/components/canvas/useCanvasWorkspacePanelModels";
 import {
@@ -63,6 +65,7 @@ import { useProblemGroupingRationale } from "@/components/canvas/useProblemGroup
 import { useProblemGroupRelationships } from "@/components/canvas/useProblemGroupRelationships";
 import { useCanvasPersonalNotePanelActions } from "@/components/canvas/useCanvasPersonalNotePanelActions";
 import { usePersonalNoteCanvasLinking } from "@/components/canvas/usePersonalNoteCanvasLinking";
+import { useCanvasSurfaceInteractionHandlers } from "@/components/canvas/useCanvasSurfaceInteractionHandlers";
 import { useSummaryDocumentActions } from "@/components/canvas/useSummaryDocumentActions";
 import { useSharedCanvasBroadcast } from "@/components/canvas/useSharedCanvasBroadcast";
 import { useSharedCanvasIncomingSync } from "@/components/canvas/useSharedCanvasIncomingSync";
@@ -259,13 +262,6 @@ function stageLabel(stage: CanvasStage) {
 
 function shouldHideCanvasStatusMessage(message: string) {
   return /websocket|웹소켓|연결\s*안\s*됨|연결되지|오류|에러|실패/i.test(message);
-}
-
-function extractAgendaIdFromNodeId(nodeId: string) {
-  if (nodeId.startsWith("agenda-")) return nodeId.slice("agenda-".length);
-  const summaryMatch = nodeId.match(/^summary-(.+)-(\d+)$/);
-  if (summaryMatch) return summaryMatch[1];
-  return "";
 }
 
 function stripLeadingTimestamp(text: string) {
@@ -2574,20 +2570,20 @@ export default function MeetingCanvasTab({
     void handleGenerateProblemDefinition();
   }, [agendaModels.length, busy, handleGenerateProblemDefinition, problemGroups.length, stage]);
 
-  const handleStopRecordingClick = async () => {
+  const handleStopRecordingClick = useCallback(async () => {
     await onStopRecording?.();
     await flushProblemDiscussionBuffer("manual");
-  };
+  }, [flushProblemDiscussionBuffer, onStopRecording]);
 
-  const getEndingFinalSummaryDocumentSnapshot = () => {
+  const getEndingFinalSummaryDocumentSnapshot = useCallback(() => {
     const latestSummary = normalizeFinalSolutionSummaryPayload(latestSharedWorkspaceRef.current.finalSolutionSummary);
     if (latestSummary.markdown.trim() || (latestSummary.sections || []).length > 0 || latestSummary.final_count > 0) {
       return latestSummary;
     }
     return finalSummaryDocument;
-  };
+  }, [finalSummaryDocument, latestSharedWorkspaceRef]);
 
-  const handleEndMeetingClick = async () => {
+  const handleEndMeetingClick = useCallback(async () => {
     await flushProblemDiscussionBuffer("stage-change");
 
     const finalSolutionSummary = buildFinalSolutionSummaryPayload(getEndingFinalSummaryDocumentSnapshot());
@@ -2595,7 +2591,7 @@ export default function MeetingCanvasTab({
       finalCount: finalSolutionSummary.final_count,
       topicCount: finalSolutionSummary.sections?.length || finalSolutionSummary.topics.length,
     });
-  };
+  }, [flushProblemDiscussionBuffer, getEndingFinalSummaryDocumentSnapshot, openEndMeetingConfirm]);
 
   const handleDownloadEndMeetingSummaryPdf = () => {
     if (!endMeetingSummaryPreviewMarkdown.trim()) return;
@@ -2683,61 +2679,24 @@ export default function MeetingCanvasTab({
     setSelectedNodeId,
   });
 
-  const handleCanvasNodeClick = (event: React.MouseEvent, node: Node) => {
-    if (node.id.startsWith("ideation-keyword-")) {
-      event.stopPropagation();
-      return;
-    }
-    setSelectedNodeId(node.id);
-    setLeftPanelTab("detail");
-    if (stage !== "problem-definition") {
-      openRightDrawer();
-    }
-    const agendaId = extractAgendaIdFromNodeId(node.id);
-    if (node.id.startsWith("canvas-item-")) {
-      const canvasItemId = node.id.slice("canvas-item-".length);
-      const canvasItem = canvasItemById.get(canvasItemId) || null;
-      if (canvasItem && linkPendingPersonalNoteToCanvasItem(canvasItem)) {
-        return;
-      }
-      setSelectedCanvasItemId(canvasItemId);
-      setSelectedProblemGroupId("");
-      setEditingProblemGroupId("");
-      if (canvasItem?.agenda_id) {
-        setSelectedAgendaId(canvasItem.agenda_id);
-      }
-    } else {
-      setSelectedCanvasItemId("");
-    }
-    if (stage === "problem-definition" && problemDefinitionPhase === "structure") {
-      setSelectedProblemGroupId("");
-      setSelectedProblemSourceNodeId("");
-      setEditingProblemGroupId("");
-      return;
-    }
-    const clickedProblemGroupId =
-      node.id.startsWith("problem-")
-        ? node.id.slice("problem-".length)
-        : "";
-    if (clickedProblemGroupId) {
-      setSelectedProblemGroupId(clickedProblemGroupId);
-      setSelectedProblemSourceNodeId("");
-      setSelectedCanvasItemId("");
-      setEditingProblemGroupId("");
-    }
-    if (agendaId) {
-      setSelectedAgendaId(agendaId);
-    }
-  };
-
-  const handleCanvasPaneClick = () => {
-    closeRightDrawer();
-    if (stage === "ideation") {
-      setSelectedCanvasItemId("");
-      setSelectedNodeId("");
-      setLeftPanelTab("detail");
-    }
-  };
+  const {
+    handleCanvasNodeClick,
+    handleCanvasPaneClick,
+  } = useCanvasSurfaceInteractionHandlers({
+    stage,
+    problemDefinitionPhase,
+    canvasItemById,
+    linkPendingPersonalNoteToCanvasItem,
+    openRightDrawer,
+    closeRightDrawer,
+    setSelectedNodeId,
+    setLeftPanelTab,
+    setSelectedCanvasItemId,
+    setSelectedProblemGroupId,
+    setSelectedProblemSourceNodeId,
+    setEditingProblemGroupId,
+    setSelectedAgendaId,
+  });
 
   const handleFlowInitStable = useStableEvent((instance: ReactFlowInstance<Node, Edge>) => {
     flowRef.current = instance;
@@ -2802,6 +2761,46 @@ export default function MeetingCanvasTab({
     () => startPanelResize("right"),
     [startPanelResize],
   );
+  const headerHandlers = useCanvasHeaderActions({
+    router,
+    isRecording,
+    onToggleRecording,
+    onStopRecordingClick: handleStopRecordingClick,
+    onEndMeetingClick: handleEndMeetingClick,
+    onRefreshProblemChunkSummaries: handleRefreshProblemChunkSummaries,
+    onDebugRegenerateProblemDefinition: handleDebugRegenerateProblemDefinition,
+    onSaveMeetingGoalEdit: handleSaveMeetingGoalEdit,
+    onStageSelect: handleStageSelect,
+    onOpenMeetingGoalEditor: handleOpenMeetingGoalEditor,
+    onCancelMeetingGoalEdit: handleCancelMeetingGoalEdit,
+    setMeetingGoalEditorDraft,
+    setMeetingGoalContextEditorDraft,
+    setIdeationBubbleLayoutRevision,
+    setIdeationBubbleDebugEnabled,
+    setActivityMessage,
+  });
+
+  const headerProps = useCanvasHeaderModels({
+    view: {
+      meetingTitle,
+      isRecording: Boolean(isRecording),
+      endMeetingSaving,
+      stage,
+      busy,
+      problemDefinitionStagePending,
+      isProblemDefinitionExploreStage,
+      ideationBubbleDebugEnabled,
+    },
+    meetingGoal: {
+      meetingGoalDraft,
+      meetingGoalContextDraft,
+      meetingGoalEditorOpen,
+      meetingGoalEditorDraft,
+      meetingGoalContextEditorDraft,
+      meetingGoalSaving,
+    },
+    handlers: headerHandlers,
+  });
 
   const workspacePanelProps = useCanvasWorkspacePanelModels({
     isDesktopLayout,
@@ -2934,44 +2933,7 @@ export default function MeetingCanvasTab({
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
       <section className="flex h-full min-h-0 flex-col bg-[#f9f9f9]">
-        <CanvasHeader
-          meetingTitle={meetingTitle}
-          isRecording={isRecording}
-          endMeetingSaving={endMeetingSaving}
-          stage={stage}
-          busy={busy}
-          problemDefinitionStagePending={problemDefinitionStagePending}
-          isProblemDefinitionExploreStage={isProblemDefinitionExploreStage}
-          ideationBubbleDebugEnabled={ideationBubbleDebugEnabled}
-          meetingGoalDraft={meetingGoalDraft}
-          meetingGoalContextDraft={meetingGoalContextDraft}
-          meetingGoalEditorOpen={meetingGoalEditorOpen}
-          meetingGoalEditorDraft={meetingGoalEditorDraft}
-          meetingGoalContextEditorDraft={meetingGoalContextEditorDraft}
-          meetingGoalSaving={meetingGoalSaving}
-          onEndMeetingClick={() => void handleEndMeetingClick()}
-          onRecordingToggle={() => {
-            if (isRecording) {
-              void handleStopRecordingClick();
-              return;
-            }
-            void onToggleRecording?.();
-          }}
-          onBackToDashboard={() => router.push("/dashboard")}
-          onRecomputeIdeationBubbles={() => {
-            setIdeationBubbleLayoutRevision((current) => current + 1);
-            setActivityMessage("아이디어 버블 배치를 다시 계산했습니다.");
-          }}
-          onToggleIdeationBubbleDebug={() => setIdeationBubbleDebugEnabled((current) => !current)}
-          onRefreshProblemChunkSummaries={() => void handleRefreshProblemChunkSummaries()}
-          onDebugRegenerateProblemDefinition={() => void handleDebugRegenerateProblemDefinition()}
-          onOpenMeetingGoalEditor={handleOpenMeetingGoalEditor}
-          onCancelMeetingGoalEdit={handleCancelMeetingGoalEdit}
-          onSaveMeetingGoalEdit={() => void handleSaveMeetingGoalEdit()}
-          onMeetingGoalEditorDraftChange={setMeetingGoalEditorDraft}
-          onMeetingGoalContextEditorDraftChange={setMeetingGoalContextEditorDraft}
-          onStageSelect={(nextStage) => void handleStageSelect(nextStage)}
-        />
+        <CanvasHeader {...headerProps} />
 
         <CanvasWorkspacePanels {...workspacePanelProps} />
       </section>
