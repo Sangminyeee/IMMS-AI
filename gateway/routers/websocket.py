@@ -30,6 +30,15 @@ FUSION_STICKY_BONUS = 0.35
 FUSION_MIN_RMS = 0.004
 FUSION_MIN_SPEECH_RATIO = 0.05
 TRANSCRIPT_PERSIST_RETRY_DELAYS = (0.0, 2.0, 6.0, 15.0)
+TRANSCRIPT_STATUS_FINAL = "final"
+TRANSCRIPT_PERSISTENCE_SAVING = "saving"
+TRANSCRIPT_PERSISTENCE_RETRYING = "retrying"
+TRANSCRIPT_PERSISTENCE_PERSISTED = "persisted"
+TRANSCRIPT_PERSISTENCE_FAILED = "persist_failed"
+TRANSCRIPT_EVENT_CREATED = "transcript_created"
+TRANSCRIPT_EVENT_PERSISTENCE_UPDATED = "transcript_persistence_updated"
+TRANSCRIPT_SELECT_FIELDS_WITH_STAGE = "id, meeting_id, user_id, speaker, text, timestamp, created_at, canvas_stage, canvas_target_id"
+TRANSCRIPT_SELECT_FIELDS_BASE = "id, meeting_id, user_id, speaker, text, timestamp, created_at"
 fusion_states: Dict[str, Dict[str, Any]] = {}
 
 
@@ -474,10 +483,86 @@ def build_transcript_record(
         "audio_chunk_index": chunk_index,
         "canvas_stage": source.get("canvas_stage") or canvas_stage,
         "canvas_target_id": source.get("canvas_target_id") or canvas_target_id,
-        "transcript_status": "final",
+        "transcript_status": TRANSCRIPT_STATUS_FINAL,
         "persisted": persisted,
         "persistence_status": persistence_status,
     }
+
+
+def build_transcript_persistence_update_message(
+    *,
+    meeting_id: str,
+    transient_id: str,
+    transcript: dict[str, Any],
+    persisted: bool,
+    persistence_status: str,
+    retry_attempt: int | None = None,
+) -> dict[str, Any]:
+    message = {
+        "type": TRANSCRIPT_EVENT_PERSISTENCE_UPDATED,
+        "meeting_id": meeting_id,
+        "transient_id": transient_id,
+        "persisted": persisted,
+        "persistence_status": persistence_status,
+        "transcript": transcript,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if retry_attempt is not None:
+        message["retry_attempt"] = retry_attempt
+    return message
+
+
+def build_transcript_persistence_record(
+    saved: dict[str, Any] | None,
+    *,
+    transient_id: str,
+    meeting_id: str,
+    user_id: str,
+    speaker: str,
+    text: str,
+    audio_started_at: str,
+    audio_ended_at: str,
+    chunk_index: Any,
+    canvas_stage: str,
+    canvas_target_id: str,
+    persisted: bool,
+    persistence_status: str,
+) -> dict[str, Any]:
+    return build_transcript_record(
+        saved or {},
+        fallback_id=transient_id,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        speaker=speaker,
+        text=text,
+        timestamp=str(audio_started_at),
+        audio_started_at=audio_started_at,
+        audio_ended_at=audio_ended_at,
+        chunk_index=chunk_index,
+        canvas_stage=canvas_stage,
+        canvas_target_id=canvas_target_id,
+        persisted=persisted,
+        persistence_status=persistence_status,
+    )
+
+
+def query_existing_transcript(supabase: Any, insert_payload: dict[str, Any]):
+    try:
+        select_fields = TRANSCRIPT_SELECT_FIELDS_WITH_STAGE
+        response = select_transcript_by_identity(supabase, insert_payload, select_fields)
+    except Exception as exc:
+        message = str(exc)
+        if "canvas_stage" not in message and "canvas_target_id" not in message:
+            raise
+        response = select_transcript_by_identity(supabase, insert_payload, TRANSCRIPT_SELECT_FIELDS_BASE)
+    return response
+
+
+def select_transcript_by_identity(supabase: Any, insert_payload: dict[str, Any], select_fields: str):
+    query = supabase.table('transcripts').select(select_fields)
+    for key in ("meeting_id", "user_id", "speaker", "text", "timestamp"):
+        query = query.eq(key, insert_payload[key])
+    return query.limit(1).execute()
 
 
 async def persist_transcript_with_retry(
@@ -494,7 +579,6 @@ async def persist_transcript_with_retry(
     canvas_stage: str,
     canvas_target_id: str,
     transcription: dict[str, Any],
-    audio_meta: dict[str, Any],
 ):
     last_saved: dict[str, Any] | None = None
     for attempt, delay in enumerate(TRANSCRIPT_PERSIST_RETRY_DELAYS, start=1):
@@ -513,21 +597,20 @@ async def persist_transcript_with_retry(
         )
         last_saved = saved
         if saved and saved.get("persisted") is not False:
-            persisted_transcript = build_transcript_record(
+            persisted_transcript = build_transcript_persistence_record(
                 saved,
-                fallback_id=transient_id,
+                transient_id=transient_id,
                 meeting_id=meeting_id,
                 user_id=user_id,
                 speaker=speaker,
                 text=text,
-                timestamp=str(audio_started_at),
                 audio_started_at=audio_started_at,
                 audio_ended_at=audio_ended_at,
                 chunk_index=chunk_index,
                 canvas_stage=canvas_stage,
                 canvas_target_id=canvas_target_id,
                 persisted=True,
-                persistence_status="persisted",
+                persistence_status=TRANSCRIPT_PERSISTENCE_PERSISTED,
             )
             print(
                 f"[STT][gateway] transcript persisted bucket_id={bucket_id} "
@@ -546,43 +629,44 @@ async def persist_transcript_with_retry(
                 elapsed_ms=transcription.get("elapsed_ms"),
                 backend_elapsed_ms=transcription.get("backend_elapsed_ms"),
             )
-            await broadcast_to_meeting(meeting_id, {
-                "type": "transcript_persistence_updated",
-                "meeting_id": meeting_id,
-                "transient_id": transient_id,
-                "persisted": True,
-                "persistence_status": "persisted",
-                "transcript": persisted_transcript,
-                "timestamp": datetime.utcnow().isoformat(),
-            })
+            await broadcast_to_meeting(
+                meeting_id,
+                build_transcript_persistence_update_message(
+                    meeting_id=meeting_id,
+                    transient_id=transient_id,
+                    persisted=True,
+                    persistence_status=TRANSCRIPT_PERSISTENCE_PERSISTED,
+                    transcript=persisted_transcript,
+                ),
+            )
             return
 
         if attempt < len(TRANSCRIPT_PERSIST_RETRY_DELAYS):
-            await broadcast_to_meeting(meeting_id, {
-                "type": "transcript_persistence_updated",
-                "meeting_id": meeting_id,
-                "transient_id": transient_id,
-                "persisted": False,
-                "persistence_status": "retrying",
-                "retry_attempt": attempt,
-                "transcript": build_transcript_record(
-                    last_saved or {},
-                    fallback_id=transient_id,
+            await broadcast_to_meeting(
+                meeting_id,
+                build_transcript_persistence_update_message(
                     meeting_id=meeting_id,
-                    user_id=user_id,
-                    speaker=speaker,
-                    text=text,
-                    timestamp=str(audio_started_at),
-                    audio_started_at=audio_started_at,
-                    audio_ended_at=audio_ended_at,
-                    chunk_index=chunk_index,
-                    canvas_stage=canvas_stage,
-                    canvas_target_id=canvas_target_id,
+                    transient_id=transient_id,
                     persisted=False,
-                    persistence_status="retrying",
+                    persistence_status=TRANSCRIPT_PERSISTENCE_RETRYING,
+                    retry_attempt=attempt,
+                    transcript=build_transcript_persistence_record(
+                        last_saved,
+                        transient_id=transient_id,
+                        meeting_id=meeting_id,
+                        user_id=user_id,
+                        speaker=speaker,
+                        text=text,
+                        audio_started_at=audio_started_at,
+                        audio_ended_at=audio_ended_at,
+                        chunk_index=chunk_index,
+                        canvas_stage=canvas_stage,
+                        canvas_target_id=canvas_target_id,
+                        persisted=False,
+                        persistence_status=TRANSCRIPT_PERSISTENCE_RETRYING,
+                    ),
                 ),
-                "timestamp": datetime.utcnow().isoformat(),
-            })
+            )
 
     print(
         f"[STT][gateway] transcript persist failed bucket_id={bucket_id} "
@@ -598,30 +682,30 @@ async def persist_transcript_with_retry(
         text_length=len(text),
         transient_id=transient_id,
     )
-    await broadcast_to_meeting(meeting_id, {
-        "type": "transcript_persistence_updated",
-        "meeting_id": meeting_id,
-        "transient_id": transient_id,
-        "persisted": False,
-        "persistence_status": "persist_failed",
-        "transcript": build_transcript_record(
-            last_saved or {},
-            fallback_id=transient_id,
+    await broadcast_to_meeting(
+        meeting_id,
+        build_transcript_persistence_update_message(
             meeting_id=meeting_id,
-            user_id=user_id,
-            speaker=speaker,
-            text=text,
-            timestamp=str(audio_started_at),
-            audio_started_at=audio_started_at,
-            audio_ended_at=audio_ended_at,
-            chunk_index=chunk_index,
-            canvas_stage=canvas_stage,
-            canvas_target_id=canvas_target_id,
+            transient_id=transient_id,
             persisted=False,
-            persistence_status="persist_failed",
+            persistence_status=TRANSCRIPT_PERSISTENCE_FAILED,
+            transcript=build_transcript_persistence_record(
+                last_saved,
+                transient_id=transient_id,
+                meeting_id=meeting_id,
+                user_id=user_id,
+                speaker=speaker,
+                text=text,
+                audio_started_at=audio_started_at,
+                audio_ended_at=audio_ended_at,
+                chunk_index=chunk_index,
+                canvas_stage=canvas_stage,
+                canvas_target_id=canvas_target_id,
+                persisted=False,
+                persistence_status=TRANSCRIPT_PERSISTENCE_FAILED,
+            ),
         ),
-        "timestamp": datetime.utcnow().isoformat(),
-    })
+    )
 
 
 async def transcribe_and_broadcast_winner(
@@ -705,7 +789,7 @@ async def transcribe_and_broadcast_winner(
         canvas_stage=canvas_stage,
         canvas_target_id=canvas_target_id,
         persisted=False,
-        persistence_status="saving",
+        persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
     )
     print(
         f"[STT][gateway] transcript finalized bucket_id={bucket_id} transient_id={transient_id} "
@@ -720,19 +804,19 @@ async def transcribe_and_broadcast_winner(
         text_preview=transcribed_text[:120],
         text_length=len(transcribed_text),
         transcript_id=transient_id,
-        persistence_status="saving",
+        persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
         elapsed_ms=transcription.get("elapsed_ms"),
         backend_elapsed_ms=transcription.get("backend_elapsed_ms"),
     )
     transcript_message = {
-        'type': 'transcript_created',
+        'type': TRANSCRIPT_EVENT_CREATED,
         'meeting_id': meeting_id,
         'transcript': finalized_transcript,
         'canvas_stage': canvas_stage,
         'canvas_target_id': canvas_target_id,
-        'transcript_status': 'final',
+        'transcript_status': TRANSCRIPT_STATUS_FINAL,
         'persisted': False,
-        'persistence_status': 'saving',
+        'persistence_status': TRANSCRIPT_PERSISTENCE_SAVING,
         'stt_elapsed_ms': transcription.get("elapsed_ms"),
         'backend_elapsed_ms': transcription.get("backend_elapsed_ms"),
         'audio_meta': audio_meta,
@@ -761,7 +845,6 @@ async def transcribe_and_broadcast_winner(
             canvas_stage=canvas_stage,
             canvas_target_id=canvas_target_id,
             transcription=transcription,
-            audio_meta=audio_meta,
         )
     )
 
@@ -971,6 +1054,21 @@ async def save_transcript(
 
     try:
         supabase = get_supabase()
+        existing_response = query_existing_transcript(supabase, insert_payload)
+        existing_rows = existing_response.data or []
+        if existing_rows and isinstance(existing_rows[0], dict):
+            print(
+                f"[STT][gateway] duplicate transcript skipped id={existing_rows[0].get('id')} "
+                f"meeting_id={meeting_id} user_id={user_id}",
+                flush=True,
+            )
+            return {
+                **existing_rows[0],
+                "canvas_stage": existing_rows[0].get("canvas_stage") or canvas_stage,
+                "canvas_target_id": existing_rows[0].get("canvas_target_id") or canvas_target_id,
+                "persisted": True,
+            }
+
         try:
             response = supabase.table('transcripts').insert(insert_payload).execute()
         except Exception as exc:
