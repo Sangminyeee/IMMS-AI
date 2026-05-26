@@ -33,6 +33,8 @@ type IdeationKeywordOperations = {
   removeTexts: string[];
 };
 
+type IdeationKeywordDebugPayload = Record<string, unknown>;
+
 const IDEATION_KEYWORD_BATCH_SIZE = 2;
 const IDEATION_KEYWORD_CONTEXT_CACHE_MAX_UTTERANCES = 180;
 const IDEATION_KEYWORD_CONTEXT_CACHE_MAX_CHARS = 18_000;
@@ -60,6 +62,15 @@ function normalizeIdeationKeywordTextKey(text: string) {
 
 function makeIdeationKeywordBubbleId(text: string) {
   return `ideation-keyword-${encodeURIComponent(text)}`;
+}
+
+function logIdeationKeywordDebugGroup(title: string, payload: IdeationKeywordDebugPayload) {
+  const timestamp = new Date().toISOString();
+  console.groupCollapsed(`[Bubble][Debug] ${title} · ${timestamp}`);
+  Object.entries(payload).forEach(([key, value]) => {
+    console.info(key, value);
+  });
+  console.groupEnd();
 }
 
 function buildIdeationKeywordUtterances(transcripts: IdeationTranscript[]): IdeationKeywordUtterance[] {
@@ -411,11 +422,41 @@ export function useIdeationKeywordBubbles({
         keywordRequest.meeting_goal_context = cleanMeetingGoalContext;
       }
 
+      logIdeationKeywordDebugGroup("request", {
+        reason,
+        requestSeq,
+        meetingId,
+        meetingTopic,
+        requestUtterances,
+        requestPayload: keywordRequest,
+        currentBubbleStore: bubbleStoreRef.current,
+        processedIds: [...processedIdsRef.current],
+        pendingUtteranceCount: pendingUtterances.length,
+      });
+
       void extractCanvasIdeationKeywords(keywordRequest)
         .then((result) => {
           if (requestSeqRef.current !== requestSeq) return;
+          logIdeationKeywordDebugGroup("llm response", {
+            requestSeq,
+            usedLlm: result.used_llm,
+            ok: result.ok,
+            warning: result.warning,
+            sourceSignature: result.source_signature,
+            keywords: result.keywords,
+            mergeKeywords: result.merge_keywords,
+            removeKeywords: result.remove_keywords,
+            previousBubbleStore: bubbleStoreRef.current,
+          });
           if (!result.used_llm) {
             requestUtterances.forEach((row) => processedIdsRef.current.add(row.id));
+            logIdeationKeywordDebugGroup("skipped", {
+              requestSeq,
+              reason: "llm_unavailable",
+              warning: result.warning,
+              preservedBubbleStore: bubbleStoreRef.current,
+              processedIds: [...processedIdsRef.current],
+            });
             setStatusMessage(result.warning || "LLM 응답이 없어 이번 발화는 버블에 반영하지 않았습니다.");
             return;
           }
@@ -423,21 +464,52 @@ export function useIdeationKeywordBubbles({
           const operations = normalizeIdeationKeywordOperations(result);
           requestUtterances.forEach((row) => processedIdsRef.current.add(row.id));
 
+          logIdeationKeywordDebugGroup("normalized", {
+            requestSeq,
+            incomingBubbles: nextBubbles,
+            operations,
+            previousBubbleStore: bubbleStoreRef.current,
+            processedIds: [...processedIdsRef.current],
+          });
+
           if (nextBubbles.length > 0 || operations.mergeDirectives.length > 0 || operations.removeTexts.length > 0) {
+            const previousBubbles = bubbleStoreRef.current;
             const merged = mergeIdeationKeywordBubbleBatch(bubbleStoreRef.current, nextBubbles, operations);
             bubbleStoreRef.current = merged.allBubbles;
             setLlmBubbles(merged.updatedBubbles);
+            logIdeationKeywordDebugGroup("merge result", {
+              requestSeq,
+              previousBubbles,
+              incomingBubbles: nextBubbles,
+              operations,
+              allBubbles: merged.allBubbles,
+              updatedBubbles: merged.updatedBubbles,
+              mergedCount: merged.mergedCount,
+              removedCount: merged.removedCount,
+              finalBubbleStore: bubbleStoreRef.current,
+            });
             setStatusMessage(
               `버블 ${merged.updatedBubbles.length}개 업데이트, ${merged.mergedCount}개 합병, ${merged.removedCount}개 정리했습니다.`,
             );
             return;
           }
 
+          logIdeationKeywordDebugGroup("no changes", {
+            requestSeq,
+            previousBubbleStore: bubbleStoreRef.current,
+            result,
+          });
           setStatusMessage("이번 발화에서는 추가할 핵심 버블이 없었습니다.");
         })
         .catch((error) => {
           if (requestSeqRef.current !== requestSeq) return;
           console.error("Failed to extract ideation keyword bubbles:", error);
+          logIdeationKeywordDebugGroup("error", {
+            requestSeq,
+            error,
+            requestPayload: keywordRequest,
+            preservedBubbleStore: bubbleStoreRef.current,
+          });
           setStatusMessage("기존 버블을 유지하고 다음 발화에서 다시 시도합니다.");
         })
         .finally(() => {
