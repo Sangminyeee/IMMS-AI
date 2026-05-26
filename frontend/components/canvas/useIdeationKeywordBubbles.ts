@@ -91,6 +91,7 @@ function normalizeIdeationKeywordBubbleKind(value: unknown): IdeationKeywordBubb
 
 function normalizeIdeationKeywordBubblesFromResponse(
   keywords: CanvasIdeationKeywordResponse["keywords"],
+  existingBubbles: IdeationKeywordBubble[] = [],
 ): IdeationKeywordBubble[] {
   const normalized = keywords
     .map((keyword) => {
@@ -110,18 +111,19 @@ function normalizeIdeationKeywordBubblesFromResponse(
     .filter((keyword) => keyword.text.length >= 2);
   const maxCount = Math.max(1, ...normalized.map((keyword) => keyword.count));
   const selectedTexts = new Set(normalized.map((keyword) => keyword.text));
+  const relationshipTexts = new Set([...selectedTexts, ...existingBubbles.map((bubble) => bubble.text)]);
   return normalized.map((keyword) => ({
     id: makeIdeationKeywordBubbleId(keyword.text),
     text: keyword.text,
     count: keyword.count,
     weight: keyword.count / maxCount,
-    related: keyword.related.filter((item) => selectedTexts.has(item) && item !== keyword.text).slice(0, 5),
+    related: keyword.related.filter((item) => relationshipTexts.has(item) && item !== keyword.text).slice(0, 5),
     kind: keyword.offTopic ? "off_topic" : keyword.kind,
     importance: keyword.importance,
     relevance: keyword.relevance,
     offTopic: keyword.offTopic,
     offTopicReason: keyword.offTopicReason,
-    anchorText: selectedTexts.has(keyword.anchorText) && keyword.anchorText !== keyword.text ? keyword.anchorText : "",
+    anchorText: relationshipTexts.has(keyword.anchorText) && keyword.anchorText !== keyword.text ? keyword.anchorText : "",
   }));
 }
 
@@ -313,11 +315,15 @@ export function useIdeationKeywordBubbles({
   transcripts,
   meetingId,
   meetingTopic,
+  meetingGoal,
+  meetingGoalContext,
   stage,
 }: {
   transcripts: IdeationTranscript[];
   meetingId: string;
   meetingTopic: string;
+  meetingGoal?: string;
+  meetingGoalContext?: string;
   stage: CanvasStage;
 }) {
   const [llmBubbles, setLlmBubbles] = useState<IdeationKeywordBubble[]>([]);
@@ -388,17 +394,32 @@ export function useIdeationKeywordBubbles({
       requestInFlightRef.current = true;
       setStatusMessage("AI가 버블을 정리 중입니다.");
 
-      void extractCanvasIdeationKeywords({
+      const keywordRequest: Parameters<typeof extractCanvasIdeationKeywords>[0] = {
         meeting_id: meetingId,
         meeting_topic: meetingTopic,
         utterances: requestUtterances,
         context_cache: buildIdeationKeywordContextCache(ideationKeywordUtterances, requestUtterances),
         existing_keywords: buildExistingIdeationKeywordPayload(bubbleStoreRef.current),
         max_keywords: IDEATION_KEYWORD_MAX_KEYWORDS,
-      })
+      };
+      const cleanMeetingGoal = meetingGoal?.trim() || "";
+      const cleanMeetingGoalContext = meetingGoalContext?.trim() || "";
+      if (cleanMeetingGoal) {
+        keywordRequest.meeting_goal = cleanMeetingGoal;
+      }
+      if (cleanMeetingGoalContext) {
+        keywordRequest.meeting_goal_context = cleanMeetingGoalContext;
+      }
+
+      void extractCanvasIdeationKeywords(keywordRequest)
         .then((result) => {
           if (requestSeqRef.current !== requestSeq) return;
-          const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || []);
+          if (!result.used_llm) {
+            requestUtterances.forEach((row) => processedIdsRef.current.add(row.id));
+            setStatusMessage(result.warning || "LLM 응답이 없어 이번 발화는 버블에 반영하지 않았습니다.");
+            return;
+          }
+          const nextBubbles = normalizeIdeationKeywordBubblesFromResponse(result.keywords || [], bubbleStoreRef.current);
           const operations = normalizeIdeationKeywordOperations(result);
           requestUtterances.forEach((row) => processedIdsRef.current.add(row.id));
 
@@ -407,9 +428,7 @@ export function useIdeationKeywordBubbles({
             bubbleStoreRef.current = merged.allBubbles;
             setLlmBubbles(merged.updatedBubbles);
             setStatusMessage(
-              result.used_llm
-                ? `버블 ${merged.updatedBubbles.length}개 업데이트, ${merged.mergedCount}개 합병, ${merged.removedCount}개 정리했습니다.`
-                : `버블 후보 ${merged.updatedBubbles.length}개를 반영했습니다.`,
+              `버블 ${merged.updatedBubbles.length}개 업데이트, ${merged.mergedCount}개 합병, ${merged.removedCount}개 정리했습니다.`,
             );
             return;
           }
@@ -441,6 +460,8 @@ export function useIdeationKeywordBubbles({
   }, [
     ideationKeywordUtterances,
     meetingId,
+    meetingGoal,
+    meetingGoalContext,
     meetingTopic,
     stage,
   ]);

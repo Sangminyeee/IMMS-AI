@@ -5,12 +5,15 @@ type CanvasEndMeetingDialogPreview = {
   topicCount: number;
 } | null;
 
-type CanvasEndMeetingDialogsProps = {
+export type CanvasEndMeetingDialogsViewState = {
   confirmOpen: boolean;
   saving: boolean;
   preview: CanvasEndMeetingDialogPreview;
   summaryPreviewMarkdown: string;
   summaryPreviewHtml: string;
+};
+
+export type CanvasEndMeetingDialogsHandlers = {
   onCancel: () => void;
   onConfirm: () => void;
   onDownloadPdf: () => void;
@@ -18,18 +21,30 @@ type CanvasEndMeetingDialogsProps = {
   onSaveAndEnd: () => void;
 };
 
+export type CanvasEndMeetingDialogsProps = {
+  view: CanvasEndMeetingDialogsViewState;
+  handlers: CanvasEndMeetingDialogsHandlers;
+};
+
 export function CanvasEndMeetingDialogs({
-  confirmOpen,
-  saving,
-  preview,
-  summaryPreviewMarkdown,
-  summaryPreviewHtml,
-  onCancel,
-  onConfirm,
-  onDownloadPdf,
-  onBackToConfirm,
-  onSaveAndEnd,
+  view,
+  handlers,
 }: CanvasEndMeetingDialogsProps) {
+  const {
+    confirmOpen,
+    saving,
+    preview,
+    summaryPreviewMarkdown,
+    summaryPreviewHtml,
+  } = view;
+  const {
+    onCancel,
+    onConfirm,
+    onDownloadPdf,
+    onBackToConfirm,
+    onSaveAndEnd,
+  } = handlers;
+
   return (
     <>
       {confirmOpen ? (

@@ -2200,6 +2200,8 @@ class IdeationExistingKeywordInput(BaseModel):
 class IdeationKeywordExtractInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
+    meeting_goal: str = ""
+    meeting_goal_context: str = ""
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     context_cache: str = Field(default="", max_length=20000)
     context_utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
@@ -5477,6 +5479,8 @@ def _normalize_ideation_keyword_text(raw: Any) -> str:
         return ""
     if re.fullmatch(r"\d+", text):
         return ""
+    if re.fullmatch(r"\d{2,4}\s*년(?:도)?", text):
+        return ""
     lowered = text.lower()
     if lowered in STOPWORDS or lowered in TITLE_NOISE_TOKENS:
         return ""
@@ -5591,7 +5595,6 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
     existing_keywords = _ideation_existing_keyword_rows(payload)
     context_cache = _ideation_context_cache_text(payload)
     input_payload = {
-        "meeting_topic": _safe_text(payload.meeting_topic),
         "max_keywords": int(payload.max_keywords or 18),
         "conversation_context_cache": context_cache,
         "existing_keywords": existing_keywords,
@@ -5605,22 +5608,34 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
             for row in rows[-120:]
         ],
     }
+    meeting_topic = _safe_text(payload.meeting_topic)
+    meeting_goal = _safe_text(payload.meeting_goal)
+    meeting_goal_context = _safe_text(payload.meeting_goal_context)
+    if meeting_topic:
+        input_payload["meeting_topic"] = meeting_topic
+    if meeting_goal:
+        input_payload["meeting_goal"] = meeting_goal
+    if meeting_goal_context:
+        input_payload["meeting_goal_context"] = meeting_goal_context
     return (
         "너는 아이디어 회의의 STT 전사에서 캔버스 버블로 보여줄 핵심 의미 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- conversation_context_cache와 existing_keywords를 참고해 회의 흐름과 이미 잡힌 핵심어를 이해한다.\n"
+        "- conversation_context_cache, meeting_goal, meeting_goal_context, existing_keywords를 참고해 회의 흐름과 이미 잡힌 핵심어를 이해한다.\n"
+        "- meeting_goal과 meeting_goal_context가 입력에 없으면 없는 정보로 간주하고 추측하지 않는다.\n"
         "- 새로 반환할 keywords는 target_utterances에서 실제로 말한 핵심 명사/고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
         "- 반드시 target_utterances에 나온 표현 또는 그 명사형 축약만 새 keywords로 뽑는다. 문맥 캐시에만 있고 target에는 없는 새 개념을 만들지 않는다.\n"
-        "- 동사, 형용사, 서술어, 문장, filler, 접속사, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
+        "- 동사, 형용사, 서술어, 문장, filler, 접속사, 단독 숫자/년도, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
         "- text는 반드시 명사, 고유명사, 또는 짧은 명사구여야 한다. '~하다', '~한다', '~해야', '~되는', '~보임' 같은 서술형/동사형은 금지한다.\n"
-        "- 이번 batch 전체에서 반환할 버블은 1~3개만 고른다. 정말 핵심이 없을 때만 0개를 반환한다.\n"
+        "- 이번 batch 전체에서 반환할 버블은 0~3개다. 맥락상 의미 있는 핵심 명사가 없으면 keywords는 빈 배열이어야 한다.\n"
+        "- 새 버블 생성보다 기존 버블 흡수, count 증가, merge_keywords 합병을 우선한다.\n"
         "- existing_keywords에 같은 의미, 동의어, 축약어, 상하위 표현이 있으면 새 버블을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- 예: '트럼프', '트럼프 대통령', '도널드 트럼프'는 하나의 기존 text로 합친다.\n"
         "- existing_keywords 안에서 중복/동의어/세부 표현이 따로 버블화되어 있으면 merge_keywords로 합병한다.\n"
         "- existing_keywords 안에서 회의 흐름상 너무 범용적이거나 현재 의미 그래프를 흐리는 버블은 remove_keywords에 넣어 정리한다. 단, 한동안 언급이 적다는 이유만으로 핵심 주제를 지우지 않는다.\n"
         "- 기존 버블의 세부 표현에 불과한 문구는 기존 버블 count를 올리는 용도로 기존 text를 반환한다.\n"
         "- 정말 새로운 중심 개념이거나 기존 버블과 분리해서 보아야 할 관계/쟁점일 때만 새 text를 만든다.\n"
-        "- 문장 안에서는 눈에 띄어도 meeting_topic과 최근 흐름에 약하면 relevance를 낮게 주거나 off_topic으로 표시한다.\n"
-        "- 같은 문장이나 가까운 발화에서 함께 나온 명사는 related에 서로 연결한다.\n"
+        "- 문장 안에서는 눈에 띄어도 meeting_topic/meeting_goal/최근 흐름과 약하면 relevance를 낮게 주거나 off_topic으로 표시한다.\n"
+        "- 같은 문장이나 가까운 발화에서 함께 나온 명사는 related에 서로 연결한다. related와 anchor는 기존 버블 text를 참조해도 된다.\n"
         "- '미중 갈등', '미중 경쟁'처럼 복합 표현은 '미중'이 기존에 있으면 text='미중'으로 흡수하거나, 관계 자체가 핵심이면 text='갈등'/'경쟁', anchor='미중'처럼 분리한다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
@@ -5635,27 +5650,33 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         "  ]\n"
         "}\n\n"
         "[규칙]\n"
-        f"- keywords는 최대 {int(payload.max_keywords or 18)}개.\n"
+        f"- keywords는 0개 이상, 최대 {int(payload.max_keywords or 18)}개.\n"
         "- 가능하면 existing_keywords의 text를 재사용한다. 재사용한 text는 기존 버블의 크기를 키우는 신호다.\n"
         "- merge_keywords.source는 existing_keywords에 있는 text여야 한다. target은 existing_keywords 또는 이번 keywords에 있는 text여야 한다.\n"
         "- remove_keywords에는 existing_keywords의 text만 넣는다. 이번 keywords나 merge target으로 반환한 text는 remove_keywords에 넣지 않는다.\n"
         "- merge/remove는 확신이 높은 경우만 사용한다. 불확실하면 기존 버블을 유지한다.\n"
         "- 새 text는 이번 batch에서 정말 새 논점일 때만 만든다. 같은 의미의 중복 버블은 금지한다.\n"
+        "- 반드시 1개 이상 반환하려고 하지 않는다. 잡담, 추임새, 단독 연도/숫자, 전체 흐름과 약한 단어만 있으면 keywords는 []로 둔다.\n"
         "- 3개를 초과해서 반환하지 않는다. 여러 표현이 있으면 중심 개념 1개와 관계 1~2개만 남긴다.\n"
         "- count는 기존 count가 아니라 target_utterances에서 해당 의미가 나타난 발화 수다.\n"
         "- text는 2~18자 정도의 명사/고유명사/짧은 명사구만 허용한다. 문장, 서술어, 동사구, 형용사구는 금지한다.\n"
-        "- 좋은 text 예: '미중', '경쟁', '갈등', '방문 결과', '관세', '일정 조율'. 나쁜 text 예: '다른 양상을 보임', '해야 한다', '좋은 것 같다'.\n"
+        "- 좋은 text 예: '미중', '경쟁', '갈등', '방문 결과', '관세', '일정 조율'. 나쁜 text 예: '2026년', '다른 양상을 보임', '해야 한다', '좋은 것 같다'.\n"
         "- count는 최소 1 이상.\n"
         "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
         "- importance는 회의 전체에서의 중요도, relevance는 현재 meeting_topic/최근 흐름과의 관련도이며 0~1 숫자다.\n"
         "- off_topic은 딴소리/논점 이탈일 때만 true로 둔다. 단순히 중요도가 낮다는 이유만으로 true로 두지 않는다.\n"
-        "- anchor는 keywords 안에 있는 중심 text만 넣는다. 중심 버블이 없으면 빈 문자열로 둔다.\n"
-        "- related에는 keywords 안에 있는 text만 넣는다.\n"
+        "- anchor는 keywords 또는 existing_keywords 안에 있는 중심 text만 넣는다. 중심 버블이 없으면 빈 문자열로 둔다.\n"
+        "- related에는 keywords 또는 existing_keywords 안에 있는 text만 넣는다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
 
-def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]], max_keywords: int) -> list[dict[str, Any]]:
+def _normalize_ideation_keyword_items(
+    parsed: Any,
+    fallback: list[dict[str, Any]],
+    max_keywords: int,
+    existing_keywords: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     raw_items = parsed.get("keywords") if isinstance(parsed, dict) else None
     if not isinstance(raw_items, list):
         return fallback
@@ -5712,9 +5733,11 @@ def _normalize_ideation_keyword_items(parsed: Any, fallback: list[dict[str, Any]
             break
 
     selected_texts = {item["text"] for item in candidates}
+    existing_texts = {_safe_text(item.get("text")) for item in (existing_keywords or []) if _safe_text(item.get("text"))}
+    relationship_texts = selected_texts | existing_texts
     for item in candidates:
-        item["related"] = [value for value in item.get("related", []) if value in selected_texts and value != item["text"]]
-        if item.get("anchor") not in selected_texts or item.get("anchor") == item["text"]:
+        item["related"] = [value for value in item.get("related", []) if value in relationship_texts and value != item["text"]]
+        if item.get("anchor") not in relationship_texts or item.get("anchor") == item["text"]:
             item["anchor"] = ""
     return candidates
 
@@ -8503,10 +8526,10 @@ def _get_whisper_model():
         return _WHISPER_MODEL
 
 
-def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -> str:
+def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
     print(
         f"[STT][backend] transcribe function enter bytes={len(data)} suffix={suffix} "
-        f"meeting_goal={bool(_safe_text(meeting_goal))}",
+        "prompt=False",
         flush=True,
     )
     model = _get_whisper_model()
@@ -8515,9 +8538,6 @@ def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -
         tmp_path = tmp.name
     try:
         kwargs = {"language": "ko", "task": "transcribe", "verbose": False}
-        clean_goal = _safe_text(meeting_goal)
-        if clean_goal:
-            kwargs["initial_prompt"] = f"회의 목표: {clean_goal}. 회의 관련 고유명사와 핵심 용어를 한국어로 정확히 전사한다."
         try:
             import torch
 
@@ -8526,7 +8546,7 @@ def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -
             kwargs["fp16"] = False
         print(
             f"[STT][backend] whisper.transcribe start path={tmp_path} "
-            f"fp16={kwargs.get('fp16')} prompt={bool(kwargs.get('initial_prompt'))}",
+            f"fp16={kwargs.get('fp16')} prompt=False",
             flush=True,
         )
         result = model.transcribe(tmp_path, **kwargs)
@@ -8540,6 +8560,209 @@ def _transcribe_with_whisper(data: bytes, suffix: str, meeting_goal: str = "") -
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _strip_stt_prompt_leakage(text: str) -> str:
+    clean = re.sub(r"\s+", " ", _safe_text(text)).strip()
+    if not clean:
+        return ""
+    return re.sub(
+        r"^\s*(?:회의\s*목표\s*(?:는|:)|관련\s*맥락\s*(?:은|:))\s*",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _normalize_stt_refine_context(raw: Any, limit: int = 4) -> list[dict[str, str]]:
+    rows = raw if isinstance(raw, list) else []
+    normalized: list[dict[str, str]] = []
+    for row in rows[-limit:]:
+        if not isinstance(row, dict):
+            continue
+        text = _strip_stt_prompt_leakage(row.get("text") or "")
+        if not text:
+            continue
+        normalized.append({
+            "speaker": _safe_text(row.get("speaker"), "참가자")[:80],
+            "text": _truncate_text(text, 260),
+            "timestamp": _safe_text(row.get("timestamp"))[:80],
+        })
+    return normalized
+
+
+def _normalize_stt_context_terms(raw: Any, limit: int = 40) -> list[str]:
+    values = raw if isinstance(raw, list) else []
+    terms: list[str] = []
+    for item in values:
+        text = re.sub(r"\s+", " ", _safe_text(item)).strip()
+        if not text or len(text) > 40:
+            continue
+        if text not in terms:
+            terms.append(text)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _normalize_stt_correction_hints(raw: Any, limit: int = 20) -> list[dict[str, str]]:
+    values = raw if isinstance(raw, list) else []
+    hints: list[dict[str, str]] = []
+    for item in values[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        raw_text = re.sub(r"\s+", " ", _safe_text(item.get("raw") or item.get("from"))).strip()
+        corrected = re.sub(r"\s+", " ", _safe_text(item.get("corrected") or item.get("to"))).strip()
+        if not raw_text or not corrected or raw_text == corrected:
+            continue
+        hints.append({"raw": raw_text[:80], "corrected": corrected[:80]})
+    return hints
+
+
+def _normalize_stt_context_pack(raw: Any) -> dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    pack: dict[str, Any] = {}
+    for key in ("stage", "meeting_goal", "meeting_goal_context", "current_focus"):
+        value = _safe_text(source.get(key))
+        if value:
+            pack[key] = _truncate_text(value, 600 if key != "current_focus" else 220)
+    recent = _normalize_stt_refine_context(source.get("recent_utterances"), limit=4)
+    if recent:
+        pack["recent_utterances"] = recent
+    terms = _normalize_stt_context_terms(source.get("key_terms"), limit=40)
+    if terms:
+        pack["key_terms"] = terms
+    hints = _normalize_stt_correction_hints(source.get("correction_hints"), limit=20)
+    if hints:
+        pack["correction_hints"] = hints
+    return pack
+
+
+def _parse_stt_context_pack(raw: str) -> dict[str, Any]:
+    text = _safe_text(raw)
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    return _normalize_stt_context_pack(parsed)
+
+
+def _summarize_stt_context_pack(pack: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "recent_utterance_count": len(pack.get("recent_utterances") or []),
+        "key_term_count": len(pack.get("key_terms") or []),
+        "correction_hint_count": len(pack.get("correction_hints") or []),
+        "has_current_focus": bool(pack.get("current_focus")),
+        "has_meeting_goal": bool(pack.get("meeting_goal")),
+        "has_meeting_goal_context": bool(pack.get("meeting_goal_context")),
+    }
+
+
+def _refine_transcript_text_with_llm(
+    raw_text: str,
+    *,
+    meeting_goal: str = "",
+    meeting_goal_context: str = "",
+    context_pack: dict[str, Any] | None = None,
+) -> tuple[str, bool, str, dict[str, Any]]:
+    raw = _safe_text(raw_text)
+    fallback = _strip_stt_prompt_leakage(raw)
+    if not raw:
+        return "", False, "", {}
+
+    normalized_pack = _normalize_stt_context_pack(context_pack or {})
+    clean_goal = _safe_text(meeting_goal)
+    clean_context = _safe_text(meeting_goal_context)
+    if clean_goal and not normalized_pack.get("meeting_goal"):
+        normalized_pack["meeting_goal"] = clean_goal
+    if clean_context and not normalized_pack.get("meeting_goal_context"):
+        normalized_pack["meeting_goal_context"] = clean_context
+
+    input_payload = {
+        "raw_transcript": _truncate_text(raw, 1200),
+    }
+    if normalized_pack:
+        input_payload["context_pack"] = normalized_pack
+
+    prompt = (
+        "너는 Whisper STT 결과를 회의록에 바로 넣기 좋게 다듬는 후처리기다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[목표]\n"
+        "- raw_transcript의 실제 발화 의미를 보존하면서 한국어 문장만 가볍게 정리한다.\n"
+        "- context_pack은 STT 보정을 위한 짧은 문맥 패키지다. 발화에 없는 내용을 추가하지 않는다.\n"
+        "- key_terms와 correction_hints는 고유명사, 제품명, 인명, 반복 주제어 보정을 위한 가장 강한 힌트다.\n"
+        "- current_focus는 현재 논점 요약이고, recent_utterances는 직전 흐름 확인용이다. recent_utterances를 그대로 이어 쓰지 않는다.\n"
+        "- Whisper prompt가 새어 나온 듯한 '회의 목표는', '회의 목표:', '관련 맥락은', '관련 맥락:' 같은 앞부분은 제거한다.\n\n"
+        "[규칙]\n"
+        "- 음, 어, 그, 저, 네 같은 불필요한 군말과 명백한 반복만 줄인다.\n"
+        "- 발음이 비슷하고 key_terms/correction_hints/current_focus에서 반복된 단어라면 그 단어로 보정한다.\n"
+        "- 문맥상 확실하지 않은 고유명사/숫자/사실은 추측해서 고치지 말고 raw_transcript에 가까운 표현을 유지한다.\n"
+        "- 원문에 없는 주장, 숫자, 이름, 결론을 만들지 않는다.\n"
+        "- 말투를 과하게 요약하지 말고, 발화자가 말한 내용이 이어지도록 1~2문장으로 정리한다.\n"
+        "- 전사 신뢰도가 낮아 의미를 알 수 없으면 빈 문자열을 반환한다.\n"
+        "- corrections에는 실제로 보정한 단어만 넣는다. 불확실한 단어는 uncertain_terms에 넣는다.\n"
+        "- context_terms에는 이후 STT 보정에 유용한 고유명사/제품명/핵심 명사만 0~8개 넣는다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다.\n\n"
+        "[출력 JSON]\n"
+        '{"text":"정제된 전사 문장","corrections":[{"raw":"잘못 들린 표현","corrected":"보정 표현"}],"uncertain_terms":["불확실한 표현"],"confidence":0.82,"context_terms":["핵심 용어"]}'
+    )
+
+    client, llm_ready, warning = _ensure_llm_ready(RT)
+    if not llm_ready or client is None:
+        return fallback, False, warning, {
+            "confidence": 0.0,
+            "corrections": [],
+            "uncertain_terms": [],
+            "context_terms": [],
+            "context_pack_summary": _summarize_stt_context_pack(normalized_pack),
+        }
+
+    try:
+        parsed = _call_llm_json(
+            rt=RT,
+            client=client,
+            prompt=prompt,
+            stage="stt.transcript_refine",
+            temperature=0.05,
+            max_tokens=240,
+        )
+        refined = _strip_stt_prompt_leakage(
+            parsed.get("text") or parsed.get("refined_text") or parsed.get("transcript") or ""
+        )
+        corrections = [
+            {
+                "raw": _truncate_text(_safe_text(item.get("raw") or item.get("from")), 80),
+                "corrected": _truncate_text(_safe_text(item.get("corrected") or item.get("to")), 80),
+            }
+            for item in (parsed.get("corrections") if isinstance(parsed.get("corrections"), list) else [])
+            if isinstance(item, dict)
+            and _safe_text(item.get("raw") or item.get("from"))
+            and _safe_text(item.get("corrected") or item.get("to"))
+        ][:8]
+        uncertain_terms = _normalize_stt_context_terms(parsed.get("uncertain_terms"), limit=8)
+        context_terms = _normalize_stt_context_terms(parsed.get("context_terms"), limit=8)
+        confidence = max(0, min(1, _safe_float(parsed.get("confidence"), 0.7)))
+        meta = {
+            "confidence": confidence,
+            "corrections": corrections,
+            "uncertain_terms": uncertain_terms,
+            "context_terms": context_terms,
+            "context_pack_summary": _summarize_stt_context_pack(normalized_pack),
+        }
+        if refined:
+            return refined, True, "", meta
+        return fallback, True, "LLM 정제 결과가 비어 원문 정리 결과를 사용했습니다.", meta
+    except Exception as exc:
+        return fallback, False, f"STT 정제 LLM 실패: {exc}", {
+            "confidence": 0.0,
+            "corrections": [],
+            "uncertain_terms": [],
+            "context_terms": [],
+            "context_pack_summary": _summarize_stt_context_pack(normalized_pack),
+        }
 
 
 def _ensure_llm_ready(rt: RuntimeStore) -> tuple[Any, bool, str]:
@@ -11345,8 +11568,10 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
     max_keywords = int(payload.max_keywords or 18)
     signature = _canvas_llm_signature(
         {
-            "version": 4,
+            "version": 5,
             "meeting_topic": _safe_text(payload.meeting_topic),
+            "meeting_goal": _safe_text(payload.meeting_goal),
+            "meeting_goal_context": _safe_text(payload.meeting_goal_context),
             "max_keywords": max_keywords,
             "existing_keywords": existing_keyword_rows,
             "context_cache": context_cache,
@@ -11355,7 +11580,7 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
     )
 
     def _compute() -> dict[str, Any]:
-        fallback_keywords = _build_local_ideation_keywords(rows, max_keywords)
+        fallback_keywords: list[dict[str, Any]] = []
         used_llm = False
         warning = ""
         keywords = fallback_keywords
@@ -11385,7 +11610,13 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
                     temperature=0.08,
                     max_tokens=1400,
                 )
-                normalized_keywords = _normalize_ideation_keyword_items(parsed, fallback_keywords, max_keywords)
+                used_llm = True
+                normalized_keywords = _normalize_ideation_keyword_items(
+                    parsed,
+                    fallback_keywords,
+                    max_keywords,
+                    existing_keyword_rows,
+                )
                 merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
                     parsed,
                     existing_keyword_rows,
@@ -11393,7 +11624,6 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
                 )
                 if normalized_keywords or merge_keywords or remove_keywords:
                     keywords = normalized_keywords
-                    used_llm = True
                     RT.last_llm_parsed_json = {
                         "stage": "canvas_ideation_keyword_extract",
                         "source_signature": signature,
@@ -11408,10 +11638,10 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
             except Exception as exc:
                 warning = f"아이디어 명사 추출 LLM 실패: {exc}"
         else:
-            warning = llm_note or "LLM 미연결 상태로 로컬 명사 버블을 사용했습니다."
+            warning = llm_note or "LLM 미연결 상태라 새 버블을 만들지 않았습니다."
 
         return {
-            "ok": True,
+            "ok": bool(used_llm),
             "used_llm": used_llm,
             "warning": warning,
             "generated_at": _now_ts(),
@@ -11708,6 +11938,8 @@ async def post_stt_chunk(
 async def post_transcribe_chunk(
     audio_file: UploadFile = File(...),
     meeting_goal: str = Form(default=""),
+    meeting_goal_context: str = Form(default=""),
+    context_pack: str = Form(default=""),
 ):
     """
     Gateway에서 호출하는 전사 엔드포인트
@@ -11722,18 +11954,36 @@ async def post_transcribe_chunk(
         suffix = Path(audio_file.filename or "chunk.webm").suffix or ".webm"
         print(
             f"[STT] transcribe chunk start model={WHISPER_MODEL_NAME} "
-            f"bytes={len(blob)} suffix={suffix} meeting_goal={bool(_safe_text(meeting_goal))}"
+            f"bytes={len(blob)} suffix={suffix} "
+            f"refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
         )
-        text = _transcribe_with_whisper(blob, suffix=suffix, meeting_goal=meeting_goal)
+        raw_text = _transcribe_with_whisper(blob, suffix=suffix)
+        parsed_context_pack = _parse_stt_context_pack(context_pack)
+        text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
+            raw_text,
+            meeting_goal=meeting_goal,
+            meeting_goal_context=meeting_goal_context,
+            context_pack=parsed_context_pack,
+        )
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         print(
             f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
             f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
-            f"meeting_goal={bool(_safe_text(meeting_goal))} chars={len(_safe_text(text))}"
+            f"raw_chars={len(_safe_text(raw_text))} refined_chars={len(_safe_text(text))} "
+            f"refine_used_llm={refine_used_llm} context_pack={refine_meta.get('context_pack_summary')}"
         )
         
         return {
             "text": _safe_text(text),
+            "raw_text": _safe_text(raw_text),
+            "refined_text": _safe_text(text),
+            "refine_used_llm": refine_used_llm,
+            "refine_warning": refine_warning,
+            "confidence": refine_meta.get("confidence"),
+            "corrections": refine_meta.get("corrections") or [],
+            "uncertain_terms": refine_meta.get("uncertain_terms") or [],
+            "context_terms": refine_meta.get("context_terms") or [],
+            "context_pack_summary": refine_meta.get("context_pack_summary") or {},
             "language": "ko",
             "elapsed_ms": elapsed_ms,
             "model": WHISPER_MODEL_NAME,

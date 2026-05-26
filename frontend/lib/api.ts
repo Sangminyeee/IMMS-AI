@@ -179,6 +179,8 @@ export async function askCanvasQuickQuestion(payload: {
 export async function extractCanvasIdeationKeywords(payload: {
   meeting_id: string;
   meeting_topic: string;
+  meeting_goal?: string;
+  meeting_goal_context?: string;
   utterances: Array<{
     id: string;
     speaker: string;

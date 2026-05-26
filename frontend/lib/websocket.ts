@@ -206,7 +206,10 @@ export class WebSocketClient {
       combinedChunkCount?: number
       trimmedFromSilence?: boolean
     },
-    meetingGoal?: string,
+    meetingContext?: {
+      meetingGoal?: string
+      meetingGoalContext?: string
+    },
     canvasContext?: {
       stage?: string
       targetId?: string
@@ -221,8 +224,10 @@ export class WebSocketClient {
     const reader = new FileReader()
     reader.onload = () => {
       const base64Audio = (reader.result as string).split(',')[1]
+      const cleanMeetingGoal = meetingContext?.meetingGoal?.trim() || ''
+      const cleanMeetingGoalContext = meetingContext?.meetingGoalContext?.trim() || ''
       
-      const message = {
+      const message: Record<string, unknown> = {
         type: 'audio_chunk',
         meeting_id: this.meetingId,
         user_id: this.userId,
@@ -230,7 +235,6 @@ export class WebSocketClient {
         audio_data: base64Audio,
         audio_mime: audioBlob.type || audioMeta?.mimeType || 'audio/wav',
         audio_filename: audioBlob.type === 'audio/wav' || audioMeta?.mimeType === 'audio/wav' ? 'chunk.wav' : 'chunk.webm',
-        meeting_goal: meetingGoal || '',
         canvas_stage: canvasContext?.stage || 'ideation',
         canvas_target_id: canvasContext?.targetId || '',
         canvas_selected_node_id: canvasContext?.selectedNodeId || '',
@@ -256,6 +260,12 @@ export class WebSocketClient {
               trimmed_from_silence: audioMeta.trimmedFromSilence,
             }
           : undefined
+      }
+      if (cleanMeetingGoal) {
+        message.meeting_goal = cleanMeetingGoal
+      }
+      if (cleanMeetingGoalContext) {
+        message.meeting_goal_context = cleanMeetingGoalContext
       }
 
       this.ws?.send(JSON.stringify(message))

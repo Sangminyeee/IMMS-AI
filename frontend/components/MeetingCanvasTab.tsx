@@ -13,6 +13,7 @@ import {
   startCanvasProblemDiscussionWorkspace,
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
+import { useCanvasEndMeetingDialogModels } from "@/components/canvas/useCanvasEndMeetingDialogModels";
 import { CanvasHeader } from "@/components/canvas/CanvasHeader";
 import { useCanvasHeaderActions } from "@/components/canvas/useCanvasHeaderActions";
 import { useCanvasHeaderModels } from "@/components/canvas/useCanvasHeaderModels";
@@ -1014,14 +1015,18 @@ export default function MeetingCanvasTab({
     [problemStructureNodes],
   );
   const activeMeetingGoal = meetingGoalDraft.trim();
-  const meetingTopicForAi = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim() || "회의 주제";
+  const activeMeetingGoalContext = meetingGoalContextDraft.trim();
+  const ideationKeywordMeetingTopic = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim();
+  const meetingTopicForAi = ideationKeywordMeetingTopic || "회의 주제";
   const {
     keywordBubbles: ideationKeywordBubbles,
     statusMessage: ideationKeywordStatusMessage,
   } = useIdeationKeywordBubbles({
     transcripts,
     meetingId,
-    meetingTopic: meetingTopicForAi,
+    meetingTopic: ideationKeywordMeetingTopic,
+    meetingGoal: activeMeetingGoal,
+    meetingGoalContext: activeMeetingGoalContext,
     stage,
   });
   useEffect(() => {
@@ -2929,6 +2934,21 @@ export default function MeetingCanvasTab({
       onSubmit: handleSubmitQuickAsk,
     },
   });
+  const endMeetingDialogProps = useCanvasEndMeetingDialogModels({
+    view: {
+      confirmOpen: endMeetingConfirmOpen,
+      saving: endMeetingSaving,
+      preview: endMeetingPreview,
+      summaryPreviewMarkdown: endMeetingSummaryPreviewMarkdown,
+      summaryPreviewHtml: endMeetingSummaryPreviewHtml,
+    },
+    onCancel: handleCancelEndMeeting,
+    onConfirm: handleConfirmEndMeeting,
+    onDownloadPdf: handleDownloadEndMeetingSummaryPdf,
+    onBackToConfirm: handleBackToEndMeetingConfirm,
+    onSaveAndEnd: handleSaveAndEndMeeting,
+    getFinalSummarySnapshot: getEndingFinalSummaryDocumentSnapshot,
+  });
 
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
@@ -2938,18 +2958,7 @@ export default function MeetingCanvasTab({
         <CanvasWorkspacePanels {...workspacePanelProps} />
       </section>
 
-      <CanvasEndMeetingDialogs
-        confirmOpen={endMeetingConfirmOpen}
-        saving={endMeetingSaving}
-        preview={endMeetingPreview}
-        summaryPreviewMarkdown={endMeetingSummaryPreviewMarkdown}
-        summaryPreviewHtml={endMeetingSummaryPreviewHtml}
-        onCancel={handleCancelEndMeeting}
-        onConfirm={() => void handleConfirmEndMeeting()}
-        onDownloadPdf={handleDownloadEndMeetingSummaryPdf}
-        onBackToConfirm={handleBackToEndMeetingConfirm}
-        onSaveAndEnd={() => void handleSaveAndEndMeeting(getEndingFinalSummaryDocumentSnapshot())}
-      />
+      <CanvasEndMeetingDialogs {...endMeetingDialogProps} />
     </div>
   );
 }

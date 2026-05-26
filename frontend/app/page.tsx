@@ -105,12 +105,11 @@ function dedupeTranscripts(rows: Transcript[]) {
   return sortTranscriptsByTime(deduped);
 }
 
-function buildSttContext(goal: string, context: string, fallbackTitle: string) {
-  const cleanGoal = goal.trim() || fallbackTitle.trim();
-  const cleanContext = context.trim();
-  return [cleanGoal ? `회의 목표: ${cleanGoal}` : "", cleanContext ? `관련 맥락: ${cleanContext}` : ""]
-    .filter(Boolean)
-    .join("\n");
+function buildSttHints(goal: string, context: string) {
+  return {
+    meetingGoal: goal.trim(),
+    meetingGoalContext: context.trim(),
+  };
 }
 
 function getTranscriptTime(row: Transcript) {
@@ -246,7 +245,6 @@ function HomeContent() {
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const audioRecorderRef = useRef<AudioRecorder | null>(null);
   const isRecordingRef = useRef(isRecording);
-  const meetingTitleRef = useRef(meetingTitle);
   const meetingGoalRef = useRef(meetingGoal);
   const meetingGoalContextRef = useRef(meetingGoalContext);
   const transcriptsRef = useRef(transcripts);
@@ -261,10 +259,6 @@ function HomeContent() {
   const transcriptPersistenceStatusTimerRef = useRef<number | null>(null);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
-
-  useEffect(() => {
-    meetingTitleRef.current = meetingTitle;
-  }, [meetingTitle]);
 
   useEffect(() => {
     meetingGoalRef.current = meetingGoal;
@@ -448,10 +442,12 @@ function HomeContent() {
       );
       const transcriptStatus = readString(transcriptPayload.transcript_status || payload.transcript_status, "final");
       const recordingNow = isRecordingRef.current || Boolean(audioRecorderRef.current?.isRecording());
+      const rawText = readString(payload.raw_text);
       console.info("[STT] 서버 전사 수신", {
         id: transcriptId,
         speaker,
         text,
+        rawText: rawText && rawText !== text ? rawText : undefined,
         timestamp: nextTimestamp,
         audioStartedAt,
         audioEndedAt,
@@ -461,6 +457,12 @@ function HomeContent() {
         recording: recordingNow,
         elapsedMs: payload.stt_elapsed_ms,
         backendElapsedMs: payload.backend_elapsed_ms,
+        refineUsedLlm: payload.refine_used_llm,
+        refineWarning: payload.refine_warning,
+        refineConfidence: payload.refine_confidence,
+        corrections: payload.corrections,
+        uncertainTerms: payload.uncertain_terms,
+        contextPackSummary: payload.context_pack_summary,
         originalDurationMs: audioMetaPayload.original_duration_ms,
         removedSilenceMs: audioMetaPayload.removed_silence_ms,
         combinedChunkCount: audioMetaPayload.combined_chunk_count,
@@ -977,7 +979,7 @@ function HomeContent() {
           blob,
           user.email || "Unknown",
           metrics,
-          buildSttContext(meetingGoalRef.current, meetingGoalContextRef.current, meetingTitleRef.current),
+          buildSttHints(meetingGoalRef.current, meetingGoalContextRef.current),
           {
             stage: canvasContext.stage,
             targetId: canvasContext.targetId,

@@ -90,6 +90,7 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
             "flow_summary_buffer": [],
             "flow_summaries": [],
             "flow_summary_seq": 0,
+            "recent_transcripts": [],
             "last_winner_user_id": None,
             "last_winner_bucket": None,
             "device_profiles": {},
@@ -97,6 +98,146 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
         }
         fusion_states[meeting_id] = state
     return state
+
+
+def build_recent_transcript_context(
+    state: Dict[str, Any],
+    *,
+    canvas_stage: str,
+    limit: int = 4,
+) -> list[dict[str, str]]:
+    rows = state.get("recent_transcripts")
+    if not isinstance(rows, list):
+        return []
+    selected: list[dict[str, str]] = []
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        row_stage = str(row.get("canvas_stage") or row.get("stage") or "ideation")
+        if row_stage != canvas_stage:
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        selected.append({
+            "speaker": str(row.get("speaker") or "참가자"),
+            "text": text,
+            "timestamp": str(row.get("timestamp") or row.get("created_at") or ""),
+        })
+        if len(selected) >= limit:
+            break
+    selected.reverse()
+    return selected
+
+
+def build_current_focus_context(state: Dict[str, Any], *, canvas_stage: str) -> str:
+    summaries = state.get("flow_summaries")
+    if not isinstance(summaries, list):
+        return ""
+    for item in reversed(summaries):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("stage") or "ideation") != canvas_stage:
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            return text[:160]
+    return ""
+
+
+def build_stt_context_pack(
+    state: Dict[str, Any],
+    *,
+    canvas_stage: str,
+    meeting_goal: str = "",
+    meeting_goal_context: str = "",
+) -> dict[str, Any]:
+    pack: dict[str, Any] = {
+        "stage": canvas_stage,
+        "recent_utterances": build_recent_transcript_context(state, canvas_stage=canvas_stage, limit=4),
+    }
+    clean_goal = meeting_goal.strip()
+    clean_context = meeting_goal_context.strip()
+    if clean_goal:
+        pack["meeting_goal"] = clean_goal
+    if clean_context:
+        pack["meeting_goal_context"] = clean_context
+    current_focus = build_current_focus_context(state, canvas_stage=canvas_stage)
+    if current_focus:
+        pack["current_focus"] = current_focus
+
+    key_terms = state.get("stt_key_terms")
+    if isinstance(key_terms, list):
+        pack["key_terms"] = [str(item).strip() for item in key_terms if str(item).strip()][:40]
+
+    correction_hints = state.get("stt_correction_hints")
+    if isinstance(correction_hints, list):
+        pack["correction_hints"] = [
+            {
+                "raw": str(item.get("raw") or "").strip(),
+                "corrected": str(item.get("corrected") or "").strip(),
+            }
+            for item in correction_hints
+            if isinstance(item, dict) and str(item.get("raw") or "").strip() and str(item.get("corrected") or "").strip()
+        ][-20:]
+
+    return {key: value for key, value in pack.items() if value not in ("", [], {})}
+
+
+def remember_recent_transcript(state: Dict[str, Any], transcript: dict[str, Any], limit: int = 60):
+    rows = state.get("recent_transcripts")
+    if not isinstance(rows, list):
+        rows = []
+    rows.append({
+        "id": str(transcript.get("id") or ""),
+        "speaker": str(transcript.get("speaker") or "참가자"),
+        "text": str(transcript.get("text") or "").strip(),
+        "timestamp": str(transcript.get("timestamp") or transcript.get("created_at") or ""),
+        "canvas_stage": str(transcript.get("canvas_stage") or "ideation"),
+    })
+    state["recent_transcripts"] = rows[-limit:]
+
+
+def remember_stt_refine_feedback(state: Dict[str, Any], transcription: dict[str, Any]):
+    context_terms = transcription.get("context_terms")
+    if isinstance(context_terms, list):
+        terms = [str(item).strip() for item in context_terms if str(item).strip()]
+        current_terms = state.get("stt_key_terms")
+        if not isinstance(current_terms, list):
+            current_terms = []
+        deduped_terms: list[str] = []
+        for item in [*current_terms, *terms]:
+            if item and item not in deduped_terms:
+                deduped_terms.append(item)
+        state["stt_key_terms"] = deduped_terms[-60:]
+
+    corrections = transcription.get("corrections")
+    if isinstance(corrections, list):
+        current_corrections = state.get("stt_correction_hints")
+        if not isinstance(current_corrections, list):
+            current_corrections = []
+        merged = [
+            item
+            for item in current_corrections
+            if isinstance(item, dict) and str(item.get("raw") or "").strip() and str(item.get("corrected") or "").strip()
+        ]
+        for item in corrections:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("raw") or item.get("from") or "").strip()
+            corrected = str(item.get("corrected") or item.get("to") or "").strip()
+            if not raw or not corrected or raw == corrected:
+                continue
+            merged = [
+                existing
+                for existing in merged
+                if not (
+                    str(existing.get("raw") or "").strip() == raw
+                    and str(existing.get("corrected") or "").strip() == corrected
+                )
+            ]
+            merged.append({"raw": raw, "corrected": corrected})
+        state["stt_correction_hints"] = merged[-40:]
 
 
 def iso_to_epoch_ms(value: str | None) -> int:
@@ -291,11 +432,15 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
     audio_filename = str(candidate.get("audio_filename") or ("chunk.wav" if audio_mime.lower().startswith("audio/wav") else "chunk.webm"))
     workspace = latest_canvas_workspace_by_meeting.get(str(candidate.get("meeting_id") or "")) or {}
     meeting_goal = str(candidate.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+    meeting_goal_context = str(candidate.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
+    context_pack = candidate.get("context_pack") if isinstance(candidate.get("context_pack"), dict) else {}
     started_at = time.perf_counter()
     print(
         "[STT][gateway] backend transcription request start "
         f"url={AI_BACKEND_URL}/api/transcribe-chunk bytes={len(audio_bytes)} "
-        f"mime={audio_mime} filename={audio_filename} meeting_goal={bool(meeting_goal)}",
+        f"mime={audio_mime} filename={audio_filename} "
+        f"meeting_goal={bool(meeting_goal)} meeting_goal_context={bool(meeting_goal_context)} "
+        f"context_pack_keys={list(context_pack.keys())}",
         flush=True,
     )
     try:
@@ -303,7 +448,11 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
             response = await client.post(
                 f"{AI_BACKEND_URL}/api/transcribe-chunk",
                 files={'audio_file': (audio_filename, audio_bytes, audio_mime)},
-                data={'meeting_goal': meeting_goal},
+                data={
+                    'meeting_goal': meeting_goal,
+                    'meeting_goal_context': meeting_goal_context,
+                    'context_pack': json.dumps(context_pack, ensure_ascii=False),
+                },
             )
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
@@ -340,6 +489,15 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
     text = (result.get('text') or '').strip()
     return {
         "text": text,
+        "raw_text": result.get("raw_text") or text,
+        "refined_text": result.get("refined_text") or text,
+        "refine_used_llm": bool(result.get("refine_used_llm")),
+        "refine_warning": result.get("refine_warning") or "",
+        "refine_confidence": result.get("confidence"),
+        "corrections": result.get("corrections") or [],
+        "uncertain_terms": result.get("uncertain_terms") or [],
+        "context_terms": result.get("context_terms") or [],
+        "context_pack_summary": result.get("context_pack_summary") or {},
         "status": "ok" if text else "empty",
         "status_code": response.status_code,
         "error": result.get("error") or "",
@@ -720,10 +878,21 @@ async def transcribe_and_broadcast_winner(
     chunk_index = audio_meta.get("chunk_index")
     canvas_stage = str(winner.get("canvas_stage") or "ideation")
     canvas_target_id = str(winner.get("canvas_target_id") or "")
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id) or {}
+    meeting_goal = str(winner.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+    meeting_goal_context = str(winner.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
+    context_pack = build_stt_context_pack(
+        state,
+        canvas_stage=canvas_stage,
+        meeting_goal=meeting_goal,
+        meeting_goal_context=meeting_goal_context,
+    )
+    winner["context_pack"] = context_pack
 
     print(
         f"[STT][gateway] transcribe winner start meeting_id={meeting_id} bucket_id={bucket_id} "
-        f"user_id={winner.get('user_id')} stage={canvas_stage} target={canvas_target_id} audio_meta={audio_meta}",
+        f"user_id={winner.get('user_id')} stage={canvas_stage} target={canvas_target_id} "
+        f"context_pack_keys={list(context_pack.keys())} audio_meta={audio_meta}",
         flush=True,
     )
 
@@ -735,6 +904,11 @@ async def transcribe_and_broadcast_winner(
         bytes=len(winner.get("audio_bytes") or b""),
         audio_mime=winner.get("audio_mime") or winner.get("audio_meta", {}).get("mime_type") or "audio/wav",
         audio_meta=audio_meta,
+        context_pack_summary={
+            "recent_utterance_count": len(context_pack.get("recent_utterances") or []),
+            "key_term_count": len(context_pack.get("key_terms") or []),
+            "has_current_focus": bool(context_pack.get("current_focus")),
+        },
         fusion_wait_ms=FUSION_WAIT_MS,
     )
     await send_stt_debug(
@@ -746,9 +920,12 @@ async def transcribe_and_broadcast_winner(
     )
     transcription = await transcribe_selected_chunk(winner)
     transcribed_text = transcription.get("text") or ""
+    raw_transcribed_text = transcription.get("raw_text") or transcribed_text
     print(
         f"[STT][gateway] transcribe winner result bucket_id={bucket_id} "
-        f"status={transcription.get('status')} chars={len(transcribed_text)} "
+        f"status={transcription.get('status')} raw_chars={len(raw_transcribed_text)} "
+        f"refined_chars={len(transcribed_text)} refine_used_llm={bool(transcription.get('refine_used_llm'))} "
+        f"confidence={transcription.get('refine_confidence')} "
         f"elapsed_ms={transcription.get('elapsed_ms')} backend_elapsed_ms={transcription.get('backend_elapsed_ms')}",
         flush=True,
     )
@@ -807,6 +984,13 @@ async def transcribe_and_broadcast_winner(
         persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
         elapsed_ms=transcription.get("elapsed_ms"),
         backend_elapsed_ms=transcription.get("backend_elapsed_ms"),
+        raw_text_preview=raw_transcribed_text[:120],
+        refine_used_llm=bool(transcription.get("refine_used_llm")),
+        refine_warning=transcription.get("refine_warning") or "",
+        refine_confidence=transcription.get("refine_confidence"),
+        corrections=transcription.get("corrections") or [],
+        uncertain_terms=transcription.get("uncertain_terms") or [],
+        context_pack_summary=transcription.get("context_pack_summary") or {},
     )
     transcript_message = {
         'type': TRANSCRIPT_EVENT_CREATED,
@@ -819,6 +1003,14 @@ async def transcribe_and_broadcast_winner(
         'persistence_status': TRANSCRIPT_PERSISTENCE_SAVING,
         'stt_elapsed_ms': transcription.get("elapsed_ms"),
         'backend_elapsed_ms': transcription.get("backend_elapsed_ms"),
+        'raw_text': raw_transcribed_text,
+        'refined_text': transcription.get("refined_text") or transcribed_text,
+        'refine_used_llm': bool(transcription.get("refine_used_llm")),
+        'refine_warning': transcription.get("refine_warning") or "",
+        'refine_confidence': transcription.get("refine_confidence"),
+        'corrections': transcription.get("corrections") or [],
+        'uncertain_terms': transcription.get("uncertain_terms") or [],
+        'context_pack_summary': transcription.get("context_pack_summary") or {},
         'audio_meta': audio_meta,
         'fusion': {
             'bucket_id': bucket_id,
@@ -830,6 +1022,8 @@ async def transcribe_and_broadcast_winner(
         'timestamp': datetime.utcnow().isoformat(),
     }
     await broadcast_to_meeting(meeting_id, transcript_message)
+    remember_recent_transcript(state, finalized_transcript)
+    remember_stt_refine_feedback(state, transcription)
     asyncio.create_task(maybe_generate_flow_summary(meeting_id, finalized_transcript))
     asyncio.create_task(
         persist_transcript_with_retry(
@@ -1229,6 +1423,7 @@ async def websocket_endpoint(
                 audio_filename = str(message.get('audio_filename') or ("chunk.wav" if audio_mime.lower().startswith("audio/wav") else "chunk.webm"))
                 workspace = latest_canvas_workspace_by_meeting.get(meeting_id) or {}
                 meeting_goal = str(message.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+                meeting_goal_context = str(message.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
                 canvas_stage = str(message.get("canvas_stage") or workspace.get("stage") or "ideation").strip() or "ideation"
                 if canvas_stage not in {"ideation", "problem-definition", "solution"}:
                     canvas_stage = "ideation"
@@ -1254,6 +1449,7 @@ async def websocket_endpoint(
                         "audio_filename": audio_filename,
                         "audio_meta": audio_meta,
                         "meeting_goal": meeting_goal,
+                        "meeting_goal_context": meeting_goal_context,
                         "canvas_stage": canvas_stage,
                         "canvas_target_id": canvas_target_id,
                         "started_at_ms": iso_to_epoch_ms(audio_meta.get("started_at") or message.get("timestamp")),
