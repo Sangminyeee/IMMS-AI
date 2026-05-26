@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import type { CSSProperties, ReactNode } from "react";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
@@ -15,17 +16,24 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
+const pretendard = localFont({
+  src: "./fonts/PretendardVariable.woff2",
+  variable: "--font-pretendard",
+  weight: "100 900",
+  display: "swap",
+});
+
 const fontVariables = {
-  "--font-body": '"Inter", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
-  "--font-display": '"Inter", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
+  "--font-body": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
+  "--font-display": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
   "--font-inter": '"Inter", "Segoe UI", sans-serif',
-  "--font-noto-sans-kr": '"Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif',
+  "--font-noto-sans-kr": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", sans-serif',
 } as CSSProperties;
 
 export default function RootLayout({ children }: Readonly<RootLayoutProps>) {
   return (
     <html lang="ko">
-      <body style={fontVariables}>
+      <body className={pretendard.variable} style={fontVariables}>
         <div data-imms-figma-capture-root>
           <AuthProvider>
             {children}

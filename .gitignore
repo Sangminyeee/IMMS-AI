@@ -95,3 +95,4 @@ logs/
 
 /proto
 deploy/.env.production
+.codex-temp

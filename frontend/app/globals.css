@@ -18,6 +18,27 @@
   --scrollbar-track: rgba(226, 232, 240, 0.55);
   --scrollbar-thumb: rgba(148, 163, 184, 0.75);
   --scrollbar-thumb-hover: rgba(100, 116, 139, 0.9);
+  --moa-app-bg: #f9f9f9;
+  --moa-surface: #ffffff;
+  --moa-text: #181818;
+  --moa-muted: #6f6f6f;
+  --moa-subtle: #9a9a9a;
+  --moa-placeholder: #b8b8b8;
+  --moa-border: rgba(0, 0, 0, 0.1);
+  --moa-neutral-soft: #f5f6f8;
+  --moa-disabled: #e7e8ec;
+  --moa-brand: #cf3cb1;
+  --moa-brand-strong: #a92d91;
+  --moa-brand-soft: #f7ecfb;
+  --moa-brand-soft-border: #ead0f2;
+  --moa-coral: #ef4e4e;
+  --moa-coral-strong: #d93f3f;
+  --moa-shadow-card: 0 12px 34px rgba(15, 23, 42, 0.08);
+  --moa-shadow-panel: 0 18px 54px rgba(15, 23, 42, 0.1);
+  --moa-radius-sm: 8px;
+  --moa-radius-md: 12px;
+  --moa-radius-lg: 16px;
+  --moa-radius-xl: 24px;
 }
 
 * {
@@ -296,6 +317,45 @@ button:not(:disabled),
 button:disabled,
 [role="button"][aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+.auth-pixel-input,
+.auth-pixel-input:focus {
+  background-color: transparent !important;
+}
+
+.auth-pixel-input:-webkit-autofill,
+.auth-pixel-input:-webkit-autofill:hover,
+.auth-pixel-input:-webkit-autofill:focus,
+.auth-pixel-input:-webkit-autofill:active {
+  -webkit-text-fill-color: #4c4c4c !important;
+  box-shadow: 0 0 0 1000px #f8f8f8 inset !important;
+  caret-color: #4c4c4c;
+  transition: background-color 9999s ease-out;
+}
+
+@keyframes authRouteIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-route-copy,
+.auth-route-panel {
+  animation: authRouteIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (min-width: 1024px) {
+  .auth-stage {
+    width: 2844px;
+    height: 1421px;
+    transform: translate(-50%, -50%) scale(var(--auth-stage-scale));
+  }
 }
 
 .workspaceShell {
@@ -1970,7 +2030,9 @@ th {
   .summaryCard.panelFold[open] .summaryBlock,
   .summaryCard.panelFold[open] .summaryEvidence,
   .runDot,
-  .focusFlash {
+  .focusFlash,
+  .auth-route-copy,
+  .auth-route-panel {
     animation: none !important;
   }
 
