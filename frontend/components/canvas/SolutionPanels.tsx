@@ -251,6 +251,15 @@ function CopyIcon() {
   );
 }
 
+function SparkleIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
+      <path d="m12 3 1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z" fill="currentColor" />
+      <path d="m18.5 14 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5.5 14.5l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6.6-1.6Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 function PlusIcon() {
   return (
     <svg aria-hidden="true" className="h-[13px] w-[13px]" viewBox="0 0 24 24" fill="none">
@@ -269,7 +278,7 @@ function TrashIcon() {
 
 function SummaryCardToolIcons() {
   return (
-    <div className="absolute right-[18px] top-[24px] flex items-center gap-[9px] text-[#9a9a9a]">
+    <div className="absolute right-[18px] top-[24px] flex items-center gap-[9px] text-[#9a9a9a]" aria-hidden="true">
       <CopyIcon />
     </div>
   );
@@ -403,12 +412,27 @@ function SolutionDocumentBlocksView({
   fallbackTitle: string;
   fallbackSummary: string;
 }) {
+  const sectionNumberByBlockId = useMemo(() => {
+    const nextMap = new Map<string, number>();
+    let nextNumber = 0;
+    blocks.forEach((block) => {
+      if (block.type === "heading") {
+        const level = block.level || 2;
+        if (level === 1) return;
+      }
+      if (block.type === "paragraph") return;
+      nextNumber += 1;
+      nextMap.set(block.id, nextNumber);
+    });
+    return nextMap;
+  }, [blocks]);
+
   if (blocks.length === 0) {
     return (
       <div className="mt-[7px]">
-        <h2 className="max-w-[420px] text-[24px] font-bold leading-[1.4] text-[#242424]">{fallbackTitle}</h2>
+        <h2 className="max-w-[560px] text-[24px] font-bold leading-[1.42] tracking-[-0.6px] text-[#181818]">{fallbackTitle}</h2>
         {fallbackSummary ? (
-          <p className="mt-[6px] max-w-[520px] whitespace-pre-wrap text-[12px] font-medium leading-[1.55] text-[#767676]">
+          <p className="mt-[10px] max-w-[620px] whitespace-pre-wrap text-[12px] font-medium leading-[1.7] tracking-[-0.03px] text-[#767676]">
             {fallbackSummary}
           </p>
         ) : null}
@@ -417,52 +441,82 @@ function SolutionDocumentBlocksView({
   }
 
   return (
-    <div className="mt-[7px] space-y-[18px]">
+    <div className="mt-[7px] space-y-[30px]">
       {blocks.map((block, index) => {
         if (block.type === "heading") {
           const level = block.level || (index === 0 ? 1 : 2);
-          const headingClass =
-            level === 1
-              ? "text-[24px] font-bold leading-[1.4] text-[#242424]"
-              : level === 2
-                ? "text-[15px] font-bold leading-[1.45] text-[#242424]"
-                : "text-[13px] font-bold leading-[1.45] text-[#3b3b3b]";
+          if (level === 1) {
+            return (
+              <h2 key={block.id} className="max-w-[570px] text-[24px] font-bold leading-[1.42] tracking-[-0.6px] text-[#181818]">
+                {block.text}
+              </h2>
+            );
+          }
+
+          const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
           return (
-            <h2 key={block.id} className={headingClass}>
+            <h2 key={block.id} className="flex items-center gap-[10px] text-[16px] font-bold leading-[1.4] tracking-[-0.04px] text-[#181818]">
+              <span className="grid h-[17px] min-w-[17px] place-items-center rounded-[3px] bg-[#8f8f8f] px-[4px] text-[11px] font-bold leading-none text-white">
+                {sectionNumber}
+              </span>
               {block.text}
             </h2>
           );
         }
 
         if (block.type === "paragraph") {
+          const previousBlock = blocks[index - 1];
+          const nextIsSection =
+            index === 1 &&
+            previousBlock?.type === "heading" &&
+            (previousBlock.level || 1) === 1;
           return (
-            <p key={block.id} className="max-w-[560px] whitespace-pre-wrap text-[12px] font-medium leading-[1.62] text-[#767676]">
-              {block.text}
-            </p>
+            <div key={block.id} className={nextIsSection ? "border-b border-[#d7dce5] pb-[19px]" : ""}>
+              <p className="max-w-[620px] whitespace-pre-wrap text-[12px] font-medium leading-[1.7] tracking-[-0.03px] text-[#767676]">
+                {block.text}
+              </p>
+            </div>
           );
         }
 
         if (block.type === "bullets") {
+          const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
           return (
-            <ul key={block.id} className="list-disc space-y-[5px] pl-[18px] text-[12px] font-medium leading-[1.58] text-[#767676]">
-              {block.items.map((item, itemIndex) => (
-                <li key={`${block.id}-item-${itemIndex}`}>{item}</li>
-              ))}
-            </ul>
+            <section key={block.id} className="space-y-[12px]">
+              <h3 className="flex items-center gap-[10px] text-[16px] font-bold leading-[1.4] tracking-[-0.04px] text-[#181818]">
+                <span className="grid h-[17px] min-w-[17px] place-items-center rounded-[3px] bg-[#8f8f8f] px-[4px] text-[11px] font-bold leading-none text-white">
+                  {sectionNumber}
+                </span>
+                추가 논의 / 열린 메모
+              </h3>
+              <ul className="space-y-[5px] pl-[27px] text-[12px] font-medium leading-[1.65] tracking-[-0.03px] text-[#767676]">
+                {block.items.map((item, itemIndex) => (
+                  <li key={`${block.id}-item-${itemIndex}`} className="list-disc">{item}</li>
+                ))}
+              </ul>
+            </section>
           );
         }
 
         const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
         const rows = block.rows.length > 0 ? block.rows : [];
+        const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
         return (
-          <section key={block.id} className="space-y-[10px]">
-            {block.title ? <h3 className="text-[13px] font-bold leading-[1.45] text-[#3b3b3b]">{block.title}</h3> : null}
-            <div className="overflow-x-auto rounded-[10px] border border-[#dbe3ef] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.03)]">
-              <table className="min-w-full border-collapse text-left text-[11px] leading-[1.45]">
+          <section key={block.id} className="space-y-[12px]">
+            {block.title ? (
+              <h3 className="flex items-center gap-[10px] text-[16px] font-bold leading-[1.4] tracking-[-0.04px] text-[#181818]">
+                <span className="grid h-[17px] min-w-[17px] place-items-center rounded-[3px] bg-[#8f8f8f] px-[4px] text-[11px] font-bold leading-none text-white">
+                  {sectionNumber}
+                </span>
+                {block.title}
+              </h3>
+            ) : null}
+            <div className="overflow-x-auto rounded-[4px] border border-[#bfc3ca] bg-white">
+              <table className="min-w-full border-collapse text-center text-[11px] leading-[1.5] tracking-[-0.03px]">
                 <thead>
-                  <tr className="bg-[#f4f8ff] text-[#236cf3]">
+                  <tr className="bg-[#f3f4f7] text-[#181818]">
                     {columns.map((column, columnIndex) => (
-                      <th key={`${block.id}-head-${columnIndex}`} className="border-b border-[#dbe3ef] px-3 py-2 font-bold">
+                      <th key={`${block.id}-head-${columnIndex}`} className="border-b border-r border-[#bfc3ca] px-3 py-[9px] font-semibold last:border-r-0">
                         {column}
                       </th>
                     ))}
@@ -470,9 +524,9 @@ function SolutionDocumentBlocksView({
                 </thead>
                 <tbody className="text-[#4d4d4d]">
                   {rows.map((row, rowIndex) => (
-                    <tr key={`${block.id}-row-${rowIndex}`} className="border-t border-[#edf1f6] first:border-t-0">
+                    <tr key={`${block.id}-row-${rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
                       {normalizeTableRow(row, columns.length).map((cell, cellIndex) => (
-                        <td key={`${block.id}-cell-${rowIndex}-${cellIndex}`} className="px-3 py-2 align-top font-medium">
+                        <td key={`${block.id}-cell-${rowIndex}-${cellIndex}`} className="whitespace-pre-line border-r border-[#cdd0d5] px-3 py-[9px] align-top font-medium last:border-r-0">
                           {cell}
                         </td>
                       ))}
@@ -786,11 +840,11 @@ export const SolutionSummarySourceList = memo(function SolutionSummarySourceList
   );
 
   return (
-    <aside className="min-h-0 overflow-hidden border-r border-[#f1f1f1] bg-[#f8f8f8] px-[32px] pb-0 pt-[84px]">
-      <div className="mb-[9px]">
+    <aside className="min-h-0 overflow-hidden border-r border-[#f1f1f1] bg-[#f8f8f8] px-[32px] pb-0 pt-[42px]">
+      <div className="mb-[25px]">
         <p className="text-[10px] font-bold uppercase leading-[1.4] text-[#2e77ff]">Summary</p>
-        <h3 className="mt-1 text-[16px] font-bold leading-[1.4] text-[#181818]">정리</h3>
-        <p className="mt-2 text-[11px] font-extralight leading-[17px] text-[#181818]">
+        <h3 className="mt-1 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">정리</h3>
+        <p className="mt-[5px] text-[11px] font-normal leading-[1.45] tracking-[-0.03px] text-[#505050]">
           지금까지 논의 내용을 정리합니다.
         </p>
       </div>
@@ -983,14 +1037,23 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   const editDisabled = pending || saving || Boolean(remoteSummaryEditPresence && !editMode);
 
   return (
-    <section ref={paneRef} className="min-h-0 overflow-y-auto bg-white px-[28px] pb-24 pt-[84px]">
-      <div className="mb-[35px]">
-        <p className="text-[10px] font-bold uppercase leading-[1.4] text-[#2e77ff]">Conclusion</p>
-        <h3 className="mt-1 text-[16px] font-bold leading-[1.4] text-[#181818]">결론</h3>
+    <section ref={paneRef} className="min-h-0 overflow-y-auto bg-white px-[30px] pb-[38px] pt-[42px]">
+      <div className="mb-[28px] flex items-end justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase leading-[1.4] text-[#2e77ff]">Conclusion</p>
+          <h3 className="mt-1 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">결론</h3>
+          <p className="mt-[5px] text-[11px] font-normal leading-[1.45] tracking-[-0.03px] text-[#505050]">
+            정리된 논의 내용을 바탕으로 핵심 결론과 후속 실행 항목을 작성합니다.
+          </p>
+        </div>
+        <span className="mb-[2px] inline-flex h-[27px] shrink-0 items-center gap-[6px] rounded-full bg-[linear-gradient(90deg,#1aa7ff_0%,#4d6ff2_100%)] px-[12px] text-[12px] font-bold leading-none text-white shadow-[0_4px_10px_rgba(46,119,255,0.18)]">
+          <SparkleIcon className="h-[13px] w-[13px]" />
+          AI 초안
+        </span>
       </div>
 
-      <article className="relative h-[calc(100vh-252px)] min-h-[720px] overflow-y-auto rounded-[12px] border border-black/10 bg-[radial-gradient(circle_at_100%_0%,rgba(255,224,237,0.48)_0%,rgba(255,255,255,1)_32%)] px-[34px] pb-[48px] pt-[30px] shadow-[0_1px_5px_rgba(0,0,0,0.05)]">
-        <div className="absolute right-[18px] top-[12px] flex items-center gap-1">
+      <article className="relative h-[calc(100vh-166px)] min-h-[760px] overflow-y-auto rounded-[12px] border border-[#cecccc] bg-white px-[34px] pb-[48px] pt-[30px] shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+        <div className="absolute right-[18px] top-[15px] flex items-center gap-1">
           <IconButton label="요약 문서 다시 생성" disabled={pending || saving || eligibleGroupCount === 0} onClick={onRegenerate}>
             <RefreshIcon />
           </IconButton>
@@ -1002,7 +1065,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
           </IconButton>
         </div>
 
-        <div className="inline-flex rounded-full border border-[#f9e1e8] bg-[#e667bc] px-[7px] py-[3px] text-[10px] font-bold leading-[13px] text-white shadow-[inset_0_3px_3px_rgba(255,255,255,0.15)]">
+        <div className="inline-flex rounded-full border border-[#d5e5ff] bg-[linear-gradient(90deg,#2e77ff_0%,#4d6ff2_100%)] px-[9px] py-[5px] text-[10px] font-bold leading-none text-white shadow-[inset_0_3px_3px_rgba(255,255,255,0.15)]">
           핵심 요약
         </div>
 
