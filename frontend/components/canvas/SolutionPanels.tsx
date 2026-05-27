@@ -75,7 +75,7 @@ export const SolutionSummarySourceList = memo(function SolutionSummarySourceList
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Summary Source</p>
         <h4 className="mt-1 text-lg font-semibold text-black">구조화 결과</h4>
         <p className="mt-1 text-sm leading-6 text-[#4d4d4d]">
-          검토 중/확정 그룹 {groups.length}개가 요약 문서에 포함됩니다.
+          2단계 구조화 그룹 {groups.length}개가 요약 문서에 포함됩니다.
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -162,7 +162,7 @@ export const SolutionSummarySourceList = memo(function SolutionSummarySourceList
           </div>
         ) : (
           <div className="border border-dashed border-black/10 bg-[#fafafa] px-4 py-5 text-sm leading-6 text-[#777]">
-            정의 2단계에서 그룹을 검토 중 또는 확정 상태로 바꾸면 요약 문서에 포함됩니다.
+            정의 2단계에서 구조화 그룹을 만들면 요약 문서에 포함됩니다.
           </div>
         )}
       </div>

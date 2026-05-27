@@ -258,7 +258,7 @@ export function hydrateProblemStructureState(
 }
 
 export function getSummaryEligibleStructureGroups(groups: ProblemStructureGroupViewModel[]) {
-  return groups.filter((group) => group.status === "final" || group.status === "review");
+  return groups;
 }
 
 export function buildSummaryDocumentSourceSignature(

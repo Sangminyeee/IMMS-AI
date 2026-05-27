@@ -5868,8 +5868,8 @@ def _summary_document_groups(payload: SummaryDocumentGenerateInput, workspace: d
     groups: list[dict[str, Any]] = []
     for index, group in enumerate(payload.groups or [], start=1):
         status = _safe_text(group.status, "draft")
-        if status not in {"review", "final"}:
-            continue
+        if status not in {"draft", "review", "final"}:
+            status = "draft"
         group_nodes = [node_by_id[node_id] for node_id in group.node_ids if node_id in node_by_id]
         if not group_nodes and not _safe_text(group.title):
             continue
@@ -5989,11 +5989,11 @@ def _summary_document_sections(groups: list[dict[str, Any]], rows: list[dict[str
 
 def _build_summary_document_local_markdown(meeting_topic: str, groups: list[dict[str, Any]]) -> str:
     title = _safe_text(meeting_topic, "회의")
-    lines = [f"# {title} 요약", "", "## 전체 흐름", "구조화 단계에서 검토 중이거나 확정된 그룹을 기준으로 회의 내용을 정리했습니다."]
+    lines = [f"# {title} 요약", "", "## 전체 흐름", "2단계 구조화에서 나온 모든 그룹을 기준으로 회의 내용을 정리했습니다."]
     for index, group in enumerate(groups, start=1):
         status_label = _safe_text(group.get("status_label"), "확정")
-        review_suffix = " (검토 중)" if group.get("status") == "review" else ""
-        lines.extend(["", f"## {index}. {_safe_text(group.get('title'), f'정리 항목 {index}')}{review_suffix}", f"- 상태: {status_label}"])
+        status_suffix = "" if group.get("status") == "final" else f" ({status_label})"
+        lines.extend(["", f"## {index}. {_safe_text(group.get('title'), f'정리 항목 {index}')}{status_suffix}", f"- 상태: {status_label}"])
         node_titles = [
             _safe_text(node.get("title"))
             for node in group.get("nodes") or []
@@ -6066,10 +6066,10 @@ def _build_summary_document_prompt(
     return (
         "너는 회의가 끝난 뒤 사람들이 다시 읽을 수 있는 최종 회의 요약 문서를 쓰는 AI 퍼실리테이터다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- 구조화 단계에서 상태가 '확정' 또는 '검토 중'인 그룹들을 기준으로 문서형 요약을 작성한다.\n"
+        "- 2단계 구조화에서 입력된 모든 그룹을 상태와 무관하게 기준으로 삼아 문서형 요약을 작성한다.\n"
         "- 사람들이 회의가 끝난 뒤 읽었을 때 왜 이런 결론이 나왔는지 논의 흐름을 이해할 수 있어야 한다.\n"
         "- 웹 LLM 서비스의 Markdown 요약처럼 제목, 하위 제목, bullet을 적절히 사용한다.\n"
-        "- '검토 중' 그룹은 제목에 반드시 '(검토 중)'을 붙이거나 본문에 상태를 드러낸다.\n"
+        "- 각 그룹의 status_label은 참고 정보다. 확정되지 않은 그룹도 빠뜨리지 말고, 필요한 경우 본문에 상태를 자연스럽게 드러낸다.\n"
         "- 원문 발언의 직접 인용, 화자명, timestamp는 문서 본문에 넣지 않는다. 근거 발언은 UI에서 별도로 접어 보여준다.\n"
         "- 새로운 사실, 결정, 원인, 해결책을 발명하지 않는다.\n\n"
         "[입력 JSON]\n"
@@ -11433,7 +11433,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
             return {
                 "ok": True,
                 "used_llm": False,
-                "warning": "요약 문서에 포함할 검토 중/확정 구조화 그룹이 없습니다.",
+                "warning": "요약 문서에 포함할 2단계 구조화 그룹이 없습니다.",
                 "generated_at": _now_ts(),
                 "source_signature": source_signature,
                 "markdown": "",

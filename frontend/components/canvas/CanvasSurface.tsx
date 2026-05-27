@@ -409,7 +409,7 @@ export const CanvasSurface = memo(function CanvasSurface({
           message={
             summaryEligibleStructureGroups.length > 0
               ? "요약 문서를 준비하는 중입니다."
-              : "검토 중 또는 확정된 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
+              : "2단계 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
           }
           tone="summary"
         />

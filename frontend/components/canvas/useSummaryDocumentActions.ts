@@ -153,7 +153,7 @@ export function useSummaryDocumentActions({
       setSelectedNodeId("");
 
       if (eligibleGroups.length === 0) {
-        setActivityMessage("요약 문서에 포함할 검토 중/확정 구조화 그룹이 없습니다.");
+        setActivityMessage("요약 문서에 포함할 2단계 구조화 그룹이 없습니다.");
         return;
       }
 

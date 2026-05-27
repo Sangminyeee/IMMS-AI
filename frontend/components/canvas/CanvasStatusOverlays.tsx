@@ -80,7 +80,7 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
           요약 문서를 생성하고 있습니다
         </h3>
         <p className="mt-3 text-base leading-7 text-slate-500">
-          구조화 단계의 검토 중/확정 그룹과 회의 흐름을 바탕으로 문서 초안을 작성하는 중입니다.
+          2단계 구조화의 모든 그룹과 회의 흐름을 바탕으로 문서 초안을 작성하는 중입니다.
         </p>
       </div>
     </div>
