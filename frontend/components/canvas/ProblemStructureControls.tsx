@@ -67,13 +67,13 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
       <div className="w-[min(820px,94%)] rounded-[20px] border border-black/10 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.14)]">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Problem Structure</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Problem Structure</p>
             <h3 className="mt-2 text-2xl font-semibold text-black">정의 2단계 시작 설정</h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-3 py-2 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
+            className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-3 py-2 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3]"
           >
             닫기
           </button>
@@ -92,8 +92,8 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
                     onClick={() => onDraftMethodChange(method)}
                     className={`rounded-[14px] border px-5 py-4 text-left transition ${
                       active
-                        ? "border-[#a13ab8]/30 bg-[#f7ecfb] text-[#a13ab8]"
-                        : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#a13ab8]/30 hover:bg-[#f7ecfb]"
+                        ? "border-[#01a3ff]/35 bg-[#eef8ff] text-[#236cf3]"
+                        : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#01a3ff]/30 hover:bg-[#eef8ff]"
                     }`}
                   >
                     <span className="text-base font-semibold">{problemStructureMethodLabel(method)}</span>
@@ -120,8 +120,8 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
                     onClick={() => onDraftModeChange(mode)}
                     className={`rounded-[14px] border px-5 py-4 text-left transition ${
                       active
-                        ? "border-[#a13ab8]/30 bg-[#f7ecfb] text-[#a13ab8]"
-                        : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#a13ab8]/30 hover:bg-[#f7ecfb]"
+                        ? "border-[#01a3ff]/35 bg-[#eef8ff] text-[#236cf3]"
+                        : "border-black/10 bg-[#f9f9f9] text-[#333] hover:border-[#01a3ff]/30 hover:bg-[#eef8ff]"
                     }`}
                   >
                     <span className="text-base font-semibold">
@@ -147,7 +147,7 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
             type="button"
             onClick={() => void onStart()}
             disabled={pending}
-            className="rounded-[10px] border border-[#ead0f2] bg-[#f4e8fb] px-5 py-2.5 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-[10px] border border-[#01a3ff] bg-[#01a3ff] px-5 py-2.5 text-sm font-semibold text-white transition hover:border-[#236cf3] hover:bg-[#236cf3] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pending ? "AI 묶는 중" : "정의 2단계로 이동"}
           </button>
@@ -169,14 +169,14 @@ export const ProblemStructureFloatingToolbar = memo(function ProblemStructureFlo
       <div className="pointer-events-auto rounded-[16px] border border-black/10 bg-white/95 p-3 shadow-[0_14px_38px_rgba(15,23,42,0.12)] backdrop-blur">
         <div className="flex flex-wrap items-center gap-3">
           <div className="min-w-[12rem] flex-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#236cf3]">
               정의 2단계
             </p>
             <p className="mt-1 text-sm font-semibold text-black">
               {problemStructureMethodLabel(method)} · {problemDefinitionModeLabel(mode)}
             </p>
             {pending ? (
-              <p className="mt-1 text-xs font-medium text-[#a13ab8]">AI가 구조화 그룹을 생성하는 중입니다.</p>
+              <p className="mt-1 text-xs font-medium text-[#236cf3]">AI가 구조화 그룹을 생성하는 중입니다.</p>
             ) : null}
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -190,8 +190,8 @@ export const ProblemStructureFloatingToolbar = memo(function ProblemStructureFlo
                   onClick={() => onMethodChange(nextMethod)}
                   className={`rounded-[9px] px-3 py-1.5 text-xs font-semibold transition ${
                     active
-                      ? "border border-[#ead0f2] bg-[#f4e8fb] text-[#6f2b7d]"
-                      : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
+                      ? "border border-[#01a3ff]/35 bg-[#eef8ff] text-[#236cf3]"
+                      : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-[#eef8ff] hover:text-[#236cf3]"
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {problemStructureMethodLabel(nextMethod)}
@@ -210,8 +210,8 @@ export const ProblemStructureFloatingToolbar = memo(function ProblemStructureFlo
                   onClick={() => onModeChange(nextMode)}
                   className={`rounded-[9px] px-3 py-1.5 text-xs font-semibold transition ${
                     active
-                      ? "border border-black/10 bg-white text-black shadow-[0_1px_0_rgba(0,0,0,0.04)]"
-                      : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-black/5 hover:text-black"
+                      ? "border border-[#01a3ff]/35 bg-[#eef8ff] text-[#236cf3]"
+                      : "border border-transparent bg-[#f5f6f8] text-[#4d4d4d] hover:bg-[#eef8ff] hover:text-[#236cf3]"
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {problemDefinitionModeLabel(nextMode)}
@@ -243,8 +243,8 @@ export const ProblemCanvasToolbar = memo(function ProblemCanvasToolbar({
             disabled={isActionDisabled(item)}
             className={`flex h-[clamp(34px,4vh,38px)] min-w-[clamp(110px,10vw,150px)] shrink-0 items-center justify-center rounded-[12px] px-[clamp(10px,1vw,14px)] text-[clamp(12px,0.92vw,14px)] font-medium transition-all duration-150 ease-out ${
               isActionActive(item)
-                ? "bg-[#a13ab8]/10 text-[#a13ab8]"
-                : "text-[#4d4d4d] hover:bg-black/5"
+                ? "bg-[#01a3ff]/10 text-[#236cf3]"
+                : "text-[#4d4d4d] hover:bg-[#eef8ff] hover:text-[#236cf3]"
             } disabled:cursor-not-allowed disabled:opacity-45`}
           >
             <span>{getActionLabel(item)}</span>

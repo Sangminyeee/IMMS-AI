@@ -88,7 +88,6 @@ type UseSharedCanvasIncomingSyncOptions = {
   problemGroups: ProblemGroupModel[];
   problemStructureMethod: ProblemStructureMethod;
   remoteNodePreviewTargetsRef: MutableRefObject<Map<string, { x: number; y: number }>>;
-  setActivityMessage: (message: string) => void;
   setAgendaOverrides: Dispatch<SetStateAction<Record<string, AgendaOverride>>>;
   setCanvasItems: Dispatch<SetStateAction<CanvasWorkspaceItem[]>>;
   setCustomGroups: Dispatch<SetStateAction<CanvasCustomGroup[]>>;
@@ -154,7 +153,6 @@ export function useSharedCanvasIncomingSync({
   problemGroups,
   problemStructureMethod,
   remoteNodePreviewTargetsRef,
-  setActivityMessage,
   setAgendaOverrides,
   setCanvasItems,
   setCustomGroups,
@@ -357,8 +355,6 @@ export function useSharedCanvasIncomingSync({
       nodePositions: currentNodePositionsSnapshot,
       importedState: incomingSharedCanvasSync.imported_state || null,
     });
-    setActivityMessage("다른 참가자의 canvas 변경사항이 반영되었습니다.");
-
     window.setTimeout(() => {
       applyingRemoteSharedSyncRef.current = false;
     }, 0);
@@ -387,7 +383,6 @@ export function useSharedCanvasIncomingSync({
     problemGroups,
     problemStructureMethod,
     remoteNodePreviewTargetsRef,
-    setActivityMessage,
     setAgendaOverrides,
     setCanvasItems,
     setCustomGroups,

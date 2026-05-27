@@ -28,6 +28,7 @@ type IdeationKeywordBubble = {
   anchorText?: string;
   activity?: number;
   opacity?: number;
+  emphasis?: "primary" | "default";
 };
 
 function clampNumber(value: number, min: number, max: number) {
@@ -58,7 +59,7 @@ function problemGroupStatusLabel(status: ProblemGroupStatus) {
 }
 
 function problemGroupStatusTone(status: ProblemGroupStatus) {
-  if (status === "review") return "bg-fuchsia-100 text-fuchsia-700";
+  if (status === "review") return "bg-[#eef8ff] text-[#236cf3]";
   if (status === "final") return "bg-emerald-100 text-emerald-700";
   return "bg-slate-100 text-slate-600";
 }
@@ -71,19 +72,35 @@ export function getIdeationKeywordBubbleFontSize(text: string, size: number) {
   }, 0);
   const availableWidth = Math.max(42, size * 0.82);
   const fittedSize = Math.floor((availableWidth / Math.max(1, weightedLength)) * 0.95);
-  return clampNumber(fittedSize, 10, 28);
+  const figmaScaleSize = Math.round(size * 0.132);
+  return clampNumber(Math.min(fittedSize, figmaScaleSize), 6, 26);
 }
 
 export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble, size: number) {
   const fontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
   const offTopic = bubble.offTopic || bubble.kind === "off_topic";
+  const primary = !offTopic && bubble.emphasis === "primary";
+  const borderWidth = Number(clampNumber(size / 94, 0.517, 1.041).toFixed(3));
+  const normalShadowAlpha = size >= 92 ? 0.4 : 0.2;
+  const normalShadowY = Number(clampNumber(size * 0.00532, 0.259, 0.521).toFixed(3));
+  const normalShadowBlur = size < 60 ? 4.542 : 6.75;
+  const bubbleClassName = offTopic
+    ? "border-[#ef4e4e]/45 bg-[#fff5f5]"
+    : primary
+      ? "border-white bg-[radial-gradient(circle_at_50%_45%,#1fc8ff_0%,#01a3ff_42%,#236cf3_100%)]"
+      : "border-white bg-[#fbfbfb]";
+  const bubbleStyle: React.CSSProperties = {
+    borderWidth,
+    boxShadow: offTopic
+      ? `0 ${normalShadowY}px 6.75px rgba(239,78,78,0.22)`
+      : primary
+        ? "0 0.521px 6.75px rgba(1,163,255,0.4)"
+        : `0 ${normalShadowY}px ${normalShadowBlur}px rgba(1,163,255,${normalShadowAlpha})`,
+  };
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Inter','Noto_Sans_KR',sans-serif] ${
-        offTopic
-          ? "border-[#ef4e4e]/45 bg-[#fff5f5] shadow-[0_14px_32px_rgba(239,78,78,0.12)]"
-          : "border-[#a13ab8]/18 bg-white shadow-[0_14px_32px_rgba(161,58,184,0.12)]"
-      }`}
+      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] ${bubbleClassName}`}
+      style={bubbleStyle}
     >
       {offTopic && size >= 92 ? (
         <span className="mb-1 rounded-full bg-[#ef4e4e]/10 px-2 py-0.5 text-[10px] font-semibold leading-none text-[#b23b3b]">
@@ -91,10 +108,10 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
         </span>
       ) : null}
       <strong
-        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : "text-[#8f2aa5]"}`}
+        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#505050]"}`}
         style={{
           fontSize,
-          lineHeight: 1.08,
+          lineHeight: 1.4,
           maxWidth: Math.max(44, Math.round(size * 0.82)),
           textRendering: "geometricPrecision",
           wordBreak: "keep-all",
@@ -162,15 +179,15 @@ export function makeProblemTopicNodeLabel(
     <div
       data-problem-group-drop-id={group.group_id}
       className={`nopan box-border min-w-0 rounded-[12px] border bg-white p-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)] transition ${
-        selected ? "border-[#a13ab8] ring-2 ring-[#a13ab8]/10" : "border-black/10 hover:border-[#a13ab8]/30"
-      } ${dropTarget ? "ring-2 ring-fuchsia-300 ring-offset-2" : ""}`}
+        selected ? "border-[#01a3ff] ring-2 ring-[#01a3ff]/12" : "border-black/10 hover:border-[#01a3ff]/30"
+      } ${dropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="inline-flex min-w-0 items-center gap-2 rounded-[8px] bg-[#f7ecfb] px-2.5 py-1 text-[11px] font-semibold text-[#a13ab8]">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#a13ab8]" />
+        <span className="inline-flex min-w-0 items-center gap-2 rounded-[8px] bg-[#eef8ff] px-2.5 py-1 text-[11px] font-semibold text-[#236cf3]">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#01a3ff]" />
           <span className="truncate">{depthLabel}</span>
         </span>
         <div className="flex shrink-0 items-center gap-1">
@@ -178,7 +195,7 @@ export function makeProblemTopicNodeLabel(
             <button
               type="button"
               aria-label={childCollapsed ? "하위 분류 펼치기" : "하위 분류 접기"}
-              className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-[8px] border border-black/10 bg-[#f9f9f9] text-sm font-semibold text-[#4d4d4d] transition hover:border-[#a13ab8]/20 hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
+              className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-[8px] border border-black/10 bg-[#f9f9f9] text-sm font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3]"
               onClick={onToggleChildren}
               onPointerDown={(event) => event.stopPropagation()}
             >
@@ -202,7 +219,7 @@ export function makeProblemTopicNodeLabel(
             <input
               value={draftTopic}
               onChange={(event) => onDraftTopicChange(event.target.value)}
-              className="mt-1 w-full rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] font-semibold leading-5 text-black outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+              className="mt-1 w-full rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] font-semibold leading-5 text-black outline-none transition focus:border-[#01a3ff]/50 focus:ring-2 focus:ring-[#01a3ff]/10"
             />
           </label>
           <label className="block text-[11px] font-semibold text-black/50">
@@ -210,7 +227,7 @@ export function makeProblemTopicNodeLabel(
             <textarea
               value={draftInsight}
               onChange={(event) => onDraftInsightChange(event.target.value)}
-              className="mt-1 min-h-[72px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+              className="mt-1 min-h-[72px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#01a3ff]/50 focus:ring-2 focus:ring-[#01a3ff]/10"
             />
           </label>
           <label className="block text-[11px] font-semibold text-black/50">
@@ -218,7 +235,7 @@ export function makeProblemTopicNodeLabel(
             <textarea
               value={draftConclusion}
               onChange={(event) => onDraftConclusionChange(event.target.value)}
-              className="mt-1 min-h-[88px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#a13ab8]/50 focus:ring-2 focus:ring-[#a13ab8]/10"
+              className="mt-1 min-h-[88px] w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[13px] leading-5 text-[#333] outline-none transition focus:border-[#01a3ff]/50 focus:ring-2 focus:ring-[#01a3ff]/10"
             />
           </label>
           <div className="flex justify-end gap-2 pt-1">
@@ -231,7 +248,7 @@ export function makeProblemTopicNodeLabel(
             </button>
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] bg-[#a13ab8] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#8f2fa3]"
+              className="nodrag nopan rounded-[8px] bg-[#01a3ff] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#236cf3]"
               onClick={onSaveEdit}
             >
               저장
@@ -249,9 +266,9 @@ export function makeProblemTopicNodeLabel(
             </p>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-1.5 text-[11px] font-semibold">
-            <span className="rounded-full bg-[#f7ecfb] px-2.5 py-1 text-[#a13ab8]">근거 {sourceCount}</span>
+            <span className="rounded-full bg-[#eef8ff] px-2.5 py-1 text-[#236cf3]">근거 {sourceCount}</span>
             {opinionCount > 0 ? (
-              <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-700">의견 {opinionCount}</span>
+              <span className="rounded-full bg-[#f4f8ff] px-2.5 py-1 text-[#3a52bc]">의견 {opinionCount}</span>
             ) : null}
             {childCount > 0 ? (
               <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
@@ -262,7 +279,7 @@ export function makeProblemTopicNodeLabel(
           <div className="mt-4 flex flex-wrap gap-1.5">
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#a13ab8]/20 hover:bg-[#f7ecfb] hover:text-[#a13ab8] disabled:cursor-wait disabled:opacity-60"
+              className="nodrag nopan rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3] disabled:cursor-wait disabled:opacity-60"
               disabled={criteriaLoading}
               onClick={onShowGroupingRationale}
               onPointerDown={(event) => event.stopPropagation()}
@@ -271,7 +288,7 @@ export function makeProblemTopicNodeLabel(
             </button>
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] border border-[#a13ab8]/20 bg-[#f7ecfb] px-2.5 py-1.5 text-xs font-semibold text-[#a13ab8] transition hover:bg-[#efdaf7] disabled:cursor-wait disabled:opacity-60"
+              className="nodrag nopan rounded-[8px] border border-[#01a3ff] bg-[#01a3ff] px-2.5 py-1.5 text-xs font-semibold text-white transition hover:border-[#236cf3] hover:bg-[#236cf3] disabled:cursor-wait disabled:opacity-60"
               disabled={childLoading}
               onClick={onGenerateChildren}
               onPointerDown={(event) => event.stopPropagation()}
@@ -280,7 +297,7 @@ export function makeProblemTopicNodeLabel(
             </button>
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f5f6f8]"
+              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3]"
               onClick={onEdit}
               onPointerDown={(event) => event.stopPropagation()}
             >
@@ -298,7 +315,7 @@ export function makeProblemTopicNodeLabel(
         </>
       )}
       {!editing && dropTarget ? (
-        <p className="mt-3 rounded-xl border border-[#a13ab8]/20 bg-[#f7ecfb] px-3 py-2 text-xs font-semibold leading-5 text-[#a13ab8]">
+        <p className="mt-3 rounded-xl border border-[#01a3ff]/25 bg-[#eef8ff] px-3 py-2 text-xs font-semibold leading-5 text-[#236cf3]">
           개인 메모를 놓으면 이 문제정의 그룹의 의견으로 추가됩니다.
         </p>
       ) : null}

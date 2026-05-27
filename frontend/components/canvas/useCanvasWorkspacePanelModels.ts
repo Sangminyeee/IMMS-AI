@@ -19,6 +19,7 @@ import type {
 } from "@/components/canvas/CanvasSurface";
 import type {
   CanvasWorkspacePanelsProps,
+  CanvasWorkspaceParticipant,
   CanvasWorkspaceQuickAskHandlers,
   CanvasWorkspaceQuickAskState,
 } from "@/components/canvas/CanvasWorkspacePanels";
@@ -26,6 +27,9 @@ import type {
 type UseCanvasWorkspacePanelModelsInput = CanvasWorkspacePanelsProps;
 
 export function useCanvasWorkspacePanelModels({
+  header,
+  keywordSummary,
+  participants: incomingParticipants,
   isDesktopLayout,
   workspaceGridColumns,
   canvasSurfaceRef,
@@ -287,7 +291,19 @@ export function useCanvasWorkspacePanelModels({
     incomingQuickAskHandlers.onToggle,
   ]);
 
+  const participants = useMemo<CanvasWorkspaceParticipant[]>(
+    () => incomingParticipants.map((participant) => ({
+      id: participant.id,
+      label: participant.label,
+      title: participant.title,
+    })),
+    [incomingParticipants],
+  );
+
   return useMemo<CanvasWorkspacePanelsProps>(() => ({
+    header,
+    keywordSummary,
+    participants,
     isDesktopLayout,
     workspaceGridColumns,
     canvasSurfaceRef,
@@ -308,7 +324,10 @@ export function useCanvasWorkspacePanelModels({
     quickAskHandlers,
   }), [
     canvasSurfaceRef,
+    header,
     isDesktopLayout,
+    keywordSummary,
+    participants,
     quickAskHandlers,
     quickAskState,
     renderSummaryMarkdownPreview,

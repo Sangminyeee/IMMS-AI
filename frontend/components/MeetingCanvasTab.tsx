@@ -14,10 +14,12 @@ import {
 } from "@/lib/api";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
 import { useCanvasEndMeetingDialogModels } from "@/components/canvas/useCanvasEndMeetingDialogModels";
-import { CanvasHeader } from "@/components/canvas/CanvasHeader";
 import { useCanvasHeaderActions } from "@/components/canvas/useCanvasHeaderActions";
 import { useCanvasHeaderModels } from "@/components/canvas/useCanvasHeaderModels";
-import { CanvasWorkspacePanels } from "@/components/canvas/CanvasWorkspacePanels";
+import {
+  CanvasWorkspacePanels,
+  type CanvasWorkspaceParticipant,
+} from "@/components/canvas/CanvasWorkspacePanels";
 import { useCanvasWorkspacePanelModels } from "@/components/canvas/useCanvasWorkspacePanelModels";
 import {
   buildProblemExploreLayout,
@@ -225,6 +227,7 @@ function makeEditPresenceKey(targetType: CanvasEditPresencePayload["target_type"
 
 type MeetingCanvasTabProps = {
   userId: string;
+  userEmail?: string | null;
   meetingId: string;
   meetingTitle: string;
   meetingGoal: string;
@@ -244,6 +247,7 @@ type MeetingCanvasTabProps = {
   incomingCanvasStateRequestId: string;
   liveSpeechPreview: LiveSpeechPreview | null;
   isRecording?: boolean;
+  recordingStartedAtMs?: number | null;
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
   onStopRecording?: () => void | Promise<void>;
@@ -580,6 +584,7 @@ function useStableEvent<TArgs extends unknown[], TResult>(
 
 export default function MeetingCanvasTab({
   userId,
+  userEmail,
   meetingId,
   meetingTitle,
   meetingGoal,
@@ -598,6 +603,7 @@ export default function MeetingCanvasTab({
   onEditPresenceSync,
   incomingCanvasStateRequestId,
   isRecording = false,
+  recordingStartedAtMs = null,
   onToggleRecording,
   onEndMeeting,
   onStopRecording,
@@ -1936,7 +1942,6 @@ export default function MeetingCanvasTab({
     problemGroups,
     problemStructureMethod,
     remoteNodePreviewTargetsRef,
-    setActivityMessage,
     setAgendaOverrides,
     setCanvasItems,
     setCustomGroups,
@@ -2789,6 +2794,7 @@ export default function MeetingCanvasTab({
     view: {
       meetingTitle,
       isRecording: Boolean(isRecording),
+      recordingStartedAtMs,
       endMeetingSaving,
       stage,
       busy,
@@ -2806,8 +2812,37 @@ export default function MeetingCanvasTab({
     },
     handlers: headerHandlers,
   });
+  const canvasKeywordSummary = useMemo(
+    () => ideationBubbleVisuals.slice(0, 5).map((bubble) => bubble.text).join(", "),
+    [ideationBubbleVisuals],
+  );
+  const canvasParticipants = useMemo<CanvasWorkspaceParticipant[]>(() => {
+    const candidates = [
+      userEmail || "",
+      ...transcripts
+        .map((transcript) => transcript.speaker)
+        .filter((speaker) => speaker && speaker !== "알 수 없음"),
+    ];
+    const seen = new Set<string>();
+    const participants: CanvasWorkspaceParticipant[] = [];
+
+    candidates.forEach((candidate) => {
+      const normalized = candidate.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      const participant = makeCanvasParticipant(candidate, participants.length);
+      if (participant) participants.push(participant);
+    });
+
+    return participants.length > 0
+      ? participants
+      : [{ id: userId || "current-user", label: "M", title: userEmail || "현재 사용자" }];
+  }, [transcripts, userEmail, userId]);
 
   const workspacePanelProps = useCanvasWorkspacePanelModels({
+    header: headerProps,
+    keywordSummary: canvasKeywordSummary,
+    participants: canvasParticipants,
     isDesktopLayout,
     workspaceGridColumns,
     canvasSurfaceRef,
@@ -2953,12 +2988,29 @@ export default function MeetingCanvasTab({
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">
       <section className="flex h-full min-h-0 flex-col bg-[#f9f9f9]">
-        <CanvasHeader {...headerProps} />
-
         <CanvasWorkspacePanels {...workspacePanelProps} />
       </section>
 
       <CanvasEndMeetingDialogs {...endMeetingDialogProps} />
     </div>
   );
+}
+
+function normalizeParticipantLabel(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const first = trimmed.replace(/^["'<({\[]+/, "").charAt(0);
+  return first ? first.toUpperCase() : "";
+}
+
+function makeCanvasParticipant(value: string, index: number): CanvasWorkspaceParticipant | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const label = normalizeParticipantLabel(trimmed);
+  if (!label) return null;
+  return {
+    id: `${trimmed.toLowerCase()}:${index}`,
+    label,
+    title: trimmed,
+  };
 }

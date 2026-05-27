@@ -28,6 +28,7 @@ export type IdeationKeywordBubble = {
   anchorText?: string;
   activity?: number;
   opacity?: number;
+  emphasis?: "primary" | "default";
 };
 
 export type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
@@ -271,6 +272,7 @@ const CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE = 260;
 const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
 const CANVAS_IDEATION_BUBBLE_COLLISION_GAP = 0;
 const CANVAS_IDEATION_BUBBLE_COLLISION_ITERATIONS = 32;
+const CANVAS_IDEATION_BUBBLE_MAX_PRIMARY_COUNT = 2;
 export const CANVAS_IDEATION_BUBBLE_TRANSITION =
   "transform 560ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease";
 
@@ -846,6 +848,50 @@ function getIdeationBubbleIncomingActivity(bubble: IdeationKeywordBubble) {
   return clampNumber(0.26 + Math.max(weight, importance) * 0.52 + relevance * 0.22, 0.2, 1);
 }
 
+function getIdeationBubbleImportanceScore(bubble: IdeationKeywordBubble, maxCount: number) {
+  const countRatio = maxCount <= 1 ? 1 : clampNumber(bubble.count / maxCount, 0, 1);
+  const weight = clampNumber(Number(bubble.weight || countRatio), 0, 1);
+  const importance = clampNumber(Number(bubble.importance ?? weight), 0, 1);
+  const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
+  const activity = clampNumber(Number(bubble.activity ?? 0.5), 0, 1);
+  return countRatio * 0.42 + weight * 0.28 + importance * 0.2 + relevance * 0.06 + activity * 0.04;
+}
+
+function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[]) {
+  const maxCount = Math.max(1, ...visuals.map((bubble) => bubble.count));
+  const rankBubbles = (left: IdeationKeywordBubble, right: IdeationKeywordBubble) =>
+    getIdeationBubbleImportanceScore(right, maxCount) - getIdeationBubbleImportanceScore(left, maxCount) ||
+    right.count - left.count ||
+    left.text.localeCompare(right.text);
+  const rankedVisuals = [...visuals].sort(rankBubbles);
+  const primaryCandidates = new Map<string, IdeationKeywordBubbleVisual>();
+
+  buildIdeationKeywordBubbleClusters(rankedVisuals).forEach((cluster) => {
+    if (cluster.length < 2) return;
+    const [clusterPrimary] = [...cluster].sort(rankBubbles);
+    const visual = visuals.find((item) => item.id === clusterPrimary.id);
+    if (visual) primaryCandidates.set(visual.id, visual);
+  });
+
+  const selected = [...primaryCandidates.values()]
+    .sort(rankBubbles)
+    .slice(0, CANVAS_IDEATION_BUBBLE_MAX_PRIMARY_COUNT);
+
+  if (selected.length === 0 && rankedVisuals.length > 0) {
+    selected.push(rankedVisuals[0]);
+  }
+
+  return new Set(selected.map((bubble) => bubble.id));
+}
+
+function applyIdeationBubblePrimaryEmphasis(visuals: IdeationKeywordBubbleVisual[]) {
+  const primaryIds = resolveIdeationBubblePrimaryIds(visuals);
+  return visuals.map((visual) => ({
+    ...visual,
+    emphasis: primaryIds.has(visual.id) ? "primary" as const : "default" as const,
+  }));
+}
+
 function clampIdeationBubblePosition(x: number, y: number, size: number) {
   return {
     x: clampNumber(x, 70, CANVAS_IDEATION_BUBBLE_PLANE_WIDTH - size - 70),
@@ -1092,7 +1138,7 @@ export function buildStableIdeationBubbleVisuals(
         lastSeenTick: tick,
       };
     });
-    return resolveIdeationBubbleVisualCollisions(initialVisuals, tick);
+    return applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(initialVisuals, tick));
   }
 
   const nextVisuals = previousVisuals.map((visual) => {
@@ -1144,10 +1190,10 @@ export function buildStableIdeationBubbleVisuals(
     occupied.push({ id: visual.id, x: visual.targetX, y: visual.targetY, size: visual.size });
   });
 
-  return resolveIdeationBubbleVisualCollisions(
+  return applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(
     applyIdeationBubbleProximityRetarget(nextVisuals, incomingIds, tick),
     tick,
-  ).sort((left, right) => {
+  )).sort((left, right) => {
     const leftActive = incomingIds.has(left.id) ? 1 : 0;
     const rightActive = incomingIds.has(right.id) ? 1 : 0;
     return rightActive - leftActive || left.firstSeenTick - right.firstSeenTick;

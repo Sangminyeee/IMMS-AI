@@ -18,6 +18,7 @@ export function useCanvasHeaderModels({
   const view = useMemo<CanvasHeaderViewState>(() => ({
     meetingTitle: incomingView.meetingTitle,
     isRecording: incomingView.isRecording,
+    recordingStartedAtMs: incomingView.recordingStartedAtMs,
     endMeetingSaving: incomingView.endMeetingSaving,
     stage: incomingView.stage,
     busy: incomingView.busy,
@@ -32,6 +33,7 @@ export function useCanvasHeaderModels({
     incomingView.isRecording,
     incomingView.meetingTitle,
     incomingView.problemDefinitionStagePending,
+    incomingView.recordingStartedAtMs,
     incomingView.stage,
   ]);
 

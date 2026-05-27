@@ -13,6 +13,7 @@ function stageLabel(stage: CanvasStage) {
 export type CanvasHeaderViewState = {
   meetingTitle: string;
   isRecording: boolean;
+  recordingStartedAtMs?: number | null;
   endMeetingSaving: boolean;
   stage: CanvasStage;
   busy: boolean;

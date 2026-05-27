@@ -228,6 +228,7 @@ function HomeContent() {
   const [agendas, setAgendas] = useState<Agenda[]>([]);
   const [analysisState, setAnalysisState] = useState<MeetingState | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingMeeting, setLoadingMeeting] = useState(true);
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
@@ -899,6 +900,7 @@ function HomeContent() {
       await recorder?.stopAndCleanup();
       finishCalibration();
       setIsRecording(false);
+      setRecordingStartedAtMs(null);
       return;
     }
 
@@ -993,6 +995,7 @@ function HomeContent() {
         });
       }
     });
+    setRecordingStartedAtMs(Date.now());
     setIsRecording(true);
   };
 
@@ -1004,6 +1007,7 @@ function HomeContent() {
       audioRecorderRef.current = null;
       await recorder?.stopAndCleanup();
       setIsRecording(false);
+      setRecordingStartedAtMs(null);
     }
 
     wsClientRef.current?.disconnect();
@@ -1067,6 +1071,7 @@ function HomeContent() {
     <div className="h-screen overflow-hidden bg-white">
       <MeetingCanvasTab
         userId={user.id}
+        userEmail={user.email}
         meetingId={meetingId}
         meetingTitle={meetingTitle}
         meetingGoal={meetingGoal}
@@ -1086,6 +1091,7 @@ function HomeContent() {
         incomingCanvasStateRequestId={incomingCanvasStateRequestId}
         liveSpeechPreview={liveSpeechPreview}
         isRecording={isRecording}
+        recordingStartedAtMs={recordingStartedAtMs}
         onToggleRecording={toggleRecording}
         onStopRecording={toggleRecording}
         onEndMeeting={endMeeting}

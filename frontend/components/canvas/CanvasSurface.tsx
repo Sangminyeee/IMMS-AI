@@ -319,7 +319,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   } = problemHandlers;
 
   return (
-    <section ref={canvasSurfaceRef} className="relative order-1 flex min-h-[min(72vh,720px)] flex-col overflow-hidden border-b border-black/10 bg-[#f9f9f9] shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:h-full xl:min-h-0 xl:border-b-0">
+    <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
       <div className="relative min-h-0 w-full flex-1">
         <CanvasFloatingStatusControls
           stage={stage}
@@ -346,6 +346,16 @@ export const CanvasSurface = memo(function CanvasSurface({
             maxZoom={1.6}
             proOptions={REACT_FLOW_PRO_OPTIONS}
           >
+            {stage === "ideation" ? (
+              <Background
+                id="ideation-grid"
+                bgColor="#fbfbfb"
+                color="#e9eef5"
+                gap={18}
+                size={1}
+                variant={BackgroundVariant.Lines}
+              />
+            ) : null}
             {stage === "problem-definition" ? (
               <Background
                 id="problem-definition-grid"
@@ -356,12 +366,14 @@ export const CanvasSurface = memo(function CanvasSurface({
                 variant={BackgroundVariant.Dots}
               />
             ) : null}
-            <MiniMap
-              zoomable
-              pannable
-              maskColor="rgba(15, 23, 42, 0.08)"
-              nodeColor={stage === "problem-definition" ? "#a13ab8" : "#0f766e"}
-            />
+            {stage === "problem-definition" ? (
+              <MiniMap
+                zoomable
+                pannable
+                maskColor="rgba(15, 23, 42, 0.08)"
+                nodeColor="#a13ab8"
+              />
+            ) : null}
           </ReactFlow>
         ) : (
           <SolutionCanvasView
