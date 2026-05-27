@@ -1,4 +1,5 @@
 import { Position } from "@xyflow/react";
+import { useEffect, useRef } from "react";
 import type * as React from "react";
 import {
   buildNodeContentSignature,
@@ -74,7 +75,7 @@ const PROBLEM_EXPLORE_BOARD_MIN_HEIGHT = 489;
 const PROBLEM_EXPLORE_BOARD_LEFT_WIDTH = 243;
 const PROBLEM_EXPLORE_CARD_WIDTH = 249;
 const PROBLEM_EXPLORE_CARD_HEIGHT = 116;
-const PROBLEM_EXPLORE_EDIT_CARD_HEIGHT = 286;
+const PROBLEM_EXPLORE_EDIT_CARD_HEIGHT = PROBLEM_EXPLORE_CARD_HEIGHT;
 const PROBLEM_EXPLORE_CARD_GAP_X = 27;
 const PROBLEM_EXPLORE_CARD_GAP_Y = 47;
 const PROBLEM_EXPLORE_BOARD_PADDING_Y = 23;
@@ -87,7 +88,7 @@ function makeProblemExploreEditPresenceKey(groupId: string) {
 
 function problemExploreDetailText(group: ProblemExploreGroupNodeModel, loading: boolean) {
   if (loading) return "인사이트를 정리하는 중입니다.";
-  return group.insight_lens || (group.conclusion && group.conclusion !== group.topic ? group.conclusion : "");
+  return (group.conclusion && group.conclusion !== group.topic ? group.conclusion : "") || group.insight_lens || "";
 }
 
 function problemExploreDepthLabel(group: ProblemExploreGroupNodeModel, visualDepth?: number) {
@@ -251,61 +252,99 @@ function ProblemExploreIconButton({
   );
 }
 
-function ProblemExploreEditForm({
-  draftTopic,
-  draftInsight,
-  draftConclusion,
-  onDraftTopicChange,
-  onDraftInsightChange,
-  onDraftConclusionChange,
+function ProblemExploreInlineTextarea({
+  value,
+  onChange,
+  placeholder,
+  maxHeight,
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  maxHeight: number;
+  className: string;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    const textarea = textareaRef.current;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [maxHeight, value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      rows={1}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      className={className}
+    />
+  );
+}
+
+function ProblemExploreInlineEditActions({
   onCancel,
   onSave,
 }: {
-  draftTopic: string;
-  draftInsight: string;
-  draftConclusion: string;
-  onDraftTopicChange: (value: string) => void;
-  onDraftInsightChange: (value: string) => void;
-  onDraftConclusionChange: (value: string) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   return (
-    <div className="space-y-[7px]" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-      <input
-        value={draftTopic}
-        onChange={(event) => onDraftTopicChange(event.target.value)}
-        className="nodrag nopan h-[28px] w-full rounded-[7px] border border-[#cecccc] bg-white px-2 text-[11px] font-bold leading-none text-[#111] outline-none focus:border-[#01a3ff]"
-      />
-      <textarea
-        value={draftInsight}
-        onChange={(event) => onDraftInsightChange(event.target.value)}
-        className="nodrag nopan min-h-[58px] w-full resize-none rounded-[7px] border border-[#cecccc] bg-white px-2 py-1.5 text-[10px] font-medium leading-[15px] text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
-      />
-      <textarea
-        value={draftConclusion}
-        onChange={(event) => onDraftConclusionChange(event.target.value)}
-        className="nodrag nopan min-h-[58px] w-full resize-none rounded-[7px] border border-[#cecccc] bg-white px-2 py-1.5 text-[10px] font-medium leading-[15px] text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
-      />
-      <div className="flex justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="nodrag nopan grid h-[24px] w-[24px] place-items-center rounded-full bg-[#f2f4f8] text-[#737982] transition hover:bg-[#e7edf7]"
-          aria-label="수정 취소"
-        >
-          <XIcon className="h-[13px] w-[13px]" />
-        </button>
-        <button
-          type="button"
-          onClick={onSave}
-          className="nodrag nopan grid h-[24px] w-[24px] place-items-center rounded-full bg-[#236cf3] text-white transition hover:brightness-105"
-          aria-label="수정 저장"
-        >
-          <CheckIcon className="h-[13px] w-[13px]" />
-        </button>
-      </div>
+    <div className="flex shrink-0 items-center gap-[4px]">
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onCancel();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#f2f4f8] text-[#737982] transition hover:bg-[#e7edf7]"
+        aria-label="수정 취소"
+      >
+        <XIcon className="h-[11px] w-[11px]" />
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSave();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#236cf3] text-white transition hover:brightness-105"
+        aria-label="수정 저장"
+      >
+        <CheckIcon className="h-[11px] w-[11px]" />
+      </button>
     </div>
+  );
+}
+
+function ProblemExploreInlineTitleInput({
+  draftTopic,
+  onDraftTopicChange,
+  className,
+}: {
+  draftTopic: string;
+  onDraftTopicChange: (value: string) => void;
+  className: string;
+}) {
+  return (
+    <input
+      value={draftTopic}
+      autoFocus
+      onChange={(event) => onDraftTopicChange(event.target.value)}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      className={className}
+    />
   );
 }
 
@@ -346,7 +385,6 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
   editing,
   remoteEditing,
   draftTopic,
-  draftInsight,
   draftConclusion,
   handlers,
 }: {
@@ -359,7 +397,6 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
   editing: boolean;
   remoteEditing: boolean;
   draftTopic: string;
-  draftInsight: string;
   draftConclusion: string;
   handlers: ProblemExploreEventHandlers<TGroup>;
 }) {
@@ -373,27 +410,36 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
       } ${dropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""}`}
       {...dropHandlers}
     >
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex h-[16px] min-w-[32px] items-center justify-center rounded-full bg-[#236cf3] px-[10px] text-[8px] font-bold leading-none text-white">
+          {problemExploreDepthLabel(group, visualDepth)}
+        </span>
+        {editing ? (
+          <ProblemExploreInlineEditActions
+            onCancel={handlers.onCancelProblemGroupEdit}
+            onSave={() => handlers.onSaveProblemGroupEdit(group.group_id)}
+          />
+        ) : remoteEditing ? (
+          <span className="rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">수정중</span>
+        ) : null}
+      </div>
       {editing ? (
-        <ProblemExploreEditForm
-          draftTopic={draftTopic}
-          draftInsight={draftInsight}
-          draftConclusion={draftConclusion}
-          onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
-          onDraftInsightChange={handlers.onProblemGroupDraftInsightChange}
-          onDraftConclusionChange={handlers.onProblemGroupDraftConclusionChange}
-          onCancel={handlers.onCancelProblemGroupEdit}
-          onSave={() => handlers.onSaveProblemGroupEdit(group.group_id)}
-        />
+        <>
+          <ProblemExploreInlineTitleInput
+            draftTopic={draftTopic}
+            onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
+            className="nodrag nopan mt-[10px] block h-[16px] w-full rounded-[3px] bg-transparent px-0 text-[11px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
+          />
+          <ProblemExploreInlineTextarea
+            value={draftConclusion}
+            onChange={handlers.onProblemGroupDraftConclusionChange}
+            placeholder="내용 없음"
+            maxHeight={44}
+            className="nodrag nopan mt-[4px] block min-h-[24px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[8.5px] font-medium leading-[12px] tracking-[-0.02px] text-[#4d4d4d] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
+          />
+        </>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex h-[16px] min-w-[32px] items-center justify-center rounded-full bg-[#236cf3] px-[10px] text-[8px] font-bold leading-none text-white">
-              {problemExploreDepthLabel(group, visualDepth)}
-            </span>
-            {remoteEditing ? (
-              <span className="rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">수정중</span>
-            ) : null}
-          </div>
           <strong className="mt-[10px] line-clamp-1 text-[11px] font-bold leading-[16px] tracking-[-0.03px] text-[#111]">
             {group.topic || "문제 후보"}
           </strong>
@@ -416,8 +462,10 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
             <div className="flex items-center gap-[5px]">
               <ProblemExploreIconButton
                 label="문제 후보 수정"
+                disabled={remoteEditing}
                 onClick={(event) => {
                   event.stopPropagation();
+                  if (remoteEditing) return;
                   handlers.onQuickEditProblemGroup(group);
                 }}
               >
@@ -449,7 +497,6 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
   problemChildGenerationPendingId,
   editingProblemGroupId,
   problemGroupDraftTopic,
-  problemGroupDraftInsight,
   problemGroupDraftConclusion,
   remoteEditPresenceByKey,
   handlers,
@@ -462,7 +509,6 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
   problemChildGenerationPendingId: string;
   editingProblemGroupId: string;
   problemGroupDraftTopic: string;
-  problemGroupDraftInsight: string;
   problemGroupDraftConclusion: string;
   remoteEditPresenceByKey: Record<string, RemoteEditPresence | null | undefined>;
   handlers: ProblemExploreEventHandlers<TGroup>;
@@ -473,6 +519,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
   const rootLoading = loadingProblemGroupIds.includes(root.group_id);
   const rootDetailText = problemExploreDetailText(root, rootLoading);
   const rootDropHandlers = problemExploreDropHandlers(root, handlers);
+  const rootRemoteEditing = Boolean(remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(root.group_id)]);
   return (
     <div
       className="nopan grid overflow-hidden rounded-[8px] border border-[#cecccc] bg-white text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_4px_rgba(0,0,0,0.06)]"
@@ -486,16 +533,34 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
         {...rootDropHandlers}
       >
         {rootEditing ? (
-          <ProblemExploreEditForm
-            draftTopic={problemGroupDraftTopic}
-            draftInsight={problemGroupDraftInsight}
-            draftConclusion={problemGroupDraftConclusion}
-            onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
-            onDraftInsightChange={handlers.onProblemGroupDraftInsightChange}
-            onDraftConclusionChange={handlers.onProblemGroupDraftConclusionChange}
-            onCancel={handlers.onCancelProblemGroupEdit}
-            onSave={() => handlers.onSaveProblemGroupEdit(root.group_id)}
-          />
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <div className="inline-flex h-[22px] items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
+                분류{rootIndex + 1}
+              </div>
+              <ProblemExploreInlineEditActions
+                onCancel={handlers.onCancelProblemGroupEdit}
+                onSave={() => handlers.onSaveProblemGroupEdit(root.group_id)}
+              />
+            </div>
+            <div className="mt-[19px] min-w-0">
+              <ProblemExploreInlineTitleInput
+                draftTopic={problemGroupDraftTopic}
+                onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
+                className="nodrag nopan block min-h-[32px] w-full rounded-[3px] bg-transparent px-0 text-[12px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
+              />
+              <p className="mt-[7px] text-[11px] font-medium leading-[16px] tracking-[-0.03px] text-[#4d4d4d]">
+                {descendants.length} cards
+              </p>
+            </div>
+            <ProblemExploreInlineTextarea
+              value={problemGroupDraftConclusion}
+              onChange={handlers.onProblemGroupDraftConclusionChange}
+              placeholder="내용 없음"
+              maxHeight={142}
+              className="nodrag nopan mt-[14px] block min-h-[32px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[10px] font-medium leading-[16px] text-[#737982] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
+            />
+          </>
         ) : (
           <>
             <div className="inline-flex h-[22px] items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
@@ -510,11 +575,16 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                   {descendants.length} cards
                 </p>
               </div>
+              {rootRemoteEditing ? (
+                <span className="shrink-0 rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">수정중</span>
+              ) : null}
               <div className="flex shrink-0 items-center gap-[4px]">
                 <ProblemExploreIconButton
                   label="분류 수정"
+                  disabled={rootRemoteEditing}
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (rootRemoteEditing) return;
                     handlers.onQuickEditProblemGroup(root);
                   }}
                 >
@@ -586,7 +656,6 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                   editing={editing}
                   remoteEditing={Boolean(remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(group.group_id)])}
                   draftTopic={editing ? problemGroupDraftTopic : ""}
-                  draftInsight={editing ? problemGroupDraftInsight : ""}
                   draftConclusion={editing ? problemGroupDraftConclusion : ""}
                   handlers={handlers}
                 />
@@ -625,7 +694,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
   editingProblemGroupId: string;
   problemExploreLayout: ProblemExploreLayoutModel<TGroup>;
   problemGroupDraftConclusion: string;
-  problemGroupDraftInsight: string;
   problemGroupDraftTopic: string;
   problemGroupingRationaleById: Record<string, unknown>;
   problemGroupingRationalePendingId: string;
@@ -650,7 +718,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
     editingProblemGroupId,
     problemExploreLayout,
     problemGroupDraftConclusion,
-    problemGroupDraftInsight,
     problemGroupDraftTopic,
     problemGroups,
     remoteEditPresenceByKey,
@@ -704,7 +771,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
           loadingProblemGroupIds.includes(board.root.group_id),
           remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(board.root.group_id)]?.updated_at || "",
           problemGroupDraftTopic,
-          problemGroupDraftInsight,
           problemGroupDraftConclusion,
           ...board.descendants.flatMap(({ group, visualDepth }) => [
             group.group_id,
@@ -729,7 +795,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
             problemChildGenerationPendingId={problemChildGenerationPendingId}
             editingProblemGroupId={editingProblemGroupId}
             problemGroupDraftTopic={problemGroupDraftTopic}
-            problemGroupDraftInsight={problemGroupDraftInsight}
             problemGroupDraftConclusion={problemGroupDraftConclusion}
             remoteEditPresenceByKey={remoteEditPresenceByKey}
             handlers={handlers}
@@ -753,7 +818,6 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
         group.conclusion || "",
         editingProblemGroupId === group.group_id,
         editingProblemGroupId === group.group_id ? problemGroupDraftTopic : "",
-        editingProblemGroupId === group.group_id ? problemGroupDraftInsight : "",
         editingProblemGroupId === group.group_id ? problemGroupDraftConclusion : "",
         ...(group.linked_group_ids || []),
         ...(group.source_summary_items || []),

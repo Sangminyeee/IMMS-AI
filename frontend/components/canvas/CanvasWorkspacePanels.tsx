@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import type {
   CanvasHeaderProps,
@@ -452,7 +452,14 @@ function PersonalNoteCard({
   handlers: CanvasRightDrawerNoteHandlers;
 }) {
   const bodyText = note.body.trim();
-  const editRows = Math.min(10, Math.max(3, draftBody.split(/\r\n|\r|\n/).length + 1));
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!isEditing || !textareaRef.current) return;
+    const textarea = textareaRef.current;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [draftBody, isEditing]);
 
   return (
     <article
@@ -472,7 +479,8 @@ function PersonalNoteCard({
           <input
             value={draftTitle}
             onChange={(event) => handlers.onDraftTitleChange(event.target.value)}
-            className="min-w-0 flex-1 rounded-[8px] border border-[#cecccc] px-2 py-1 text-[12px] font-bold text-[#2c3448] outline-none"
+            autoFocus
+            className="-mx-1 min-w-0 flex-1 rounded-[4px] bg-transparent px-1 py-0 text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448] outline-none transition focus:bg-[#f8fbff]"
           />
         ) : (
           <h4 className="min-w-0 truncate text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448]">{note.title}</h4>
@@ -525,10 +533,12 @@ function PersonalNoteCard({
       </div>
       {isEditing ? (
         <textarea
+          ref={textareaRef}
           value={draftBody}
           onChange={(event) => handlers.onDraftBodyChange(event.target.value)}
-          rows={editRows}
-          className="mt-3 min-h-[76px] w-full resize-y rounded-[8px] border border-[#cecccc] px-2 py-2 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none"
+          placeholder="내용 없음"
+          rows={1}
+          className="mt-[12px] block min-h-[18px] w-full resize-none overflow-hidden rounded-[4px] bg-transparent p-0 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none transition placeholder:text-[#a3aab5] focus:bg-[#f8fbff]"
         />
       ) : bodyText ? (
         <p className="mt-[12px] whitespace-pre-wrap break-words text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982]">

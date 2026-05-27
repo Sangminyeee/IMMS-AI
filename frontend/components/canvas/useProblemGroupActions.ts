@@ -18,7 +18,6 @@ type LocalEditPresenceTarget = {
 type UseProblemGroupActionsOptions<TGroup extends ProblemGroupActionModel> = {
   commitProblemGroupsSnapshot: (nextGroups: TGroup[], message: string, selectedGroupId?: string) => void;
   problemGroupDraftConclusion: string;
-  problemGroupDraftInsight: string;
   problemGroupDraftTopic: string;
   problemDefinitionPhase: string;
   problemGroups: TGroup[];
@@ -44,7 +43,6 @@ function problemGroupStatusLabel(status: ProblemGroupStatus) {
 export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
   commitProblemGroupsSnapshot,
   problemGroupDraftConclusion,
-  problemGroupDraftInsight,
   problemGroupDraftTopic,
   problemDefinitionPhase,
   problemGroups,
@@ -67,8 +65,8 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
       setLocalEditPresenceTarget({ targetType: "problem_group", targetId: group.group_id });
       setEditingProblemGroupId(group.group_id);
       setProblemGroupDraftTopic(group.topic);
-      setProblemGroupDraftInsight(group.insight_lens || "");
-      setProblemGroupDraftConclusion(group.conclusion);
+      setProblemGroupDraftInsight("");
+      setProblemGroupDraftConclusion((group.conclusion && group.conclusion !== group.topic ? group.conclusion : "") || group.insight_lens || "");
       setActivityMessage("문제정의 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
     },
     [
@@ -135,8 +133,8 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
       if (!group) return;
 
       const nextTopic = problemGroupDraftTopic.trim() || group.topic;
-      const nextInsight = problemGroupDraftInsight.trim();
-      const nextConclusion = problemGroupDraftConclusion.trim() || group.conclusion;
+      const nextInsight = "";
+      const nextConclusion = problemGroupDraftConclusion.trim();
       const nextGroups = problemGroups.map((item) =>
         item.group_id === groupId
           ? ({
@@ -162,7 +160,6 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
     [
       commitProblemGroupsSnapshot,
       problemGroupDraftConclusion,
-      problemGroupDraftInsight,
       problemGroupDraftTopic,
       problemGroups,
       setEditingProblemGroupId,

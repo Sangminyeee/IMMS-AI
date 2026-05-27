@@ -270,7 +270,6 @@ function TrashIcon() {
 function SummaryCardToolIcons() {
   return (
     <div className="absolute right-[18px] top-[24px] flex items-center gap-[9px] text-[#9a9a9a]">
-      <EditIcon />
       <CopyIcon />
     </div>
   );

@@ -146,7 +146,7 @@ export function useCanvasPersonalNotePanelActions<TNote extends PersonalNotePane
           ? {
               ...note,
               title: personalNoteDraftTitle.trim() || note.title,
-              body: personalNoteDraftBody.trim() || note.body,
+              body: personalNoteDraftBody.trim(),
             }
           : note,
       ),

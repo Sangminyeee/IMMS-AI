@@ -708,7 +708,7 @@ export default function MeetingCanvasTab({
   const [problemGroupingRationaleOpenGroupId, setProblemGroupingRationaleOpenGroupId] = useState("");
   const [editingProblemGroupId, setEditingProblemGroupId] = useState("");
   const [problemGroupDraftTopic, setProblemGroupDraftTopic] = useState("");
-  const [problemGroupDraftInsight, setProblemGroupDraftInsight] = useState("");
+  const [, setProblemGroupDraftInsight] = useState("");
   const [problemGroupDraftConclusion, setProblemGroupDraftConclusion] = useState("");
   const [draggingPersonalNoteId, setDraggingPersonalNoteId] = useState("");
   const [dropProblemGroupId, setDropProblemGroupId] = useState("");
@@ -2028,7 +2028,6 @@ export default function MeetingCanvasTab({
   } = useProblemGroupActions({
     commitProblemGroupsSnapshot,
     problemGroupDraftConclusion,
-    problemGroupDraftInsight,
     problemGroupDraftTopic,
     problemDefinitionPhase,
     problemGroups,
@@ -2147,7 +2146,6 @@ export default function MeetingCanvasTab({
         problemExploreLayout,
         editingProblemGroupId,
         problemGroupDraftConclusion,
-        problemGroupDraftInsight,
         problemGroupDraftTopic,
         problemGroupingRationaleById,
         problemGroupingRationalePendingId,
@@ -2206,7 +2204,6 @@ export default function MeetingCanvasTab({
     problemDefinitionPhase,
     problemExploreLayout,
     problemGroupDraftConclusion,
-    problemGroupDraftInsight,
     problemGroupDraftTopic,
     problemGroupingRationaleById,
     problemGroupingRationalePendingId,
