@@ -520,6 +520,7 @@ export interface CanvasFinalSolutionSummary {
   warning?: string;
   source_signature?: string;
   sections?: CanvasSummaryDocumentSection[];
+  structured?: CanvasSummaryStructuredDocument;
 }
 
 export interface CanvasSummaryEvidenceItem {
@@ -539,6 +540,46 @@ export interface CanvasSummaryDocumentSection {
   evidence: CanvasSummaryEvidenceItem[];
 }
 
+export interface CanvasSummaryStructuredIdeaGroup {
+  group_id: string;
+  title: string;
+  items: string[];
+}
+
+export interface CanvasSummaryStructuredOpinion {
+  label: string;
+  text: string;
+}
+
+export interface CanvasSummaryStructuredDiscussionFlow {
+  group_id: string;
+  title: string;
+  opinions: CanvasSummaryStructuredOpinion[];
+  conclusion: string;
+}
+
+export interface CanvasSummaryStructuredConclusionGroup {
+  group_id: string;
+  title: string;
+  status: "draft" | "review" | "final" | string;
+  status_label?: string;
+  bullets: string[];
+}
+
+export interface CanvasSummaryStructuredDocument {
+  meeting_overview: string;
+  attendee_summary?: string;
+  key_summary: string;
+  idea_groups: CanvasSummaryStructuredIdeaGroup[];
+  discussion_flows: CanvasSummaryStructuredDiscussionFlow[];
+  pending_items: string[];
+  conclusion: {
+    title: string;
+    summary: string;
+    groups: CanvasSummaryStructuredConclusionGroup[];
+  };
+}
+
 export interface CanvasSummaryDocumentResponse {
   ok: boolean;
   used_llm: boolean;
@@ -547,6 +588,7 @@ export interface CanvasSummaryDocumentResponse {
   source_signature: string;
   markdown: string;
   sections: CanvasSummaryDocumentSection[];
+  structured?: CanvasSummaryStructuredDocument;
 }
 
 export interface CanvasQuickAskResponse {

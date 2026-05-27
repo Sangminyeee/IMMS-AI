@@ -1,10 +1,12 @@
 "use client";
 
-import { memo, type ReactNode, type RefObject } from "react";
+import { memo, useMemo, type ReactNode, type RefObject } from "react";
 import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary } from "@/lib/types";
 import {
+  buildSolutionPresentationModel,
   SolutionFinalDocumentPanel,
   SolutionSummarySourceList,
+  type SummaryParticipant,
   type SummaryProblemStructureGroup,
   type SummaryProblemStructureNode,
 } from "@/components/canvas/SolutionPanels";
@@ -12,6 +14,9 @@ import {
 type SummaryDocumentSection = NonNullable<CanvasFinalSolutionSummary["sections"]>[number];
 
 type SolutionCanvasViewProps = {
+  meetingTitle: string;
+  meetingGoal: string;
+  participants: SummaryParticipant[];
   groups: SummaryProblemStructureGroup[];
   sectionByGroupId: Map<string, SummaryDocumentSection>;
   nodeById: Map<string, SummaryProblemStructureNode>;
@@ -34,6 +39,9 @@ type SolutionCanvasViewProps = {
 };
 
 export const SolutionCanvasView = memo(function SolutionCanvasView({
+  meetingTitle,
+  meetingGoal,
+  participants,
   groups,
   sectionByGroupId,
   nodeById,
@@ -54,9 +62,18 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   onMarkdownChange,
   renderPreview,
 }: SolutionCanvasViewProps) {
+  const presentation = useMemo(
+    () => buildSolutionPresentationModel({ meetingTitle, meetingGoal, participants, document, groups, sectionByGroupId, nodeById }),
+    [document, groups, meetingGoal, meetingTitle, nodeById, participants, sectionByGroupId],
+  );
+
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 bg-[#f5f6f8] xl:grid-cols-[minmax(18rem,32%)_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 grid-cols-1 bg-[#f8f8f8] xl:grid-cols-[minmax(360px,37%)_minmax(0,63%)]">
       <SolutionSummarySourceList
+        meetingTitle={meetingTitle}
+        meetingGoal={meetingGoal}
+        participants={participants}
+        document={document}
         groups={groups}
         sectionByGroupId={sectionByGroupId}
         nodeById={nodeById}
@@ -73,6 +90,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
         pending={pending}
         saving={saving}
         eligibleGroupCount={groups.length}
+        presentation={presentation}
         onSetEditMode={onSetEditMode}
         onRegenerate={onRegenerate}
         onCopy={onCopy}

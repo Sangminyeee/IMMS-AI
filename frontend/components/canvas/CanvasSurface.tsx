@@ -25,6 +25,7 @@ import {
 } from "@/components/canvas/ProblemStructureControls";
 import { SolutionCanvasView } from "@/components/canvas/SolutionCanvasView";
 import type {
+  SummaryParticipant,
   SummaryProblemStructureGroup,
   SummaryProblemStructureNode,
 } from "@/components/canvas/SolutionPanels";
@@ -54,6 +55,9 @@ export type CanvasSurfaceViewState = {
 };
 
 export type CanvasSurfaceSolutionState = {
+  meetingTitle: string;
+  meetingGoal: string;
+  participants: SummaryParticipant[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
   summaryDocumentDraftMarkdown: string;
   summaryDocumentDraftDirty: boolean;
@@ -258,6 +262,9 @@ export const CanvasSurface = memo(function CanvasSurface({
   } = view;
   const {
     finalSummaryDocument,
+    meetingGoal,
+    meetingTitle,
+    participants,
     summaryDocumentDraftMarkdown,
     summaryDocumentDraftDirty,
     summaryEligibleStructureGroups,
@@ -372,6 +379,9 @@ export const CanvasSurface = memo(function CanvasSurface({
           </ReactFlow>
         ) : (
           <SolutionCanvasView
+            meetingTitle={meetingTitle}
+            meetingGoal={meetingGoal}
+            participants={participants}
             groups={summaryEligibleStructureGroups}
             sectionByGroupId={summaryDocumentSectionByGroupId}
             nodeById={problemStructureNodeById}

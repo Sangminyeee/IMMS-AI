@@ -851,7 +851,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
       />
 
       <main className="relative min-h-0 overflow-hidden bg-[#fbfbfb]">
-        <MeetingGoalOverlay header={header} />
+        {header.view.stage === "solution" ? null : <MeetingGoalOverlay header={header} />}
         <CanvasSurface
           canvasSurfaceRef={canvasSurfaceRef}
           view={surfaceView}
@@ -862,7 +862,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
           problemHandlers={surfaceProblemHandlers}
           renderSummaryMarkdownPreview={renderSummaryMarkdownPreview}
         />
-        <CenterTransportControls header={header} />
+        {header.view.stage === "solution" ? null : <CenterTransportControls header={header} />}
       </main>
 
       <RightAiPanel

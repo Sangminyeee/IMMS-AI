@@ -1,5 +1,25 @@
 import type { ReactNode } from "react";
-import type { CanvasFinalSolutionSummary, CanvasSummaryDocumentSection } from "@/lib/types";
+import type {
+  CanvasFinalSolutionSummary,
+  CanvasSummaryDocumentSection,
+  CanvasSummaryStructuredDocument,
+} from "@/lib/types";
+
+function createEmptyStructuredSummaryDocument(): CanvasSummaryStructuredDocument {
+  return {
+    meeting_overview: "",
+    attendee_summary: "",
+    key_summary: "",
+    idea_groups: [],
+    discussion_flows: [],
+    pending_items: [],
+    conclusion: {
+      title: "",
+      summary: "",
+      groups: [],
+    },
+  };
+}
 
 export function createEmptyFinalSolutionSummary(): CanvasFinalSolutionSummary {
   return {
@@ -13,6 +33,75 @@ export function createEmptyFinalSolutionSummary(): CanvasFinalSolutionSummary {
     warning: "",
     source_signature: "",
     sections: [],
+    structured: createEmptyStructuredSummaryDocument(),
+  };
+}
+
+function normalizeStringList(value: unknown, limit: number) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean)
+        .slice(0, limit)
+    : [];
+}
+
+function normalizeStructuredSummaryDocument(
+  raw?: CanvasSummaryStructuredDocument | null,
+): CanvasSummaryStructuredDocument {
+  const fallback = createEmptyStructuredSummaryDocument();
+  if (!raw || typeof raw !== "object") return fallback;
+
+  return {
+    meeting_overview: typeof raw.meeting_overview === "string" ? raw.meeting_overview : "",
+    attendee_summary: typeof raw.attendee_summary === "string" ? raw.attendee_summary : "",
+    key_summary: typeof raw.key_summary === "string" ? raw.key_summary : "",
+    idea_groups: Array.isArray(raw.idea_groups)
+      ? raw.idea_groups
+          .map((group) => ({
+            group_id: group.group_id || "",
+            title: group.title || "주요 아이디어",
+            items: normalizeStringList(group.items, 8),
+          }))
+          .filter((group) => group.title || group.items.length > 0)
+          .slice(0, 24)
+      : [],
+    discussion_flows: Array.isArray(raw.discussion_flows)
+      ? raw.discussion_flows
+          .map((flow) => ({
+            group_id: flow.group_id || "",
+            title: flow.title || "논의 흐름",
+            opinions: Array.isArray(flow.opinions)
+              ? flow.opinions
+                  .map((opinion) => ({
+                    label: opinion.label || "의견",
+                    text: opinion.text || "",
+                  }))
+                  .filter((opinion) => opinion.text)
+                  .slice(0, 4)
+              : [],
+            conclusion: flow.conclusion || "",
+          }))
+          .filter((flow) => flow.title || flow.opinions.length > 0 || flow.conclusion)
+          .slice(0, 24)
+      : [],
+    pending_items: normalizeStringList(raw.pending_items, 12),
+    conclusion: {
+      title: raw.conclusion?.title || "",
+      summary: raw.conclusion?.summary || "",
+      groups: Array.isArray(raw.conclusion?.groups)
+        ? raw.conclusion.groups
+            .map((group) => ({
+              group_id: group.group_id || "",
+              title: group.title || "정리 항목",
+              status: group.status || "draft",
+              status_label: group.status_label || "",
+              bullets: normalizeStringList(group.bullets, 8),
+            }))
+            .filter((group) => group.title || group.bullets.length > 0)
+            .slice(0, 24)
+        : [],
+    },
   };
 }
 
@@ -55,6 +144,7 @@ export function normalizeFinalSolutionSummaryPayload(
     warning: raw.warning || "",
     source_signature: raw.source_signature || "",
     sections,
+    structured: normalizeStructuredSummaryDocument(raw.structured),
   };
 }
 
@@ -71,6 +161,7 @@ export function buildSummaryDocumentFromResponse(input: {
   usedLlm: boolean;
   warning?: string;
   sourceSignature: string;
+  structured?: CanvasSummaryStructuredDocument;
 }): CanvasFinalSolutionSummary {
   return normalizeFinalSolutionSummaryPayload({
     final_count: input.sections.length,
@@ -83,6 +174,7 @@ export function buildSummaryDocumentFromResponse(input: {
     warning: input.warning || "",
     source_signature: input.sourceSignature,
     sections: input.sections,
+    structured: input.structured,
   });
 }
 

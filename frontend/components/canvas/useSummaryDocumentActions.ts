@@ -11,6 +11,7 @@ import { generateCanvasSummaryDocument, saveCanvasWorkspacePatch } from "@/lib/a
 import type {
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentSection,
+  CanvasSummaryStructuredDocument,
   MeetingState,
 } from "@/lib/types";
 
@@ -29,6 +30,7 @@ type BuildSummaryDocumentFromResponse = (input: {
   usedLlm: boolean;
   warning?: string;
   sourceSignature: string;
+  structured?: CanvasSummaryStructuredDocument;
 }) => CanvasFinalSolutionSummary;
 
 type UseSummaryDocumentActionsOptions = {
@@ -195,6 +197,7 @@ export function useSummaryDocumentActions({
           warning: result.warning,
           sourceSignature:
             result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
+          structured: result.structured,
         });
 
         setFinalSummaryDocument(nextFinalSummary);

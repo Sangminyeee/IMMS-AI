@@ -2839,6 +2839,9 @@ export default function MeetingCanvasTab({
       canvasStatusMessage,
     },
     surfaceSolution: {
+      meetingTitle,
+      meetingGoal: meetingGoalDraft.trim(),
+      participants: canvasParticipants,
       finalSummaryDocument,
       summaryDocumentDraftMarkdown,
       summaryDocumentDraftDirty,

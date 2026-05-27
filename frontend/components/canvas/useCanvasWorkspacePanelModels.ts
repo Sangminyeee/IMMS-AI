@@ -64,6 +64,9 @@ export function useCanvasWorkspacePanelModels({
   ]);
 
   const surfaceSolution = useMemo<CanvasSurfaceSolutionState>(() => ({
+    meetingTitle: incomingSurfaceSolution.meetingTitle,
+    meetingGoal: incomingSurfaceSolution.meetingGoal,
+    participants: incomingSurfaceSolution.participants,
     finalSummaryDocument: incomingSurfaceSolution.finalSummaryDocument,
     summaryDocumentDraftMarkdown: incomingSurfaceSolution.summaryDocumentDraftMarkdown,
     summaryDocumentDraftDirty: incomingSurfaceSolution.summaryDocumentDraftDirty,
@@ -78,6 +81,9 @@ export function useCanvasWorkspacePanelModels({
     solutionRightPaneRef: incomingSurfaceSolution.solutionRightPaneRef,
   }), [
     incomingSurfaceSolution.finalSummaryDocument,
+    incomingSurfaceSolution.meetingGoal,
+    incomingSurfaceSolution.meetingTitle,
+    incomingSurfaceSolution.participants,
     incomingSurfaceSolution.problemStructureNodeById,
     incomingSurfaceSolution.remoteEditPresenceByKey,
     incomingSurfaceSolution.solutionRightPaneRef,
