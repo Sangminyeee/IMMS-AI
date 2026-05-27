@@ -18,12 +18,12 @@
   --scrollbar-track: rgba(226, 232, 240, 0.55);
   --scrollbar-thumb: rgba(148, 163, 184, 0.75);
   --scrollbar-thumb-hover: rgba(100, 116, 139, 0.9);
-  --moa-primary: #ff645b;
-  --moa-primary-strong: #ff3e40;
-  --moa-primary-hover: #ff3e40;
-  --moa-primary-pressed: #ff3e40;
-  --moa-primary-soft: #fff3f1;
-  --moa-primary-border: #ff7a6e;
+  --moa-primary: #067bf8;
+  --moa-primary-strong: #010ec7;
+  --moa-primary-hover: #010981;
+  --moa-primary-pressed: #010981;
+  --moa-primary-soft: #eef6ff;
+  --moa-primary-border: #067bf8;
   --moa-accent: #df32a5;
   --moa-bg: #f8f8f8;
   --moa-surface: #ffffff;
@@ -52,7 +52,7 @@
   --moa-disabled: #e7e8ec;
   --moa-disabled-text: #6f6f6f;
   --moa-disabled-fill: #d8d8d8;
-  --moa-logo-mark: #ff3e40;
+  --moa-logo-mark: #067bf8;
   --moa-logo-text: #2d2a2a;
   --moa-hero-start: #fcfcfc;
   --moa-hero-end: #ebebeb;
@@ -63,6 +63,13 @@
   --moa-status-active: rgba(112, 112, 112, 0.76);
   --moa-result-button: #757575;
   --moa-result-button-hover: #626262;
+  --moa-auth-title: #131d41;
+  --moa-auth-text: #4c4c4c;
+  --moa-auth-muted: #707070;
+  --moa-auth-input-bg: #f8f8f8;
+  --moa-auth-field-border: #b8b8b8;
+  --moa-auth-field-border-focus: #808080;
+  --moa-auth-button-gradient: linear-gradient(90deg, #3867ff 0%, #0610d7 58%, #01058e 100%);
   --moa-app-bg: var(--moa-bg);
   --moa-muted: var(--moa-disabled-text);
   --moa-subtle: #9a9a9a;
@@ -552,9 +559,9 @@ button:disabled,
 .auth-pixel-input:-webkit-autofill:hover,
 .auth-pixel-input:-webkit-autofill:focus,
 .auth-pixel-input:-webkit-autofill:active {
-  -webkit-text-fill-color: #4c4c4c !important;
+  -webkit-text-fill-color: var(--moa-auth-text) !important;
   box-shadow: 0 0 0 1000px #f8f8f8 inset !important;
-  caret-color: #4c4c4c;
+  caret-color: var(--moa-auth-title);
   transition: background-color 9999s ease-out;
 }
 
@@ -576,8 +583,8 @@ button:disabled,
 
 @media (min-width: 1024px) {
   .auth-stage {
-    width: 2844px;
-    height: 1421px;
+    width: 1920px;
+    height: 1080px;
     transform: translate(-50%, -50%) scale(var(--auth-stage-scale));
   }
 }

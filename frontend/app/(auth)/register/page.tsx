@@ -80,7 +80,7 @@ export default function RegisterPage() {
           onChange={(event) => setFullName(event.target.value)}
           placeholder="홍길동"
           required
-          top={438}
+          top={334}
           type="text"
           value={fullName}
         />
@@ -91,7 +91,7 @@ export default function RegisterPage() {
           onChange={(event) => setEmail(event.target.value)}
           placeholder="example@email.com"
           required
-          top={602}
+          top={452}
           type="email"
           value={email}
         />
@@ -102,7 +102,7 @@ export default function RegisterPage() {
           onChange={(event) => setPassword(event.target.value)}
           placeholder="••••••••"
           required
-          top={766}
+          top={570}
           value={password}
         />
         <AuthPixelPasswordField
@@ -112,14 +112,14 @@ export default function RegisterPage() {
           onChange={(event) => setPasswordConfirm(event.target.value)}
           placeholder="••••••••"
           required
-          top={930}
+          top={690}
           value={passwordConfirm}
         />
-        {error ? <AuthPixelError message={error} top={1064} /> : null}
-        <AuthPixelSubmitButton disabled={loading} top={1134} type="submit">
-          {loading ? "가입 중..." : "회원가입!"}
+        {error ? <AuthPixelError message={error} top={784} /> : null}
+        <AuthPixelSubmitButton disabled={loading} top={840} type="submit">
+          {loading ? "가입 중..." : "회원가입"}
         </AuthPixelSubmitButton>
-        <AuthPixelAccountLink href="/login" label="이미 계정이 있으신가요?" linkLabel="로그인" top={1241} />
+        <AuthPixelAccountLink href="/login" label="이미 계정이 있으신가요?" linkLabel="로그인" top={918} />
       </form>
     );
   }

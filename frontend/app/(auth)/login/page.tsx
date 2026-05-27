@@ -67,7 +67,7 @@ export default function LoginPage() {
           onChange={(event) => setEmail(event.target.value)}
           placeholder="example@email.com"
           required
-          top={499}
+          top={397}
           type="email"
           value={email}
         />
@@ -78,14 +78,14 @@ export default function LoginPage() {
           onChange={(event) => setPassword(event.target.value)}
           placeholder="••••••••"
           required
-          top={661}
+          top={516}
           value={password}
         />
-        {error ? <AuthPixelError message={error} top={810} /> : null}
-        <AuthPixelSubmitButton disabled={loading} top={873} type="submit">
+        {error ? <AuthPixelError message={error} top={610} /> : null}
+        <AuthPixelSubmitButton disabled={loading} top={664} type="submit">
           {loading ? "로그인 중..." : "로그인"}
         </AuthPixelSubmitButton>
-        <AuthPixelAccountLink href="/register" label="계정이 없으신가요?" linkLabel="회원가입" top={973} />
+        <AuthPixelAccountLink href="/register" label="계정이 없으신가요?" linkLabel="회원가입" top={744} />
         <AuthPixelSocialLoginButtons />
       </form>
     );
