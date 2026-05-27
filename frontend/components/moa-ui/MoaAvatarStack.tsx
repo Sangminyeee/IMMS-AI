@@ -12,7 +12,13 @@ interface MoaAvatarStackProps {
   maxVisible?: number;
 }
 
-const fallbackColors = ["#7c3aed", "#ef4e4e", "#222222", "#a78bfa", "#f59e0b"];
+const fallbackColors = [
+  "var(--moa-primary)",
+  "var(--moa-accent)",
+  "var(--moa-logo-text)",
+  "var(--moa-primary-border)",
+  "var(--moa-primary-strong)",
+];
 
 export function MoaAvatarStack({ avatars, className, maxVisible = 5 }: MoaAvatarStackProps) {
   const visibleAvatars = avatars.slice(0, maxVisible);

@@ -96,3 +96,4 @@ logs/
 /proto
 deploy/.env.production
 .codex-temp
+frontend/app/fonts

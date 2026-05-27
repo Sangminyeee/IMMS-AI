@@ -87,7 +87,7 @@ export function AuthSplitLayout({ children }: AuthSplitLayoutProps) {
   } as CSSProperties;
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#f8f8f8] text-[var(--moa-text)]">
+    <main className="min-h-screen overflow-hidden bg-[var(--moa-bg)] text-[var(--moa-text)]">
       <div className="relative min-h-screen w-full overflow-hidden">
         <div
           className="auth-stage relative min-h-screen w-full opacity-0 transition-opacity duration-150 data-[ready=true]:opacity-100 lg:absolute lg:left-1/2 lg:top-1/2 lg:min-h-0 lg:origin-center"
@@ -96,7 +96,7 @@ export function AuthSplitLayout({ children }: AuthSplitLayoutProps) {
         >
           <div className="hidden lg:block">
             <section
-              className="absolute overflow-hidden rounded-[43px] bg-[#ff4d4b] bg-cover bg-center text-white"
+              className="absolute overflow-hidden rounded-[43px] bg-[var(--moa-primary)] bg-cover bg-center text-white"
               style={{ backgroundImage: "url('/figma-assets/auth-visual.png')", height: 1348, left: 38, top: 37, width: 1384 }}
             >
               <Image alt="MOA" className="absolute h-auto" height={47} priority src="/figma-assets/moa-logo-white.svg" style={{ left: 76, top: 60, width: 77 }} width={77} />
@@ -116,13 +116,13 @@ export function AuthSplitLayout({ children }: AuthSplitLayoutProps) {
               style={{ fontSize: 96, fontWeight: 200, lineHeight: "105px" }}
             >
               <span className="block whitespace-nowrap">
-                <span className="text-[#ef4e4e]" style={{ fontWeight: 500 }}>
+                <span className="text-[var(--moa-primary)]" style={{ fontWeight: 500 }}>
                   생각
                 </span>
                 을 모아,
               </span>
               <span className="block whitespace-nowrap">
-                <span className="text-[#ef4e4e]" style={{ fontWeight: 500 }}>
+                <span className="text-[var(--moa-primary)]" style={{ fontWeight: 500 }}>
                   흐름
                 </span>
                 을 만들다
@@ -153,7 +153,7 @@ export function AuthSplitLayout({ children }: AuthSplitLayoutProps) {
             </div>
           </div>
 
-          <section className="flex min-h-screen items-start bg-[#f8f8f8] px-4 py-12 lg:hidden">
+          <section className="flex min-h-screen items-start bg-[var(--moa-bg)] px-4 py-12 lg:hidden">
             <div className="w-full max-w-[343px]">
               <Image alt="MOA" className="h-auto w-[36px]" height={43} priority src="/figma-assets/moa-logo-red.svg" width={70} />
               <div className="auth-route-copy" key={`mobile-copy-${screen}`}>

@@ -15,7 +15,7 @@ interface MoaButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantClasses: Record<MoaButtonVariant, string> = {
   primary:
-    "border border-[#ff464b] bg-[#ff464b] text-white shadow-none hover:border-[var(--moa-coral-strong)] hover:bg-[var(--moa-coral-strong)]",
+    "border border-[var(--moa-primary)] bg-[var(--moa-primary)] text-white shadow-none hover:border-[var(--moa-primary-hover)] hover:bg-[var(--moa-primary-hover)]",
   brand:
     "border border-[var(--moa-brand)] bg-[var(--moa-brand)] text-white shadow-[0_14px_28px_rgba(207,60,177,0.18)] hover:border-[var(--moa-brand-strong)] hover:bg-[var(--moa-brand-strong)]",
   secondary:

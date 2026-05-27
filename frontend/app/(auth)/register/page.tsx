@@ -178,7 +178,7 @@ export default function RegisterPage() {
 
       <p className="mt-4 text-center text-[12px] leading-[17px] text-[var(--moa-muted)]">
         이미 계정이 있으신가요?{" "}
-        <AuthTransitionLink href="/login" className="font-bold text-[#ff464b] hover:text-[var(--moa-coral-strong)]">
+        <AuthTransitionLink href="/login" className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-hover)]">
           로그인
         </AuthTransitionLink>
       </p>

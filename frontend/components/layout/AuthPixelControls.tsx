@@ -75,16 +75,16 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 export function AuthPixelTextField({ id, label, top, ...props }: AuthPixelTextFieldProps) {
   return (
     <label className="absolute block" htmlFor={id} style={{ height: 124, left: AUTH_FIELD_LEFT, top, width: AUTH_FIELD_WIDTH }}>
-      <span className="block text-[26px] font-bold leading-[36px] tracking-normal text-[#434343]">{label}</span>
+      <span className="block text-[26px] font-bold leading-[36px] tracking-normal text-[var(--moa-text-body)]">{label}</span>
       <span
-        className="absolute left-0 top-[50px] flex h-[74px] w-[677px] items-center rounded-[19px] bg-[#f8f8f8] px-[44px] transition focus-within:border-[#969696]"
-        style={{ backgroundColor: "#f8f8f8", borderColor: "#b8b8b8", borderStyle: "solid", borderWidth: 2 }}
+        className="absolute left-0 top-[50px] flex h-[74px] w-[677px] items-center rounded-[19px] bg-[var(--moa-bg)] px-[44px] transition focus-within:border-[#969696]"
+        style={{ backgroundColor: "var(--moa-bg)", borderColor: "var(--moa-border-muted)", borderStyle: "solid", borderWidth: 2 }}
       >
         <input
           {...props}
           id={id}
-          className="auth-pixel-input h-full min-w-0 flex-1 bg-transparent text-[26px] font-medium leading-[36px] tracking-normal text-[#4c4c4c] outline-none placeholder:text-[#4c4c4c]"
-          style={{ backgroundColor: "transparent", color: "#4c4c4c", fontSize: 26, fontWeight: 500, lineHeight: "36px" }}
+          className="auth-pixel-input h-full min-w-0 flex-1 bg-transparent text-[26px] font-medium leading-[36px] tracking-normal text-[var(--moa-text-body)] outline-none placeholder:text-[var(--moa-text-body)]"
+          style={{ backgroundColor: "transparent", color: "var(--moa-text-body)", fontSize: 26, fontWeight: 500, lineHeight: "36px" }}
         />
       </span>
     </label>
@@ -96,23 +96,23 @@ export function AuthPixelPasswordField({ autoComplete, id, label, top, ...props 
 
   return (
     <label className="absolute block" htmlFor={id} style={{ height: 124, left: AUTH_FIELD_LEFT, top, width: AUTH_FIELD_WIDTH }}>
-      <span className="block text-[26px] font-bold leading-[36px] tracking-normal text-[#434343]">{label}</span>
+      <span className="block text-[26px] font-bold leading-[36px] tracking-normal text-[var(--moa-text-body)]">{label}</span>
       <span
-        className="absolute left-0 top-[50px] flex h-[74px] w-[677px] items-center rounded-[19px] bg-[#f8f8f8] pl-[44px] pr-[90px] transition focus-within:border-[#969696]"
-        style={{ backgroundColor: "#f8f8f8", borderColor: "#b8b8b8", borderStyle: "solid", borderWidth: 2 }}
+        className="absolute left-0 top-[50px] flex h-[74px] w-[677px] items-center rounded-[19px] bg-[var(--moa-bg)] pl-[44px] pr-[90px] transition focus-within:border-[#969696]"
+        style={{ backgroundColor: "var(--moa-bg)", borderColor: "var(--moa-border-muted)", borderStyle: "solid", borderWidth: 2 }}
       >
         <input
           {...props}
           autoComplete={autoComplete}
           id={id}
           type={isVisible ? "text" : "password"}
-          className="auth-pixel-input h-full min-w-0 flex-1 bg-transparent text-[26px] font-medium leading-[36px] tracking-normal text-[#4c4c4c] outline-none placeholder:text-[#4c4c4c]"
-          style={{ backgroundColor: "transparent", color: "#4c4c4c", fontSize: 26, fontWeight: 500, lineHeight: "36px" }}
+          className="auth-pixel-input h-full min-w-0 flex-1 bg-transparent text-[26px] font-medium leading-[36px] tracking-normal text-[var(--moa-text-body)] outline-none placeholder:text-[var(--moa-text-body)]"
+          style={{ backgroundColor: "transparent", color: "var(--moa-text-body)", fontSize: 26, fontWeight: 500, lineHeight: "36px" }}
         />
       </span>
       <button
         aria-label={isVisible ? "비밀번호 숨기기" : "비밀번호 보기"}
-        className="absolute right-[24px] top-[69px] flex h-[36px] w-[36px] items-center justify-center text-[#8e8e8e] transition hover:text-[#4c4c4c]"
+        className="absolute right-[24px] top-[69px] flex h-[36px] w-[36px] items-center justify-center text-[#8e8e8e] transition hover:text-[var(--moa-text-body)]"
         onClick={() => setIsVisible((current) => !current)}
         type="button"
       >
@@ -126,9 +126,9 @@ export function AuthPixelSubmitButton({ children, disabled, top, ...props }: Aut
   return (
     <button
       {...props}
-      className="absolute flex h-[74px] w-[677px] items-center justify-center rounded-[19px] bg-[#ff4d4b] text-[26px] font-bold leading-[36px] tracking-normal text-white transition hover:bg-[#ef4543] disabled:bg-[#e7e8ec] disabled:text-[#6f6f6f]"
+      className="absolute flex h-[74px] w-[677px] items-center justify-center rounded-[19px] bg-[var(--moa-primary)] text-[26px] font-bold leading-[36px] tracking-normal text-white transition hover:bg-[var(--moa-primary-pressed)] disabled:bg-[var(--moa-disabled)] disabled:text-[var(--moa-disabled-text)]"
       disabled={disabled}
-      style={{ color: disabled ? "#6f6f6f" : "#ffffff", fontSize: 26, fontWeight: 700, left: AUTH_FIELD_LEFT, lineHeight: "36px", top }}
+      style={{ color: disabled ? "var(--moa-disabled-text)" : "#ffffff", fontSize: 26, fontWeight: 700, left: AUTH_FIELD_LEFT, lineHeight: "36px", top }}
     >
       {children}
     </button>
@@ -137,9 +137,9 @@ export function AuthPixelSubmitButton({ children, disabled, top, ...props }: Aut
 
 export function AuthPixelAccountLink({ href, label, linkLabel, top }: AuthPixelAccountLinkProps) {
   return (
-    <p className="absolute m-0 w-[677px] text-center text-[23px] font-light leading-[33px] tracking-normal text-[#4c4c4c]" style={{ left: AUTH_FIELD_LEFT, top }}>
+    <p className="absolute m-0 w-[677px] text-center text-[23px] font-light leading-[33px] tracking-normal text-[var(--moa-text-body)]" style={{ left: AUTH_FIELD_LEFT, top }}>
       {label}{" "}
-      <AuthTransitionLink className="font-bold text-[#ff4d4b] hover:text-[#ef4543]" href={href}>
+      <AuthTransitionLink className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-pressed)]" href={href}>
         {linkLabel}
       </AuthTransitionLink>
     </p>
@@ -149,9 +149,9 @@ export function AuthPixelAccountLink({ href, label, linkLabel, top }: AuthPixelA
 export function AuthPixelSocialLoginButtons() {
   return (
     <>
-      <div className="absolute h-px w-[677px] bg-[#b8b8b8]" style={{ left: AUTH_FIELD_LEFT, top: 1073 }} />
+      <div className="absolute h-px w-[677px] bg-[var(--moa-border-muted)]" style={{ left: AUTH_FIELD_LEFT, top: 1073 }} />
       <span
-        className="absolute bg-[#f8f8f8] px-[24px] text-[20px] font-normal leading-[33px] tracking-normal text-[#4c4c4c]"
+        className="absolute bg-[var(--moa-bg)] px-[24px] text-[20px] font-normal leading-[33px] tracking-normal text-[var(--moa-text-body)]"
         style={{ left: 2074, top: 1056 }}
       >
         간편 로그인

@@ -23,17 +23,39 @@ const pretendard = localFont({
   display: "swap",
 });
 
+const gmarketSans = localFont({
+  src: [
+    {
+      path: "./fonts/GmarketSansTTFLight.ttf",
+      weight: "300",
+      style: "normal",
+    },
+    {
+      path: "./fonts/GmarketSansTTFMedium.ttf",
+      weight: "500",
+      style: "normal",
+    },
+    {
+      path: "./fonts/GmarketSansTTFBold.ttf",
+      weight: "700",
+      style: "normal",
+    },
+  ],
+  variable: "--font-gmarket-sans",
+  display: "swap",
+});
+
 const fontVariables = {
   "--font-body": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
   "--font-display": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif',
-  "--font-inter": '"Inter", "Segoe UI", sans-serif',
+  "--font-inter": '"Inter", var(--font-pretendard), "Segoe UI", sans-serif',
   "--font-noto-sans-kr": 'var(--font-pretendard), "Apple SD Gothic Neo", "Malgun Gothic", sans-serif',
 } as CSSProperties;
 
 export default function RootLayout({ children }: Readonly<RootLayoutProps>) {
   return (
     <html lang="ko">
-      <body className={pretendard.variable} style={fontVariables}>
+      <body className={`${pretendard.variable} ${gmarketSans.variable}`} style={fontVariables}>
         <div data-imms-figma-capture-root>
           <AuthProvider>
             {children}

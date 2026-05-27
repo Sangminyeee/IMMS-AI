@@ -124,7 +124,7 @@ export default function LoginPage() {
 
       <p className="mt-4 text-center text-[12px] leading-[17px] text-[var(--moa-muted)]">
         계정이 없으신가요?{" "}
-        <AuthTransitionLink href="/register" className="font-bold text-[#ff464b] hover:text-[var(--moa-coral-strong)]">
+        <AuthTransitionLink href="/register" className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-hover)]">
           회원가입
         </AuthTransitionLink>
       </p>

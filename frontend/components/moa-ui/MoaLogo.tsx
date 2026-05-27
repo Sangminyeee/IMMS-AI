@@ -5,6 +5,7 @@ interface MoaLogoProps {
   markClassName?: string;
   showText?: boolean;
   size?: "sm" | "md" | "lg";
+  variant?: "brand" | "white";
 }
 
 const sizeClasses = {
@@ -19,19 +20,32 @@ const markSizeClasses = {
   lg: "h-10 w-14",
 };
 
-export function MoaLogo({ className, markClassName, showText = true, size = "md" }: MoaLogoProps) {
+export function MoaLogo({ className, markClassName, showText = true, size = "md", variant = "brand" }: MoaLogoProps) {
   return (
-    <div className={classNames("inline-flex items-center font-black tracking-[-0.03em] text-[#181818]", sizeClasses[size], className)}>
+    <div
+      className={classNames(
+        "inline-flex items-center font-bold tracking-[-0.03em]",
+        variant === "white" ? "text-white" : "text-[var(--moa-logo-text)]",
+        sizeClasses[size],
+        className,
+      )}
+    >
       <svg
         aria-hidden="true"
-        viewBox="0 0 64 42"
-        className={classNames("shrink-0 text-[var(--moa-brand)]", markSizeClasses[size], markClassName)}
+        viewBox="0 0 70.1641 42.8272"
+        className={classNames(
+          "shrink-0",
+          variant === "white" ? "text-white" : "text-[var(--moa-logo-mark)]",
+          markSizeClasses[size],
+          markClassName,
+        )}
         fill="none"
       >
-        <path d="M9 13.5 23.5 29" stroke="currentColor" strokeWidth="8.5" strokeLinecap="round" />
-        <path d="M23.5 13.5 38 29" stroke="currentColor" strokeWidth="8.5" strokeLinecap="round" />
-        <path d="M38 13.5 52.5 29" stroke="currentColor" strokeWidth="8.5" strokeLinecap="round" />
-        <circle cx="57.5" cy="11" r="4.2" fill="currentColor" />
+        <path
+          d="M7.91955 0.0603721C8.57284 0.02987 9.1892 0.00450761 9.84326 0.0430542C11.3977 0.127633 12.8973 0.648625 14.1717 1.54682C15.6723 2.60668 19.7514 7.26267 21.1547 8.85324C23.8925 11.9563 26.9609 15.0411 29.6804 18.1057C29.5984 16.8058 29.6448 14.8218 29.6479 13.4653C29.6551 10.2323 29.297 6.20124 31.4463 3.53292C33.093 1.57978 34.938 0.328076 37.4803 0.0676348C42.2323 -0.419393 44.1398 1.77497 47.1268 5.00205C48.7317 6.72369 50.3128 8.46767 51.8697 10.2333C55.0792 13.8355 58.5536 17.3006 61.6743 20.9794C64.8416 24.713 69.5855 27.3603 70.1133 32.6228C70.9851 41.3248 60.3444 46.4179 54.4093 39.7486C50.8022 35.6952 47.004 31.7314 43.3769 27.6953L40.3425 24.3445C39.5382 23.4411 38.6456 22.343 37.7365 21.5711C36.7407 20.6972 35.9119 19.0155 34.3671 20.5635C32.404 22.5305 36.8177 24.92 37.7378 26.4085C38.0733 26.9512 38.9683 27.586 39.3893 28.3115C44.5619 37.2244 34.5515 47.07 26.0403 40.8264C24.5586 39.7396 23.6399 38.2902 22.3286 37.0284C17.3555 31.5066 12.4138 25.9468 7.30575 20.5506C6.16008 19.0082 3.75667 21.0097 4.64324 22.3579C6.26216 24.8197 9.02852 27.2226 10.9398 29.5116C12.1445 30.9544 13.5917 32.1574 14.5338 33.6881C14.9451 34.3417 15.2074 35.0786 15.3021 35.846C15.5082 37.4667 15.1469 38.7935 14.1727 40.1248C9.80601 46.0927 0.818615 41.1979 0.152767 34.9074C-0.0461645 33.028 0.0057674 31.0477 0.00699057 29.1075V20.4649L0.00965783 12.7287C0.0112146 11.1391 -0.0559495 9.24285 0.17534 7.68255C0.747561 3.82219 4.03877 0.533657 7.91955 0.0603721Z"
+          fill="currentColor"
+        />
+        <circle cx="65.1521" cy="5.0117" r="5.0117" fill="currentColor" />
       </svg>
       {showText ? <span>MOA</span> : null}
     </div>
