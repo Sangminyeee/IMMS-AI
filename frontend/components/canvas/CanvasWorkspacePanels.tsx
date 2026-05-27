@@ -26,6 +26,7 @@ import {
 import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAsk";
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
+type ProblemDefinitionPhase = "explore" | "structure";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
@@ -611,14 +612,50 @@ export type CanvasWorkspaceQuickAskHandlers = {
   onSubmit: (event?: FormEvent<HTMLFormElement>) => void;
 };
 
+function CurrentProblemDefinitionStagePanel({
+  problem,
+  problemHandlers,
+}: {
+  problem: CanvasSurfaceProblemState;
+  problemHandlers: CanvasSurfaceProblemHandlers;
+}) {
+  const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+
+  return (
+    <section className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[clamp(292px,27.037vh,389px)] z-10 text-left">
+      <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
+      <p className="mt-[8px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 - 1단계</p>
+      <p className="mt-[4px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+        문제 후보를 검토하고, 필요한 문제를 선택해
+        <br />
+        2단계 구조화로 이동할 수 있습니다.
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          void problemHandlers.onStartProblemStructure();
+        }}
+        disabled={buttonDisabled}
+        className="mt-[13px] flex h-[33px] w-full items-center justify-center rounded-full bg-[linear-gradient(90deg,#01a3ff_33%,#236cf3_158%)] text-[12px] font-semibold leading-[1.4] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
+      >
+        {problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기"}
+      </button>
+    </section>
+  );
+}
+
 function RightAiPanel({
   header,
   participants,
+  problem,
+  problemHandlers,
   quickAskState,
   quickAskHandlers,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
+  problem: CanvasSurfaceProblemState;
+  problemHandlers: CanvasSurfaceProblemHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
 }) {
@@ -632,6 +669,8 @@ function RightAiPanel({
   const visibleParticipants = useMemo(() => participants.slice(0, 5), [participants]);
   const hiddenParticipantCount = Math.max(0, participants.length - visibleParticipants.length);
   const recentMessages = quickAskMessages.slice(-4);
+  const showProblemStagePanel =
+    header.view.stage === "problem-definition" && (problem.problemDefinitionPhase as ProblemDefinitionPhase) !== "structure";
 
   return (
     <aside className="relative h-full min-h-0 overflow-hidden border-l border-[#cecccc] bg-white">
@@ -680,18 +719,35 @@ function RightAiPanel({
         </div>
       </div>
 
-      <div className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[var(--canvas-right-ai-title-top)] z-10">
+      {showProblemStagePanel ? (
+        <CurrentProblemDefinitionStagePanel problem={problem} problemHandlers={problemHandlers} />
+      ) : null}
+
+      <div
+        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${
+          showProblemStagePanel ? "top-[clamp(439px,40.648vh,585px)]" : "top-[var(--canvas-right-ai-title-top)]"
+        }`}
+      >
         <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
           AI 가이드
           <span className="text-[13px] font-bold text-[#01a3ff]">+</span>
         </h3>
       </div>
-      <p className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[var(--canvas-right-ai-status-top)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9]">
+      <p
+        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${
+          showProblemStagePanel ? "top-[clamp(461px,42.685vh,615px)]" : "top-[var(--canvas-right-ai-status-top)]"
+        }`}
+      >
         {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중"}
       </p>
 
       {quickAskOpen && recentMessages.length > 0 ? (
-        <div ref={quickAskScrollRef} className="imms-overlay-scroll absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[clamp(384px,35.556vh,512px)] z-10 max-h-[clamp(150px,13.889vh,200px)] space-y-2 overflow-y-auto text-left">
+        <div
+          ref={quickAskScrollRef}
+          className={`imms-overlay-scroll absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 max-h-[clamp(150px,13.889vh,200px)] space-y-2 overflow-y-auto text-left ${
+            showProblemStagePanel ? "top-[clamp(492px,45.556vh,656px)]" : "top-[clamp(384px,35.556vh,512px)]"
+          }`}
+        >
           {recentMessages.map((message) => (
             <div key={message.id} className={`rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
               {message.text}
@@ -812,6 +868,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
       <RightAiPanel
         header={header}
         participants={participants}
+        problem={surfaceProblem}
+        problemHandlers={surfaceProblemHandlers}
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
       />

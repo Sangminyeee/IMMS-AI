@@ -7,21 +7,25 @@ import {
 } from "@/components/canvas/CanvasGraphTypes";
 import {
   buildProblemStructureNodesFromGroups,
-  problemStructureMethodLabel,
-  type ProblemDefinitionMode,
-  type ProblemDefinitionPhase,
   type ProblemStructureDragState,
   type ProblemStructureGroupViewModel,
-  type ProblemStructureMethod,
   type ProblemStructureNodeViewModel,
   type ProblemStructureSourceGroup,
-  type ProblemStructureStatus,
 } from "@/components/canvas/problemStructureModel";
-import type { CanvasEditPresencePayload, CanvasNodePositionsByStage } from "@/lib/types";
+import type { CanvasEditPresencePayload } from "@/lib/types";
 
 type RemoteEditPresence = CanvasEditPresencePayload | null | undefined;
+type IconProps = {
+  className?: string;
+};
 
 const UNGROUPED_STRUCTURE_COLUMN_ID = "__ungrouped__";
+const PROBLEM_STRUCTURE_COLUMN_WIDTH = 272;
+const PROBLEM_STRUCTURE_COLUMN_GAP = 34;
+const PROBLEM_STRUCTURE_BASE_X = 40;
+const PROBLEM_STRUCTURE_BASE_Y = 178;
+const PROBLEM_STRUCTURE_HEADER_OFFSET = 140;
+const PROBLEM_STRUCTURE_CARD_PERIOD = 130;
 
 function makeProblemStructureEditPresenceKey(
   targetType: CanvasEditPresencePayload["target_type"],
@@ -31,24 +35,91 @@ function makeProblemStructureEditPresenceKey(
   return `${targetType}:${targetId}:${noteId}`;
 }
 
-function renderProblemStructureEditPresenceBadge(label = "수정중") {
+function MoreHorizontalIcon({ className = "" }: IconProps) {
   return (
-    <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-      {label}
-    </span>
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <circle cx="4" cy="9" r="1.4" fill="currentColor" />
+      <circle cx="9" cy="9" r="1.4" fill="currentColor" />
+      <circle cx="14" cy="9" r="1.4" fill="currentColor" />
+    </svg>
   );
 }
 
-function problemStructureStatusLabel(status: ProblemStructureStatus) {
-  if (status === "review") return "검토중";
-  if (status === "final") return "확정";
-  return "초안";
+function PlusIcon({ className = "" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <path d="M9 4v10M4 9h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-function problemStructureStatusTone(status: ProblemStructureStatus) {
-  if (status === "review") return "bg-[#eef8ff] text-[#236cf3]";
-  if (status === "final") return "bg-emerald-100 text-emerald-700";
-  return "bg-slate-100 text-slate-600";
+function PencilIcon({ className = "" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <path
+        d="M4 12.9 4.7 10l6.8-6.8a1.5 1.5 0 0 1 2.1 0l1.2 1.2a1.5 1.5 0 0 1 0 2.1L8 13.3l-2.9.7a.9.9 0 0 1-1.1-1.1Z"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path d="m10.5 4.2 3.3 3.3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TrashIcon({ className = "" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <path d="M4.5 6h9M7.2 6V4.8h3.6V6M6 7.6l.5 5.8h5l.5-5.8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className = "" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <path d="m4.5 9.2 2.8 2.8 6.2-6.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function XIcon({ className = "" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 18 18" fill="none">
+      <path d="m5 5 8 8M13 5l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function problemStructureColumnLabel(isUngrouped: boolean, index: number) {
+  return isUngrouped ? "미분류" : `분류${index}`;
+}
+
+function problemStructureColumnHeight(cardCount: number) {
+  return PROBLEM_STRUCTURE_HEADER_OFFSET + Math.max(1, cardCount) * PROBLEM_STRUCTURE_CARD_PERIOD;
+}
+
+function problemStructureCardsCountLabel(count: number) {
+  return `${count} cards`;
+}
+
+function problemStructureDepthLabel(depth: number) {
+  return `${Math.max(2, depth + 2)}차`;
+}
+
+function problemStructureDepthTone(depth: number) {
+  const depthIndex = Math.max(2, depth + 2);
+  if (depthIndex === 2) return "bg-[rgba(1,163,255,0.8)]";
+  if (depthIndex === 3) return "bg-[#005cdc]";
+  return "bg-[#04044a]";
+}
+
+function renderProblemStructureEditPresenceBadge(label = "수정중") {
+  return (
+    <span className="inline-flex items-center rounded-full border border-[#f1d7a7] bg-[#fff8e8] px-2 py-0.5 text-[10px] font-semibold text-[#9a5d00]">
+      {label}
+    </span>
+  );
 }
 
 type ProblemStructureColumnViewModel = ProblemStructureGroupViewModel & {
@@ -59,13 +130,11 @@ export function buildProblemStructureCanvasBlueprint(input: {
   editingProblemStructureGroupId: string;
   editingProblemStructureNodeId: string;
   fallbackProblemGroups: ProblemStructureSourceGroup[];
-  nodePositions: CanvasNodePositionsByStage;
   onCancelProblemStructureGroupEdit: () => void;
   onCancelProblemStructureNodeEdit: () => void;
   onDeleteProblemStructureGroup: (groupId: string) => void;
   onProblemStructureGroupDragOver: (event: React.DragEvent<HTMLElement>, groupId: string) => void;
   onProblemStructureGroupDrop: (event: React.DragEvent<HTMLElement>, groupId: string) => void;
-  onProblemStructureGroupDraftRationaleChange: (value: string) => void;
   onProblemStructureGroupDraftTitleChange: (value: string) => void;
   onProblemStructureNodeDragEnd: () => void;
   onProblemStructureNodeDragOver: (event: React.DragEvent<HTMLElement>, targetNodeId: string) => void;
@@ -77,14 +146,9 @@ export function buildProblemStructureCanvasBlueprint(input: {
   onSaveProblemStructureNodeEdit: (nodeId: string) => void;
   onStartProblemStructureGroupEdit: (group: ProblemStructureGroupViewModel) => void;
   onStartProblemStructureNodeEdit: (node: ProblemStructureNodeViewModel) => void;
-  onUpdateProblemStructureGroupStatus: (groupId: string, status: ProblemStructureStatus) => void;
-  problemDefinitionMode: ProblemDefinitionMode;
-  problemDefinitionPhase: ProblemDefinitionPhase;
   problemStructureDrag: ProblemStructureDragState | null;
-  problemStructureGroupDraftRationale: string;
   problemStructureGroupDraftTitle: string;
   problemStructureGroups: ProblemStructureGroupViewModel[];
-  problemStructureMethod: ProblemStructureMethod;
   problemStructureNodeDraftTitle: string;
   problemStructureNodes: ProblemStructureNodeViewModel[];
   remoteEditPresenceByKey: Record<string, RemoteEditPresence>;
@@ -94,13 +158,11 @@ export function buildProblemStructureCanvasBlueprint(input: {
     editingProblemStructureGroupId,
     editingProblemStructureNodeId,
     fallbackProblemGroups,
-    nodePositions,
     onCancelProblemStructureGroupEdit,
     onCancelProblemStructureNodeEdit,
     onDeleteProblemStructureGroup,
     onProblemStructureGroupDragOver,
     onProblemStructureGroupDrop,
-    onProblemStructureGroupDraftRationaleChange,
     onProblemStructureGroupDraftTitleChange,
     onProblemStructureNodeDragEnd,
     onProblemStructureNodeDragOver,
@@ -112,14 +174,9 @@ export function buildProblemStructureCanvasBlueprint(input: {
     onSaveProblemStructureNodeEdit,
     onStartProblemStructureGroupEdit,
     onStartProblemStructureNodeEdit,
-    onUpdateProblemStructureGroupStatus,
-    problemDefinitionMode,
-    problemDefinitionPhase,
     problemStructureDrag,
-    problemStructureGroupDraftRationale,
     problemStructureGroupDraftTitle,
     problemStructureGroups,
-    problemStructureMethod,
     problemStructureNodeDraftTitle,
     problemStructureNodes,
     remoteEditPresenceByKey,
@@ -134,25 +191,25 @@ export function buildProblemStructureCanvasBlueprint(input: {
   );
   const ungroupedNodes = structureNodes.filter((node) => !assignedNodeIds.has(node.id));
   const columns: ProblemStructureColumnViewModel[] = [
-    {
-      id: UNGROUPED_STRUCTURE_COLUMN_ID,
-      title: "아직 묶지 않은 노드",
-      rationale: "정의 1단계에서 가져온 모든 노드가 먼저 여기에 놓입니다.",
-      nodeIds: ungroupedNodes.map((node) => node.id),
-      status: "draft",
-      createdBy: "user",
-      fixed: true,
-    },
+    ...(ungroupedNodes.length > 0
+      ? [
+          {
+            id: UNGROUPED_STRUCTURE_COLUMN_ID,
+            title: "미분류",
+            rationale: "",
+            nodeIds: ungroupedNodes.map((node) => node.id),
+            status: "draft" as const,
+            createdBy: "user" as const,
+            fixed: true,
+          },
+        ]
+      : []),
     ...problemStructureGroups.map((group) => ({
       ...group,
       fixed: false,
     })),
   ];
-  const isCardSorting = problemStructureMethod === "card-sorting";
-  const columnWidth = isCardSorting ? 344 : 376;
-  const columnGap = isCardSorting ? 28 : 44;
-  const baseX = 44;
-  const baseY = isCardSorting ? 48 : 64;
+
   const nodeDescriptors: CanvasNodeDescriptor[] = columns.map((column, index) => {
     const isUngrouped = column.id === UNGROUPED_STRUCTURE_COLUMN_ID;
     const columnNodes = column.nodeIds
@@ -166,40 +223,34 @@ export function buildProblemStructureCanvasBlueprint(input: {
     const remoteGroupEditPresence = !isUngrouped
       ? remoteEditPresenceByKey[makeProblemStructureEditPresenceKey("problem_structure_group", column.id)] || null
       : null;
-    const savedPosition = !isCardSorting ? nodePositions["problem-definition"]?.[nodeId] : undefined;
-    const nodeHeight = Math.max(260, 184 + Math.max(1, columnNodes.length) * 92);
-    const position = savedPosition || {
-      x: baseX + index * (columnWidth + columnGap),
-      y: baseY + (!isCardSorting && index % 2 === 1 ? 34 : 0),
-    };
-    const rationaleLabel = isCardSorting ? "그룹 설명 / 이유 카드" : "묶은 이유";
+    const groupDisplayIndex = columns.slice(0, index).filter((item) => item.id !== UNGROUPED_STRUCTURE_COLUMN_ID).length + 1;
+    const columnHeight = problemStructureColumnHeight(columnNodes.length);
 
     return {
       id: nodeId,
-      position,
-      positionSource: savedPosition ? "persisted" : "computed",
+      position: {
+        x: PROBLEM_STRUCTURE_BASE_X + index * (PROBLEM_STRUCTURE_COLUMN_WIDTH + PROBLEM_STRUCTURE_COLUMN_GAP),
+        y: PROBLEM_STRUCTURE_BASE_Y,
+      },
+      positionSource: "computed",
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
       className: "!border-0 !bg-transparent !p-0 !shadow-none",
-      style: { width: columnWidth, minHeight: nodeHeight, padding: 0 },
-      draggable: !isCardSorting,
+      style: { width: PROBLEM_STRUCTURE_COLUMN_WIDTH, height: columnHeight, padding: 0 },
+      draggable: false,
       data: {
         contentSignature: buildNodeContentSignature([
-          "problem-structure",
-          problemStructureMethod,
-          problemDefinitionMode,
+          "problem-structure-board",
           column.id,
           column.title,
-          column.rationale,
-          column.status || "",
           isGroupEditing,
           isGroupEditing ? problemStructureGroupDraftTitle : "",
-          isGroupEditing ? problemStructureGroupDraftRationale : "",
           remoteGroupEditPresence?.updated_at || "",
           columnNodes.length,
           ...columnNodes.flatMap((node) => [
             node.id,
             node.title,
+            node.body,
             node.status,
             node.depth,
             editingProblemStructureNodeId === node.id,
@@ -214,149 +265,106 @@ export function buildProblemStructureCanvasBlueprint(input: {
           problemStructureDrag?.overNodeId,
         ]),
         label: (
-          <div
-            className={`nopan box-border min-w-0 rounded-[14px] border bg-white p-4 text-left font-['Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_0_rgba(0,0,0,0.04)] ${
-              isUngrouped
-                ? "border-dashed border-black/20"
-                : isCardSorting
-                  ? "border-[#01a3ff]/20"
-                  : "border-black/10"
-            } ${isColumnDropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""}`}
+          <section
+            className={`nopan group/column box-border flex h-full w-full flex-col rounded-[8.442px] border-[0.8px] border-[#cecccc] bg-white px-3 py-[13px] text-left font-['Pretendard','Inter',sans-serif] text-[#111] ${
+              isColumnDropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""
+            }`}
             onDragOver={(event) => onProblemStructureGroupDragOver(event, columnDropGroupId)}
             onDrop={(event) => onProblemStructureGroupDrop(event, columnDropGroupId)}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <span className="inline-flex items-center rounded-[8px] bg-[#eef8ff] px-2.5 py-1 text-[11px] font-semibold text-[#236cf3]">
-                  {isUngrouped ? "Pool" : problemStructureMethodLabel(problemStructureMethod)}
+                <span className="inline-flex h-[22px] w-[40px] items-center justify-center rounded-full bg-[rgba(161,161,161,0.2)] px-[6px] text-[10px] font-normal leading-[14px] text-[#414141]">
+                  {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
                 </span>
-                {isUngrouped ? (
-                  <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
-                    {column.title}
-                  </strong>
-                ) : isGroupEditing ? (
+                {isGroupEditing ? (
                   <input
                     value={problemStructureGroupDraftTitle}
                     onChange={(event) => onProblemStructureGroupDraftTitleChange(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
-                    className="nodrag nopan mt-3 block w-full rounded-[8px] border border-[#01a3ff]/30 bg-white px-3 py-2 text-[17px] font-semibold leading-6 text-black outline-none transition focus:border-[#01a3ff]/60"
+                    aria-label="구조화 그룹 제목"
+                    className="nodrag nopan mt-[14px] block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
                   />
                 ) : (
-                  <strong className="mt-3 block text-[17px] font-semibold leading-6 text-black">
-                    {column.title || "구조화 그룹"}
+                  <strong className="mt-[14px] block truncate text-[14.286px] font-bold leading-[16px] text-[#111]">
+                    {column.title || (isUngrouped ? "미분류" : "구조화 그룹")}
                   </strong>
                 )}
+                <p className="mt-[5px] text-[11.688px] font-normal leading-[16px] text-[#423a3d]">
+                  {problemStructureCardsCountLabel(columnNodes.length)}
+                </p>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <span className="rounded-[8px] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                  {columnNodes.length}개
-                </span>
-                {!isUngrouped ? (
-                  isGroupEditing ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={onCancelProblemStructureGroupEdit}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
-                      >
-                        취소
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onSaveProblemStructureGroupEdit(column.id)}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className="nodrag nopan rounded-[8px] bg-[#01a3ff] px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-[#236cf3]"
-                      >
-                        저장
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => onStartProblemStructureGroupEdit(column)}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3]"
-                      >
-                        수정
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteProblemStructureGroup(column.id)}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className="nodrag nopan rounded-[8px] border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-50"
-                      >
-                        삭제
-                      </button>
-                    </>
-                  )
-                ) : null}
-              </div>
-            </div>
-            {remoteGroupEditPresence ? (
-              <div className="mt-3 flex items-center gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900">
-                {renderProblemStructureEditPresenceBadge()}
-                <span>다른 참가자가 이 구조화 그룹을 수정 중입니다.</span>
-              </div>
-            ) : null}
-            {!isUngrouped ? (
-              <label className="mt-3 block">
-                <span className="mb-1 block text-[11px] font-semibold text-[#777]">그룹 상태</span>
-                <select
-                  value={column.status || "draft"}
-                  onChange={(event) =>
-                    onUpdateProblemStructureGroupStatus(column.id, event.target.value as ProblemStructureStatus)
-                  }
-                  onPointerDown={(event) => event.stopPropagation()}
-                  className={`nodrag nopan w-full rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2 py-1.5 text-xs font-semibold outline-none transition focus:border-[#01a3ff]/40 ${problemStructureStatusTone(column.status || "draft")}`}
-                >
-                  {(["draft", "review", "final"] as ProblemStructureStatus[]).map((status) => (
-                    <option key={`${column.id}-status-${status}`} value={status}>
-                      {problemStructureStatusLabel(status)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-
-            {isUngrouped ? (
-              <p className="mt-3 rounded-[10px] bg-[#f5f6f8] px-3 py-2 text-xs leading-5 text-[#4d4d4d]">
-                그룹을 만든 뒤 노드를 드래그해 넣거나, 노드끼리 겹쳐 새 그룹을 만들 수 있습니다.
-              </p>
-            ) : (
-              <div
-                className={`mt-3 rounded-[10px] ${
-                  isCardSorting ? "border border-[#01a3ff]/12 bg-[#eef8ff]" : "bg-[#f5f6f8]"
-                } p-3`}
-              >
-                <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#236cf3]">
-                  {rationaleLabel}
-                </label>
+              <div className="relative shrink-0">
                 {isGroupEditing ? (
-                  <textarea
-                    value={problemStructureGroupDraftRationale}
-                    onChange={(event) => onProblemStructureGroupDraftRationaleChange(event.target.value)}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    placeholder={
-                      column.createdBy === "ai"
-                        ? "AI가 왜 묶었는지 나중에 여기에 표시합니다."
-                        : "이 그룹으로 묶은 이유를 적어둘 수 있습니다."
-                    }
-                    className="nodrag nopan mt-2 min-h-[68px] w-full resize-none rounded-[8px] border border-[#01a3ff]/30 bg-white px-3 py-2 text-xs leading-5 text-[#333] outline-none transition focus:border-[#01a3ff]/60"
-                  />
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={onCancelProblemStructureGroupEdit}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      aria-label="구조화 그룹 수정 취소"
+                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#cecccc] bg-white text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
+                    >
+                      <XIcon className="h-[15px] w-[15px]" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onSaveProblemStructureGroupEdit(column.id)}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      aria-label="구조화 그룹 저장"
+                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full bg-[#01a3ff] text-white transition hover:bg-[#005cdc]"
+                    >
+                      <CheckIcon className="h-[15px] w-[15px]" />
+                    </button>
+                  </div>
                 ) : (
-                  <p className="mt-2 min-h-[44px] rounded-[8px] border border-transparent bg-white/70 px-3 py-2 text-xs leading-5 text-[#333]">
-                    {column.rationale ||
-                      (column.createdBy === "ai"
-                        ? "AI가 왜 묶었는지 나중에 여기에 표시합니다."
-                        : "수정을 눌러 이 그룹으로 묶은 이유를 적어둘 수 있습니다.")}
-                  </p>
+                  <>
+                    <button
+                      type="button"
+                      aria-label="구조화 그룹 메뉴"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
+                    >
+                      <MoreHorizontalIcon className="h-[18px] w-[18px]" />
+                    </button>
+                    {!isUngrouped ? (
+                      <div className="absolute right-0 top-7 z-10 hidden items-center gap-1 rounded-full border border-[#cecccc] bg-white px-1.5 py-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] group-hover/column:flex">
+                        <button
+                          type="button"
+                          onClick={() => onStartProblemStructureGroupEdit(column)}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          aria-label="구조화 그룹 수정"
+                          className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7] hover:text-[#01a3ff]"
+                        >
+                          <PencilIcon className="h-[15px] w-[15px]" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteProblemStructureGroup(column.id)}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          aria-label="구조화 그룹 삭제"
+                          className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#fff1f2] hover:text-[#e11d48]"
+                        >
+                          <TrashIcon className="h-[15px] w-[15px]" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
-            )}
+            </div>
 
-            <div className="mt-3 space-y-2">
+            {remoteGroupEditPresence ? (
+              <div className="mt-3 flex items-center gap-2 rounded-[6px] border border-[#f1d7a7] bg-[#fff8e8] px-2 py-1.5 text-[11px] font-medium leading-4 text-[#7a4a00]">
+                {renderProblemStructureEditPresenceBadge()}
+                <span>다른 참가자가 수정 중입니다.</span>
+              </div>
+            ) : null}
+
+            <div className="mt-[18px] flex h-[27.273px] w-full items-center justify-center rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-white text-[#4d4d4d]">
+              <PlusIcon className="h-[11.429px] w-[11.169px]" />
+            </div>
+
+            <div className="mt-[9px] flex-1 space-y-[14px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {columnNodes.length > 0 ? (
                 columnNodes.map((node) => {
                   const isDraggingNode = problemStructureDrag?.nodeId === node.id;
@@ -369,93 +377,114 @@ export function buildProblemStructureCanvasBlueprint(input: {
                     remoteEditPresenceByKey[makeProblemStructureEditPresenceKey("problem_structure_node", node.id)] ||
                     null;
                   return (
-                    <div
+                    <article
                       key={`${column.id}-${node.id}`}
                       draggable={!isNodeEditing}
                       onDragStart={(event) => onProblemStructureNodeDragStart(event, node.id)}
                       onDragEnd={onProblemStructureNodeDragEnd}
                       onDragOver={(event) => onProblemStructureNodeDragOver(event, node.id)}
                       onDrop={(event) => onProblemStructureNodeDrop(event, node.id)}
-                      className={`nodrag nopan rounded-[10px] border bg-white px-3 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition ${
+                      className={`nodrag nopan relative h-[116.234px] rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-[#f7f7f7] px-[10px] pb-[31px] pt-[28px] text-[#111] transition ${
                         isNodeEditing ? "cursor-default" : "cursor-grab active:cursor-grabbing"
                       } ${
                         isNodeDropTarget
-                          ? "border-[#01a3ff] ring-2 ring-[#01a3ff]/20"
-                          : "border-black/10 hover:border-[#01a3ff]/25"
-                      } ${isDraggingNode ? "opacity-55" : ""}`}
+                          ? "ring-2 ring-[#01a3ff]/35 ring-offset-1"
+                          : "hover:border-[#01a3ff]/35"
+                      } ${isDraggingNode ? "opacity-60" : ""}`}
                     >
-                      <div className="flex items-start gap-2">
-                        {isNodeEditing ? (
-                          <textarea
-                            value={problemStructureNodeDraftTitle}
-                            onChange={(event) => onProblemStructureNodeDraftTitleChange(event.target.value)}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            aria-label="구조화 노드 제목"
-                            rows={2}
-                            className="nodrag nopan block min-h-[44px] flex-1 resize-none rounded-[8px] border border-[#01a3ff]/30 bg-white px-2 py-1.5 text-sm font-semibold leading-5 text-black outline-none transition focus:border-[#01a3ff]/60"
-                          />
-                        ) : (
-                          <strong className="block min-h-[44px] flex-1 px-1 py-1 text-sm font-semibold leading-5 text-black">
-                            {node.title || "구조화 노드"}
-                          </strong>
-                        )}
-                        {isNodeEditing ? (
-                          <div className="flex shrink-0 flex-col gap-1">
-                            <button
-                              type="button"
-                              onClick={onCancelProblemStructureNodeEdit}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#777] transition hover:bg-[#f5f6f8]"
-                            >
-                              취소
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onSaveProblemStructureNodeEdit(node.id)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] bg-[#01a3ff] px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-[#236cf3]"
-                            >
-                              저장
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex shrink-0 items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => onStartProblemStructureNodeEdit(node)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              className="nodrag nopan rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#4d4d4d] transition hover:border-[#01a3ff]/30 hover:bg-[#eef8ff] hover:text-[#236cf3]"
-                            >
-                              수정
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onRemoveProblemStructureNode(node.id)}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              aria-label="구조화 노드 제외"
-                              className="nodrag nopan flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-rose-200 bg-white text-[16px] font-semibold leading-none text-rose-600 transition hover:bg-rose-50"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <span
+                        className={`absolute left-[10px] top-[10px] inline-flex h-[14px] min-w-[32px] items-center justify-center rounded-full border-[0.8px] border-white px-[6px] text-[7px] font-bold leading-[10px] text-white ${problemStructureDepthTone(
+                          node.depth,
+                        )}`}
+                      >
+                        {problemStructureDepthLabel(node.depth)}
+                      </span>
+
+                      {isNodeEditing ? (
+                        <textarea
+                          value={problemStructureNodeDraftTitle}
+                          onChange={(event) => onProblemStructureNodeDraftTitleChange(event.target.value)}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          aria-label="구조화 노드 제목"
+                          rows={2}
+                          className="nodrag nopan block h-[39px] w-full resize-none rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 py-1 text-[11.688px] font-bold leading-[16px] text-[#111] outline-none"
+                        />
+                      ) : (
+                        <strong className="block truncate text-[11.688px] font-bold leading-[16px] text-[#111]">
+                          {node.title || "구조화 노드"}
+                        </strong>
+                      )}
+
+                      {node.body ? (
+                        <p className="mt-[5px] line-clamp-2 w-[206px] text-[8.442px] font-normal leading-[12px] text-[#4d4d4d]">
+                          {node.body}
+                        </p>
+                      ) : null}
+
                       {remoteNodeEditPresence ? (
-                        <div className="mt-2 flex items-center gap-2 rounded-[8px] border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold leading-4 text-amber-900">
+                        <div className="absolute inset-x-[10px] bottom-[30px] flex items-center gap-1.5 rounded-[5px] border border-[#f1d7a7] bg-[#fff8e8] px-2 py-1 text-[10px] font-medium leading-none text-[#7a4a00]">
                           {renderProblemStructureEditPresenceBadge()}
-                          <span>다른 참가자가 이 노드를 수정 중입니다.</span>
+                          <span>수정 중</span>
                         </div>
                       ) : null}
-                    </div>
+
+                      <div className="absolute bottom-[8px] left-[10px] flex h-[18px] w-[18px] items-center justify-center rounded-full text-[#4d4d4d]">
+                        <PlusIcon className="h-[15px] w-[15px]" />
+                      </div>
+
+                      {isNodeEditing ? (
+                        <div className="absolute bottom-[7px] right-[8px] flex items-center gap-[7px]">
+                          <button
+                            type="button"
+                            onClick={onCancelProblemStructureNodeEdit}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            aria-label="구조화 노드 수정 취소"
+                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-white"
+                          >
+                            <XIcon className="h-[15px] w-[15px]" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onSaveProblemStructureNodeEdit(node.id)}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            aria-label="구조화 노드 저장"
+                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full bg-[#01a3ff] text-white transition hover:bg-[#005cdc]"
+                          >
+                            <CheckIcon className="h-[14px] w-[14px]" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="absolute bottom-[7px] right-[8px] flex items-center gap-[7px] text-[#4d4d4d]">
+                          <button
+                            type="button"
+                            onClick={() => onStartProblemStructureNodeEdit(node)}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            aria-label="구조화 노드 수정"
+                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#01a3ff]"
+                          >
+                            <PencilIcon className="h-[15px] w-[15px]" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveProblemStructureNode(node.id)}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            aria-label="구조화 노드 제외"
+                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#e11d48]"
+                          >
+                            <TrashIcon className="h-[15px] w-[15px]" />
+                          </button>
+                        </div>
+                      )}
+                    </article>
                   );
                 })
               ) : (
-                <p className="rounded-[10px] border border-dashed border-black/10 bg-[#f9f9f9] px-3 py-4 text-center text-xs leading-5 text-[#777]">
-                  {isUngrouped ? "모든 노드가 그룹에 들어갔습니다." : "아직 이 그룹에 들어온 노드가 없습니다."}
+                <p className="rounded-[5px] border border-dashed border-[#cecccc] bg-[#f7f7f7] px-3 py-5 text-center text-[11px] font-medium leading-[16px] text-[#777]">
+                  {isUngrouped ? "미분류 노드가 없습니다." : "아직 이 분류에 들어온 노드가 없습니다."}
                 </p>
               )}
             </div>
-          </div>
+          </section>
         ),
       },
     };
@@ -464,14 +493,11 @@ export function buildProblemStructureCanvasBlueprint(input: {
   return {
     layoutSignature: buildNodeContentSignature([
       stage,
-      problemDefinitionPhase,
-      problemStructureMethod,
-      problemDefinitionMode,
-      ...structureNodes.flatMap((node) => [node.id, node.title, node.status, node.depth]),
+      "problem-structure-board",
+      ...structureNodes.flatMap((node) => [node.id, node.title, node.body, node.status, node.depth]),
       ...problemStructureGroups.flatMap((group) => [
         group.id,
         group.title,
-        group.rationale,
         group.status,
         group.createdBy,
         ...group.nodeIds,

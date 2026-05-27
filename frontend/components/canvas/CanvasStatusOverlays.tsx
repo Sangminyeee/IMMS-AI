@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 
 type CanvasStageEmptyOverlayProps = {
   eyebrow: string;
@@ -88,8 +88,23 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
 });
 
 export const CanvasStatusToast = memo(function CanvasStatusToast({ message }: { message: string }) {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setVisible(false);
+    }, 1000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [message]);
+
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[clamp(84px,12vh,112px)] z-10 flex justify-center px-4">
+    <div
+      className={`pointer-events-none absolute inset-x-0 bottom-[clamp(84px,12vh,112px)] z-10 flex justify-center px-4 transition-opacity duration-700 ease-out ${
+        visible ? "opacity-100" : "opacity-0"
+      }`}
+      aria-live="polite"
+    >
       <div className="max-w-[min(640px,calc(100%-32px))] rounded-full border border-black/10 bg-white/95 px-4 py-2 text-center text-xs leading-5 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] backdrop-blur-sm">
         {message}
       </div>

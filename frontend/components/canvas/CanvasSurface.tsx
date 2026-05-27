@@ -20,7 +20,6 @@ import {
 } from "@/components/canvas/CanvasStatusOverlays";
 import {
   ProblemCanvasToolbar,
-  ProblemStructureFloatingToolbar,
   ProblemStructureSetupModal,
   type ProblemCanvasToolbarActionId,
 } from "@/components/canvas/ProblemStructureControls";
@@ -280,8 +279,6 @@ export const CanvasSurface = memo(function CanvasSurface({
     problemStructureDraftMode,
     problemStructurePending,
     problemDefinitionPhase,
-    problemStructureMethod,
-    problemDefinitionMode,
     activeProblemGroupingRationale,
     activeProblemGroupingRationaleTitle,
     problemCanvasToolbarActions,
@@ -309,8 +306,6 @@ export const CanvasSurface = memo(function CanvasSurface({
     onProblemStructureDraftMethodChange,
     onProblemStructureDraftModeChange,
     onStartProblemStructure,
-    onProblemStructureMethodChange,
-    onProblemDefinitionModeChange,
     onCloseProblemGroupingRationale,
     getProblemToolbarActionLabel,
     isProblemToolbarActionActive,
@@ -359,14 +354,14 @@ export const CanvasSurface = memo(function CanvasSurface({
             {stage === "problem-definition" ? (
               <Background
                 id="problem-definition-grid"
-                bgColor="#f5f6f8"
-                color="#d7dce5"
+                bgColor={problemDefinitionPhase === "structure" ? "#f8f8f8" : "#f5f6f8"}
+                color={problemDefinitionPhase === "structure" ? "#edf1f6" : "#d7dce5"}
                 gap={28}
                 size={1}
-                variant={BackgroundVariant.Dots}
+                variant={problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
               />
             ) : null}
-            {stage === "problem-definition" ? (
+            {stage === "problem-definition" && problemDefinitionPhase !== "structure" ? (
               <MiniMap
                 zoomable
                 pannable
@@ -435,16 +430,6 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase === "structure" && !problemDefinitionStagePending ? (
-        <ProblemStructureFloatingToolbar
-          method={problemStructureMethod}
-          mode={problemDefinitionMode}
-          pending={problemStructurePending}
-          onMethodChange={onProblemStructureMethodChange}
-          onModeChange={onProblemDefinitionModeChange}
-        />
-      ) : null}
-
       {stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale ? (
         <ProblemGroupingRationaleOverlay
           title={activeProblemGroupingRationaleTitle}
@@ -455,9 +440,9 @@ export const CanvasSurface = memo(function CanvasSurface({
 
       {summaryDocumentPending ? <SummaryDocumentPendingOverlay /> : null}
 
-      {canvasStatusMessage ? <CanvasStatusToast message={canvasStatusMessage} /> : null}
+      {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}
 
-      {stage === "problem-definition" ? (
+      {stage === "problem-definition" && problemDefinitionPhase !== "structure" ? (
         <ProblemCanvasToolbar
           actions={problemCanvasToolbarActions}
           getActionLabel={getProblemToolbarActionLabel}
@@ -467,7 +452,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             (item === "structure-start" && problemGroupsCount === 0) ||
             (item === "structure-ai-group" &&
               (problemStructurePending || (problemStructureNodesCount === 0 && problemGroupsCount === 0))) ||
-            (item === "structure-add-group" && problemDefinitionPhase !== "structure")
+            item === "structure-add-group"
           }
           onAction={onProblemToolbarAction}
         />
