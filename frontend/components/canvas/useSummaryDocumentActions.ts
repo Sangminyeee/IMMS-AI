@@ -7,9 +7,15 @@ import {
   type ProblemStructureGroupViewModel,
   type ProblemStructureNodeViewModel,
 } from "@/components/canvas/problemStructureModel";
+import {
+  areSummaryDocumentBlocksEqual,
+  summaryDocumentBlocksToMarkdown,
+} from "@/components/canvas/summaryDocumentHelpers";
 import { generateCanvasSummaryDocument, saveCanvasWorkspacePatch } from "@/lib/api";
 import type {
   CanvasFinalSolutionSummary,
+  CanvasEditPresencePayload,
+  CanvasSummaryDocumentBlock,
   CanvasSummaryDocumentSection,
   CanvasSummaryStructuredDocument,
   MeetingState,
@@ -25,6 +31,7 @@ type SharedWorkspaceSnapshot = {
 
 type BuildSummaryDocumentFromResponse = (input: {
   markdown: string;
+  documentBlocks?: CanvasSummaryDocumentBlock[];
   sections: CanvasSummaryDocumentSection[];
   generatedAt: string;
   usedLlm: boolean;
@@ -58,11 +65,14 @@ type UseSummaryDocumentActionsOptions = {
   setSelectedProblemGroupId: Dispatch<SetStateAction<string>>;
   setStage: Dispatch<SetStateAction<CanvasStage>>;
   setSummaryDocumentDraftDirty: Dispatch<SetStateAction<boolean>>;
+  setSummaryDocumentDraftBlocks: Dispatch<SetStateAction<CanvasSummaryDocumentBlock[]>>;
   setSummaryDocumentDraftMarkdown: Dispatch<SetStateAction<string>>;
   setSummaryDocumentEditMode: Dispatch<SetStateAction<boolean>>;
   setSummaryDocumentPending: Dispatch<SetStateAction<boolean>>;
   setSummaryEvidenceOpenGroupIds: Dispatch<SetStateAction<Set<string>>>;
+  setLocalEditPresenceTarget: (target: { targetType: CanvasEditPresencePayload["target_type"]; targetId: string; noteId?: string } | null) => void;
   sharedSyncEnabled: boolean;
+  summaryDocumentDraftBlocks: CanvasSummaryDocumentBlock[];
   summaryDocumentDraftDirty: boolean;
   summaryDocumentDraftMarkdown: string;
   summaryDocumentEditMode: boolean;
@@ -89,11 +99,14 @@ export function useSummaryDocumentActions({
   setSelectedProblemGroupId,
   setStage,
   setSummaryDocumentDraftDirty,
+  setSummaryDocumentDraftBlocks,
   setSummaryDocumentDraftMarkdown,
   setSummaryDocumentEditMode,
   setSummaryDocumentPending,
   setSummaryEvidenceOpenGroupIds,
+  setLocalEditPresenceTarget,
   sharedSyncEnabled,
+  summaryDocumentDraftBlocks,
   summaryDocumentDraftDirty,
   summaryDocumentDraftMarkdown,
   summaryDocumentEditMode,
@@ -104,8 +117,41 @@ export function useSummaryDocumentActions({
   useEffect(() => {
     if (!summaryDocumentEditMode && !summaryDocumentDraftDirty) {
       setSummaryDocumentDraftMarkdown(finalSummaryDocument.markdown);
+      setSummaryDocumentDraftBlocks(finalSummaryDocument.document_blocks || []);
     }
-  }, [finalSummaryDocument.markdown, setSummaryDocumentDraftMarkdown, summaryDocumentDraftDirty, summaryDocumentEditMode]);
+  }, [
+    finalSummaryDocument.document_blocks,
+    finalSummaryDocument.markdown,
+    setSummaryDocumentDraftBlocks,
+    setSummaryDocumentDraftMarkdown,
+    summaryDocumentDraftDirty,
+    summaryDocumentEditMode,
+  ]);
+
+  const handleSetSummaryDocumentEditMode = useCallback(
+    (editMode: boolean) => {
+      setSummaryDocumentEditMode(editMode);
+      setLocalEditPresenceTarget(editMode ? { targetType: "summary_document", targetId: "final" } : null);
+      if (editMode) {
+        setSummaryDocumentDraftBlocks(finalSummaryDocument.document_blocks || []);
+        setSummaryDocumentDraftMarkdown(finalSummaryDocument.markdown);
+        setSummaryDocumentDraftDirty(false);
+      } else {
+        setSummaryDocumentDraftBlocks(finalSummaryDocument.document_blocks || []);
+        setSummaryDocumentDraftMarkdown(finalSummaryDocument.markdown);
+        setSummaryDocumentDraftDirty(false);
+      }
+    },
+    [
+      finalSummaryDocument.document_blocks,
+      finalSummaryDocument.markdown,
+      setLocalEditPresenceTarget,
+      setSummaryDocumentDraftBlocks,
+      setSummaryDocumentDraftDirty,
+      setSummaryDocumentDraftMarkdown,
+      setSummaryDocumentEditMode,
+    ],
+  );
 
   const handleCopyFinalSolutionMarkdown = useCallback(async () => {
     const markdown = (summaryDocumentDraftDirty ? summaryDocumentDraftMarkdown : finalSummaryDocument.markdown).trim();
@@ -129,6 +175,25 @@ export function useSummaryDocumentActions({
       setSummaryDocumentDraftDirty(value !== finalSummaryDocument.markdown);
     },
     [finalSummaryDocument.markdown, setSummaryDocumentDraftDirty, setSummaryDocumentDraftMarkdown],
+  );
+
+  const handleSummaryDocumentBlocksChange = useCallback(
+    (blocks: CanvasSummaryDocumentBlock[]) => {
+      const nextMarkdown = summaryDocumentBlocksToMarkdown(blocks);
+      setSummaryDocumentDraftBlocks(blocks);
+      setSummaryDocumentDraftMarkdown(nextMarkdown);
+      setSummaryDocumentDraftDirty(
+        nextMarkdown !== finalSummaryDocument.markdown ||
+          !areSummaryDocumentBlocksEqual(blocks, finalSummaryDocument.document_blocks || []),
+      );
+    },
+    [
+      finalSummaryDocument.document_blocks,
+      finalSummaryDocument.markdown,
+      setSummaryDocumentDraftBlocks,
+      setSummaryDocumentDraftDirty,
+      setSummaryDocumentDraftMarkdown,
+    ],
   );
 
   const handleToggleSummaryEvidence = useCallback(
@@ -160,7 +225,8 @@ export function useSummaryDocumentActions({
       }
 
       const hasExistingSummaryDocument =
-        finalSummaryDocument.markdown.trim() && (finalSummaryDocument.sections || []).length > 0;
+        (finalSummaryDocument.markdown.trim() || (finalSummaryDocument.document_blocks || []).length > 0) &&
+        (finalSummaryDocument.sections || []).length > 0;
       if (!options?.force && hasExistingSummaryDocument) {
         setActivityMessage("기존 요약 문서를 유지했습니다. 다시 만들려면 요약 단계의 다시 생성 버튼을 사용해 주세요.");
         return;
@@ -191,6 +257,7 @@ export function useSummaryDocumentActions({
         });
         const nextFinalSummary = buildSummaryDocumentFromResponse({
           markdown: result.markdown || "",
+          documentBlocks: result.document_blocks || [],
           sections: result.sections || [],
           generatedAt: result.generated_at,
           usedLlm: result.used_llm,
@@ -202,8 +269,10 @@ export function useSummaryDocumentActions({
 
         setFinalSummaryDocument(nextFinalSummary);
         setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
+        setSummaryDocumentDraftBlocks(nextFinalSummary.document_blocks || []);
         setSummaryDocumentDraftDirty(false);
         setSummaryDocumentEditMode(false);
+        setLocalEditPresenceTarget(null);
         setSummaryEvidenceOpenGroupIds(new Set());
         latestSharedWorkspaceRef.current = {
           ...latestSharedWorkspaceRef.current,
@@ -239,6 +308,7 @@ export function useSummaryDocumentActions({
     [
       buildSummaryDocumentFromResponse,
       finalSummaryDocument.markdown,
+      finalSummaryDocument.document_blocks,
       finalSummaryDocument.sections,
       forceBroadcastSharedCanvas,
       latestSharedWorkspaceRef,
@@ -251,9 +321,11 @@ export function useSummaryDocumentActions({
       setBusy,
       setFinalSummaryDocument,
       setLeftPanelTab,
+      setLocalEditPresenceTarget,
       setSelectedNodeId,
       setSelectedProblemGroupId,
       setStage,
+      setSummaryDocumentDraftBlocks,
       setSummaryDocumentDraftDirty,
       setSummaryDocumentDraftMarkdown,
       setSummaryDocumentEditMode,
@@ -269,10 +341,12 @@ export function useSummaryDocumentActions({
       return;
     }
 
+    const nextMarkdown = summaryDocumentBlocksToMarkdown(summaryDocumentDraftBlocks) || summaryDocumentDraftMarkdown;
     const nextFinalSummary = normalizeFinalSolutionSummaryPayload({
       ...finalSummaryDocument,
-      markdown: summaryDocumentDraftMarkdown,
-      document_status: summaryDocumentDraftMarkdown.trim() ? "edited" : "empty",
+      markdown: nextMarkdown,
+      document_blocks: summaryDocumentDraftBlocks,
+      document_status: nextMarkdown.trim() || summaryDocumentDraftBlocks.length > 0 ? "edited" : "empty",
     });
 
     setSummaryDocumentSaving(true);
@@ -288,8 +362,10 @@ export function useSummaryDocumentActions({
 
       setFinalSummaryDocument(nextFinalSummary);
       setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
+      setSummaryDocumentDraftBlocks(nextFinalSummary.document_blocks || []);
       setSummaryDocumentDraftDirty(false);
       setSummaryDocumentEditMode(false);
+      setLocalEditPresenceTarget(null);
       latestSharedWorkspaceRef.current = {
         ...latestSharedWorkspaceRef.current,
         stage: "solution",
@@ -325,10 +401,13 @@ export function useSummaryDocumentActions({
     persistedSharedImportedState,
     setActivityMessage,
     setFinalSummaryDocument,
+    setLocalEditPresenceTarget,
+    setSummaryDocumentDraftBlocks,
     setSummaryDocumentDraftDirty,
     setSummaryDocumentDraftMarkdown,
     setSummaryDocumentEditMode,
     sharedSyncEnabled,
+    summaryDocumentDraftBlocks,
     summaryDocumentDraftMarkdown,
     summaryDocumentPending,
     summaryDocumentSaving,
@@ -347,6 +426,8 @@ export function useSummaryDocumentActions({
     handleGenerateSummaryDocument,
     handleRegenerateSummaryDocument,
     handleSaveSummaryDocument,
+    handleSetSummaryDocumentEditMode,
+    handleSummaryDocumentBlocksChange,
     handleSummaryDocumentMarkdownChange,
     handleToggleSummaryEvidence,
     summaryDocumentDraftDirty,

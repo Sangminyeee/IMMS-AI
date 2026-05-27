@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type {
   CanvasFinalSolutionSummary,
+  CanvasSummaryDocumentBlock,
   CanvasSummaryDocumentSection,
   CanvasSummaryStructuredDocument,
 } from "@/lib/types";
@@ -12,6 +13,7 @@ function createEmptyStructuredSummaryDocument(): CanvasSummaryStructuredDocument
     key_summary: "",
     idea_groups: [],
     discussion_flows: [],
+    flow_sections: [],
     pending_items: [],
     conclusion: {
       title: "",
@@ -27,6 +29,7 @@ export function createEmptyFinalSolutionSummary(): CanvasFinalSolutionSummary {
     topics: [],
     items: [],
     markdown: "",
+    document_blocks: [],
     document_status: "empty",
     generated_at: "",
     used_llm: false,
@@ -44,6 +47,287 @@ function normalizeStringList(value: unknown, limit: number) {
         .filter(Boolean)
         .slice(0, limit)
     : [];
+}
+
+function stableSummaryBlockId(prefix: string, seed: string) {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) | 0;
+  }
+  return `${prefix}-${Math.abs(hash).toString(36) || "0"}`;
+}
+
+export function createSummaryDocumentBlock(type: CanvasSummaryDocumentBlock["type"]): CanvasSummaryDocumentBlock {
+  const id = `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  if (type === "heading") return { id, type, text: "새 제목", level: 2 };
+  if (type === "paragraph") return { id, type, text: "새 문단을 입력하세요." };
+  if (type === "bullets") return { id, type, items: ["새 항목"] };
+  return {
+    id,
+    type,
+    title: "새 표",
+    columns: ["항목", "내용", "비고"],
+    rows: [["", "", ""]],
+  };
+}
+
+function normalizeSummaryDocumentBlock(raw: unknown, index: number): CanvasSummaryDocumentBlock | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as Record<string, unknown>;
+  const type = source.type;
+  const id = typeof source.id === "string" && source.id.trim()
+    ? source.id.trim()
+    : stableSummaryBlockId("block", JSON.stringify(source) || String(index));
+
+  if (type === "heading") {
+    const level = source.level === 1 || source.level === 2 || source.level === 3 ? source.level : 2;
+    const text = typeof source.text === "string" ? source.text.trim() : "";
+    return text ? { id, type, text, level } : null;
+  }
+
+  if (type === "paragraph") {
+    const text = typeof source.text === "string" ? source.text.trim() : "";
+    return text ? { id, type, text } : null;
+  }
+
+  if (type === "bullets") {
+    const items = normalizeStringList(source.items, 20);
+    return items.length > 0 ? { id, type, items } : null;
+  }
+
+  if (type === "table") {
+    const columns = normalizeStringList(source.columns, 8);
+    const safeColumns = columns.length > 0 ? columns : ["항목", "내용"];
+    const rawRows = Array.isArray(source.rows) ? source.rows : [];
+    const rows = rawRows
+      .filter(Array.isArray)
+      .map((row) =>
+        safeColumns.map((_, cellIndex) => {
+          const value = row[cellIndex];
+          return typeof value === "string" ? value.trim() : "";
+        }),
+      )
+      .filter((row) => row.some(Boolean))
+      .slice(0, 40);
+    return {
+      id,
+      type,
+      title: typeof source.title === "string" ? source.title.trim() : "",
+      columns: safeColumns,
+      rows: rows.length > 0 ? rows : [safeColumns.map(() => "")],
+    };
+  }
+
+  return null;
+}
+
+function parseMarkdownTable(lines: string[], startIndex: number): { block: CanvasSummaryDocumentBlock | null; nextIndex: number } {
+  const headerLine = lines[startIndex];
+  const dividerLine = lines[startIndex + 1] || "";
+  if (!headerLine.includes("|") || !/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(dividerLine)) {
+    return { block: null, nextIndex: startIndex };
+  }
+
+  const parseCells = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.replace(/\\\|/g, "|").trim());
+
+  const columns = parseCells(headerLine);
+  const rows: string[][] = [];
+  let nextIndex = startIndex + 2;
+  while (nextIndex < lines.length && lines[nextIndex].includes("|")) {
+    const row = parseCells(lines[nextIndex]);
+    rows.push(columns.map((_, cellIndex) => row[cellIndex] || ""));
+    nextIndex += 1;
+  }
+
+  return {
+    block: normalizeSummaryDocumentBlock(
+      {
+        id: stableSummaryBlockId("table", `${startIndex}:${headerLine}`),
+        type: "table",
+        columns,
+        rows,
+      },
+      startIndex,
+    ),
+    nextIndex,
+  };
+}
+
+function markdownToSummaryDocumentBlocks(markdown: string): CanvasSummaryDocumentBlock[] {
+  const lines = markdown.split(/\r?\n/);
+  const blocks: CanvasSummaryDocumentBlock[] = [];
+  let paragraphBuffer: string[] = [];
+  let bulletBuffer: string[] = [];
+
+  const flushParagraph = () => {
+    const text = paragraphBuffer.join(" ").replace(/\s+/g, " ").trim();
+    if (text) {
+      blocks.push({ id: stableSummaryBlockId("paragraph", `${blocks.length}:${text}`), type: "paragraph", text });
+    }
+    paragraphBuffer = [];
+  };
+
+  const flushBullets = () => {
+    const items = bulletBuffer.map((item) => item.trim()).filter(Boolean);
+    if (items.length > 0) {
+      blocks.push({ id: stableSummaryBlockId("bullets", `${blocks.length}:${items.join("|")}`), type: "bullets", items });
+    }
+    bulletBuffer = [];
+  };
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index].trim();
+    if (!line) {
+      flushParagraph();
+      flushBullets();
+      index += 1;
+      continue;
+    }
+
+    const tableResult = parseMarkdownTable(lines, index);
+    if (tableResult.block) {
+      flushParagraph();
+      flushBullets();
+      blocks.push(tableResult.block);
+      index = tableResult.nextIndex;
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushBullets();
+      blocks.push({
+        id: stableSummaryBlockId("heading", `${index}:${headingMatch[2]}`),
+        type: "heading",
+        text: headingMatch[2].trim(),
+        level: Math.min(3, headingMatch[1].length) as 1 | 2 | 3,
+      });
+      index += 1;
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+[.)]\s+(.+)$/);
+    if (bulletMatch) {
+      flushParagraph();
+      bulletBuffer.push(bulletMatch[1]);
+      index += 1;
+      continue;
+    }
+
+    flushBullets();
+    paragraphBuffer.push(line);
+    index += 1;
+  }
+
+  flushParagraph();
+  flushBullets();
+  return blocks.slice(0, 80);
+}
+
+function buildSummaryDocumentBlocksFromStructured(structured: CanvasSummaryStructuredDocument): CanvasSummaryDocumentBlock[] {
+  const blocks: CanvasSummaryDocumentBlock[] = [];
+  const title = structured.conclusion.title || "회의 핵심 결론";
+  const summary = structured.conclusion.summary || structured.key_summary || structured.meeting_overview;
+
+  if (title) {
+    blocks.push({ id: stableSummaryBlockId("heading", title), type: "heading", text: title, level: 1 });
+  }
+  if (summary) {
+    blocks.push({ id: stableSummaryBlockId("paragraph", summary), type: "paragraph", text: summary });
+  }
+
+  const conclusionRows = (structured.conclusion.groups || []).map((group) => [
+    group.title,
+    group.status_label || (group.status === "final" ? "확정" : group.status === "review" ? "검토 중" : "초안"),
+    group.bullets.join("\n"),
+  ]);
+  if (conclusionRows.length > 0) {
+    blocks.push({
+      id: "table-problem-solution",
+      type: "table",
+      title: "문제정의 & 해결 방향",
+      columns: ["정리 항목", "상태", "핵심 내용"],
+      rows: conclusionRows,
+    });
+  }
+
+  const actionRows = normalizeStringList(structured.pending_items, 20).map((item) => [item, "추가 확인 필요", ""]);
+  if (actionRows.length > 0) {
+    blocks.push({
+      id: "table-next-actions",
+      type: "table",
+      title: "앞으로 할 일",
+      columns: ["할 일", "담당", "비고"],
+      rows: actionRows,
+    });
+  }
+
+  return blocks;
+}
+
+export function normalizeSummaryDocumentBlocks(
+  rawBlocks: unknown,
+  structured: CanvasSummaryStructuredDocument,
+  markdown: string,
+): CanvasSummaryDocumentBlock[] {
+  const directBlocks = Array.isArray(rawBlocks)
+    ? rawBlocks
+        .map((block, index) => normalizeSummaryDocumentBlock(block, index))
+        .filter((block): block is CanvasSummaryDocumentBlock => Boolean(block))
+        .slice(0, 80)
+    : [];
+  if (directBlocks.length > 0) return directBlocks;
+
+  const structuredBlocks = buildSummaryDocumentBlocksFromStructured(structured);
+  if (structuredBlocks.length > 0) return structuredBlocks;
+
+  return markdownToSummaryDocumentBlocks(markdown);
+}
+
+function escapeMarkdownTableCell(value: string) {
+  return value.replace(/\r?\n/g, "<br>").replace(/\|/g, "\\|").trim() || " ";
+}
+
+export function summaryDocumentBlocksToMarkdown(blocks: CanvasSummaryDocumentBlock[]) {
+  const chunks: string[] = [];
+  blocks.forEach((block) => {
+    if (block.type === "heading") {
+      const level = Math.max(1, Math.min(3, block.level || 2));
+      chunks.push(`${"#".repeat(level)} ${block.text.trim() || "제목"}`);
+      return;
+    }
+    if (block.type === "paragraph") {
+      chunks.push(block.text.trim());
+      return;
+    }
+    if (block.type === "bullets") {
+      chunks.push(block.items.filter(Boolean).map((item) => `- ${item}`).join("\n"));
+      return;
+    }
+    if (block.type === "table") {
+      const title = block.title?.trim();
+      const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
+      const header = `| ${columns.map(escapeMarkdownTableCell).join(" | ")} |`;
+      const divider = `| ${columns.map(() => "---").join(" | ")} |`;
+      const rows = block.rows.map((row) => `| ${columns.map((_, index) => escapeMarkdownTableCell(row[index] || "")).join(" | ")} |`);
+      chunks.push([title ? `### ${title}` : "", header, divider, ...rows].filter(Boolean).join("\n"));
+    }
+  });
+  return chunks.filter((chunk) => chunk.trim()).join("\n\n").trim();
+}
+
+export function areSummaryDocumentBlocksEqual(
+  left: CanvasSummaryDocumentBlock[],
+  right: CanvasSummaryDocumentBlock[],
+) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function normalizeStructuredSummaryDocument(
@@ -85,6 +369,40 @@ function normalizeStructuredSummaryDocument(
           .filter((flow) => flow.title || flow.opinions.length > 0 || flow.conclusion)
           .slice(0, 24)
       : [],
+    flow_sections: Array.isArray(raw.flow_sections)
+      ? raw.flow_sections
+          .map((section) => ({
+            section_id: section.section_id || section.group_id || "",
+            group_id: section.group_id || "",
+            title: section.title || "논의 흐름",
+            time_range: section.time_range || "",
+            trigger: section.trigger || "",
+            narrative: section.narrative || "",
+            key_points: normalizeStringList(section.key_points, 8),
+            opinions: Array.isArray(section.opinions)
+              ? section.opinions
+                  .map((opinion) => ({
+                    label: opinion.label || "의견",
+                    text: opinion.text || "",
+                  }))
+                  .filter((opinion) => opinion.text)
+                  .slice(0, 4)
+              : [],
+            settlement: section.settlement || "",
+            open_questions: normalizeStringList(section.open_questions, 8),
+          }))
+          .filter(
+            (section) =>
+              section.title ||
+              section.trigger ||
+              section.narrative ||
+              section.key_points.length > 0 ||
+              section.opinions.length > 0 ||
+              section.settlement ||
+              section.open_questions.length > 0,
+          )
+          .slice(0, 24)
+      : [],
     pending_items: normalizeStringList(raw.pending_items, 12),
     conclusion: {
       title: raw.conclusion?.title || "",
@@ -111,6 +429,13 @@ export function normalizeFinalSolutionSummaryPayload(
   const fallback = createEmptyFinalSolutionSummary();
   if (!raw || typeof raw !== "object") return fallback;
   const markdown = typeof raw.markdown === "string" ? raw.markdown : "";
+  const structured = normalizeStructuredSummaryDocument(raw.structured);
+  const documentBlocks = normalizeSummaryDocumentBlocks(
+    raw.document_blocks || (raw as { documentBlocks?: unknown }).documentBlocks,
+    structured,
+    markdown,
+  );
+  const normalizedMarkdown = markdown || summaryDocumentBlocksToMarkdown(documentBlocks);
   const sections = Array.isArray(raw.sections)
     ? raw.sections.map((section) => ({
         group_id: section.group_id || "",
@@ -137,14 +462,15 @@ export function normalizeFinalSolutionSummaryPayload(
     final_count: Math.max(Number.isFinite(raw.final_count) ? raw.final_count : raw.items?.length || 0, sections.length),
     topics: Array.isArray(raw.topics) ? raw.topics : [],
     items: Array.isArray(raw.items) ? raw.items : [],
-    markdown,
-    document_status: raw.document_status || (markdown ? "ready" : "empty"),
+    markdown: normalizedMarkdown,
+    document_blocks: documentBlocks,
+    document_status: raw.document_status || (normalizedMarkdown || documentBlocks.length > 0 ? "ready" : "empty"),
     generated_at: raw.generated_at || "",
     used_llm: Boolean(raw.used_llm),
     warning: raw.warning || "",
     source_signature: raw.source_signature || "",
     sections,
-    structured: normalizeStructuredSummaryDocument(raw.structured),
+    structured,
   };
 }
 
@@ -156,6 +482,7 @@ export function buildFinalSolutionSummaryPayload(
 
 export function buildSummaryDocumentFromResponse(input: {
   markdown: string;
+  documentBlocks?: CanvasSummaryDocumentBlock[];
   sections: CanvasSummaryDocumentSection[];
   generatedAt: string;
   usedLlm: boolean;
@@ -168,7 +495,8 @@ export function buildSummaryDocumentFromResponse(input: {
     topics: [],
     items: [],
     markdown: input.markdown,
-    document_status: input.markdown.trim() ? "ready" : "empty",
+    document_blocks: input.documentBlocks,
+    document_status: input.markdown.trim() || (input.documentBlocks || []).length > 0 ? "ready" : "empty",
     generated_at: input.generatedAt,
     used_llm: input.usedLlm,
     warning: input.warning || "",
@@ -191,7 +519,7 @@ function renderSummaryMarkdownInline(text: string): ReactNode[] {
     const token = match[0];
     if (token.startsWith("`")) {
       nodes.push(
-        <code key={`code-${match.index}`} className="rounded-[4px] bg-[#f7ecfb] px-1.5 py-0.5 font-mono text-[0.92em] text-[#a13ab8]">
+        <code key={`code-${match.index}`} className="rounded-[4px] bg-[#eef8ff] px-1.5 py-0.5 font-mono text-[0.92em] text-[#236cf3]">
           {token.slice(1, -1)}
         </code>,
       );
@@ -340,7 +668,7 @@ export function renderSummaryMarkdownPreview(markdown: string, onEdit: () => voi
     <button
       type="button"
       onClick={onEdit}
-      className="h-full w-full overflow-y-auto border border-black/10 bg-white px-8 py-7 text-left outline-none transition hover:border-[#a13ab8]/30 focus:border-[#a13ab8]/30 focus:ring-2 focus:ring-[#a13ab8]/10"
+      className="h-full w-full overflow-y-auto border border-black/10 bg-white px-8 py-7 text-left outline-none transition hover:border-[#01a3ff]/30 focus:border-[#01a3ff]/30 focus:ring-2 focus:ring-[#01a3ff]/10"
     >
       {blocks.length > 0 ? blocks : (
         <p className="text-sm leading-7 text-[#999]">요약 문서가 아직 없습니다.</p>
@@ -471,10 +799,10 @@ export function buildPrintableSummaryDocumentHtml(markdown: string, options: { i
     }
     .toolbar p { margin: 0; color: #4d4d4d; font-size: 13px; }
     .toolbar button {
-      border: 1px solid #ead0f2;
+      border: 1px solid #bfdbfe;
       border-radius: 10px;
-      background: #f4e8fb;
-      color: #6f2b7d;
+      background: #eef8ff;
+      color: #236cf3;
       padding: 9px 14px;
       font-weight: 700;
       cursor: pointer;
@@ -504,7 +832,7 @@ export function buildPrintableSummaryDocumentHtml(markdown: string, options: { i
     li { margin: 5px 0; }
     strong { font-weight: 750; color: #111827; }
     em { font-style: italic; }
-    code { border-radius: 5px; background: #f5f6f8; padding: 1px 5px; color: #6f2b7d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+    code { border-radius: 5px; background: #eef8ff; padding: 1px 5px; color: #236cf3; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
     .table-wrap { margin: 18px 0; overflow-x: auto; border: 1px solid rgba(0,0,0,0.1); }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th { border-bottom: 1px solid rgba(0,0,0,0.1); background: #f5f6f8; padding: 10px 12px; text-align: left; color: #000; }

@@ -147,7 +147,7 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
             type="button"
             onClick={() => void onStart()}
             disabled={pending}
-            className="rounded-[10px] border border-[#01a3ff] bg-[#01a3ff] px-5 py-2.5 text-sm font-semibold text-white transition hover:border-[#236cf3] hover:bg-[#236cf3] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-[10px] border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2.5 text-sm font-semibold tracking-[-0.035px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
           >
             {pending ? "AI 묶는 중" : "정의 2단계로 이동"}
           </button>

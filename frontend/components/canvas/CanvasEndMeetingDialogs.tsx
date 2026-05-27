@@ -104,7 +104,7 @@ export function CanvasEndMeetingDialogs({
         <div className="fixed inset-0 z-[85] flex flex-col bg-[#f5f6f8]">
           <div className="flex min-h-[64px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Preview</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Preview</p>
               <h2 className="mt-1 truncate text-lg font-semibold text-black">최종 정리 문서</h2>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -112,7 +112,7 @@ export function CanvasEndMeetingDialogs({
                 type="button"
                 onClick={onDownloadPdf}
                 disabled={saving}
-                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-[#ead0f2] bg-[#f4e8fb] px-4 text-sm font-semibold text-[#6f2b7d] transition hover:border-[#d9b7e5] hover:bg-[#ecd9f7] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-[#bfdbfe] bg-[#eef8ff] px-4 text-sm font-semibold text-[#236cf3] transition hover:border-[#93c5fd] hover:bg-[#dff1ff] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 PDF 다운
               </button>
@@ -120,7 +120,7 @@ export function CanvasEndMeetingDialogs({
                 type="button"
                 onClick={onBackToConfirm}
                 disabled={saving}
-                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-black/10 bg-white px-4 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#6f2b7d] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 items-center justify-center rounded-[10px] border border-black/10 bg-white px-4 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#eef8ff] hover:text-[#236cf3] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 돌아가기
               </button>

@@ -311,7 +311,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       onClick={() => onSaveProblemStructureGroupEdit(column.id)}
                       onPointerDown={(event) => event.stopPropagation()}
                       aria-label="구조화 그룹 저장"
-                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full bg-[#01a3ff] text-white transition hover:bg-[#005cdc]"
+                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
                     >
                       <CheckIcon className="h-[15px] w-[15px]" />
                     </button>
@@ -448,7 +448,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                             onClick={() => onSaveProblemStructureNodeEdit(node.id)}
                             onPointerDown={(event) => event.stopPropagation()}
                             aria-label="구조화 노드 저장"
-                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full bg-[#01a3ff] text-white transition hover:bg-[#005cdc]"
+                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
                           >
                             <CheckIcon className="h-[14px] w-[14px]" />
                           </button>

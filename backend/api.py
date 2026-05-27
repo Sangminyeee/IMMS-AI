@@ -714,6 +714,7 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
             "topics": [],
             "items": [],
             "markdown": "",
+            "document_blocks": [],
             "document_status": "empty",
             "sections": [],
             "structured": {
@@ -722,6 +723,7 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
                 "key_summary": "",
                 "idea_groups": [],
                 "discussion_flows": [],
+                "flow_sections": [],
                 "pending_items": [],
                 "conclusion": {"title": "", "summary": "", "groups": []},
             },
@@ -830,9 +832,10 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
         if len(sections) >= 40:
             break
 
-    document_status = _safe_text(raw.get("document_status") or raw.get("documentStatus"), "ready" if _safe_text(raw.get("markdown")) else "empty")
+    raw_markdown = _safe_text(raw.get("markdown"))
+    document_status = _safe_text(raw.get("document_status") or raw.get("documentStatus"), "ready" if raw_markdown else "empty")
     if document_status not in {"empty", "ready", "edited"}:
-        document_status = "ready" if _safe_text(raw.get("markdown")) else "empty"
+        document_status = "ready" if raw_markdown else "empty"
     structured_fallback = {
         "meeting_overview": "",
         "attendee_summary": "",
@@ -858,6 +861,25 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
             }
             for section in sections
         ],
+        "flow_sections": [
+            {
+                "section_id": f"flow-{index + 1}",
+                "group_id": section.get("group_id", ""),
+                "title": section.get("title", "논의 흐름"),
+                "time_range": "",
+                "trigger": _safe_text(section.get("rationale")),
+                "narrative": " ".join(_safe_text(value) for value in (section.get("node_titles") or [])[:3] if _safe_text(value)),
+                "key_points": section.get("node_titles", [])[:6],
+                "opinions": [
+                    {"label": f"{chr(65 + item_index)} 의견", "text": item.get("text", "")}
+                    for item_index, item in enumerate(section.get("evidence", [])[:2])
+                    if isinstance(item, dict) and _safe_text(item.get("text"))
+                ],
+                "settlement": _safe_text(section.get("rationale")),
+                "open_questions": [] if section.get("status") == "final" else [_safe_text(section.get("title", "추가 확인"))],
+            }
+            for index, section in enumerate(sections)
+        ],
         "pending_items": [],
         "conclusion": {
             "title": "",
@@ -875,21 +897,32 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
         },
     }
 
+    structured = _normalize_summary_structured_document(
+        raw.get("structured") or raw.get("structured_summary") or raw.get("structuredSummary"),
+        structured_fallback,
+    )
+    document_blocks = _normalize_summary_document_blocks(
+        raw.get("document_blocks") or raw.get("documentBlocks"),
+        structured,
+        raw_markdown,
+    )
+    markdown = raw_markdown or _summary_document_blocks_to_markdown(document_blocks)
+    if document_status == "empty" and (markdown or document_blocks):
+        document_status = "ready"
+
     return {
         "final_count": max(len(items), len(sections)),
         "topics": topics,
         "items": items,
-        "markdown": _safe_text(raw.get("markdown")),
+        "markdown": markdown,
+        "document_blocks": document_blocks,
         "document_status": document_status,
         "generated_at": _safe_text(raw.get("generated_at") or raw.get("generatedAt")),
         "used_llm": bool(raw.get("used_llm") or raw.get("usedLlm")),
         "warning": _safe_text(raw.get("warning")),
         "source_signature": _safe_text(raw.get("source_signature") or raw.get("sourceSignature")),
         "sections": sections,
-        "structured": _normalize_summary_structured_document(
-            raw.get("structured") or raw.get("structured_summary") or raw.get("structuredSummary"),
-            structured_fallback,
-        ),
+        "structured": structured,
     }
 
 
@@ -6052,6 +6085,208 @@ def _summary_document_group_bullets(group: dict[str, Any], limit: int = 5) -> li
     return [_to_summary_point(item, max_len=None) for item in _dedup_preserve([*source_items, *node_points, rationale], limit=limit)]
 
 
+def _normalize_summary_document_blocks(
+    raw_blocks: Any,
+    structured: dict[str, Any] | None = None,
+    markdown: str = "",
+) -> list[dict[str, Any]]:
+    def stable_block_id(prefix: str, seed: str) -> str:
+        return f"{prefix}-{_stable_short_id(seed or prefix)}"
+
+    def normalize_block(raw: Any, index: int) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        block_type = _safe_text(raw.get("type"))
+        block_id = _safe_text(raw.get("id"), stable_block_id("block", json.dumps(raw, ensure_ascii=False, sort_keys=True)))
+        if block_type == "heading":
+            text = _safe_text(raw.get("text"))
+            if not text:
+                return None
+            level = _safe_nonnegative_int(raw.get("level"), 2)
+            level = min(3, max(1, level or 2))
+            return {"id": block_id, "type": "heading", "text": text, "level": level}
+        if block_type == "paragraph":
+            text = _safe_text(raw.get("text"))
+            return {"id": block_id, "type": "paragraph", "text": text} if text else None
+        if block_type == "bullets":
+            items = [_safe_text(item) for item in raw.get("items") or [] if _safe_text(item)][:20]
+            return {"id": block_id, "type": "bullets", "items": items} if items else None
+        if block_type == "table":
+            columns = [_safe_text(item) for item in raw.get("columns") or [] if _safe_text(item)][:8]
+            if not columns:
+                columns = ["항목", "내용"]
+            rows: list[list[str]] = []
+            for row in raw.get("rows") or []:
+                if not isinstance(row, list):
+                    continue
+                normalized_row = [_safe_text(row[cell_index] if cell_index < len(row) else "") for cell_index, _ in enumerate(columns)]
+                if any(normalized_row):
+                    rows.append(normalized_row)
+                if len(rows) >= 40:
+                    break
+            return {
+                "id": block_id or stable_block_id("table", str(index)),
+                "type": "table",
+                "title": _safe_text(raw.get("title")),
+                "columns": columns,
+                "rows": rows or [["" for _ in columns]],
+            }
+        return None
+
+    direct_blocks = [
+        block
+        for block in (normalize_block(raw, index) for index, raw in enumerate(raw_blocks or []))
+        if block
+    ] if isinstance(raw_blocks, list) else []
+    if direct_blocks:
+        return direct_blocks[:80]
+
+    structured_blocks = _build_summary_document_blocks(structured or {})
+    if structured_blocks:
+        return structured_blocks
+
+    return _summary_markdown_to_document_blocks(markdown)
+
+
+def _build_summary_document_blocks(structured: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(structured, dict):
+        return []
+    conclusion = structured.get("conclusion") if isinstance(structured.get("conclusion"), dict) else {}
+    title = _safe_text(conclusion.get("title"), "회의 핵심 결론")
+    summary = _safe_text(conclusion.get("summary") or structured.get("key_summary") or structured.get("meeting_overview"))
+    blocks: list[dict[str, Any]] = []
+    if title:
+        blocks.append({"id": "heading-conclusion", "type": "heading", "text": title, "level": 1})
+    if summary:
+        blocks.append({"id": "paragraph-summary", "type": "paragraph", "text": summary})
+
+    groups = conclusion.get("groups") if isinstance(conclusion.get("groups"), list) else []
+    rows: list[list[str]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        bullets = [_safe_text(item) for item in group.get("bullets") or [] if _safe_text(item)]
+        rows.append(
+            [
+                _safe_text(group.get("title"), "정리 항목"),
+                _safe_text(group.get("status_label"), _summary_document_status_label(_safe_text(group.get("status"), "draft"))),
+                "\n".join(bullets),
+            ]
+        )
+    if rows:
+        blocks.append(
+            {
+                "id": "table-problem-solution",
+                "type": "table",
+                "title": "문제정의 & 해결 방향",
+                "columns": ["정리 항목", "상태", "핵심 내용"],
+                "rows": rows[:40],
+            }
+        )
+
+    pending_items = [_safe_text(item) for item in structured.get("pending_items") or [] if _safe_text(item)]
+    if pending_items:
+        blocks.append(
+            {
+                "id": "table-next-actions",
+                "type": "table",
+                "title": "앞으로 할 일",
+                "columns": ["할 일", "담당", "비고"],
+                "rows": [[item, "추가 확인 필요", ""] for item in pending_items[:40]],
+            }
+        )
+    return blocks
+
+
+def _summary_markdown_to_document_blocks(markdown: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    paragraph: list[str] = []
+    bullets: list[str] = []
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        text = _safe_text(" ".join(paragraph))
+        if text:
+            blocks.append({"id": f"paragraph-{len(blocks) + 1}", "type": "paragraph", "text": text})
+        paragraph = []
+
+    def flush_bullets() -> None:
+        nonlocal bullets
+        items = [_safe_text(item) for item in bullets if _safe_text(item)]
+        if items:
+            blocks.append({"id": f"bullets-{len(blocks) + 1}", "type": "bullets", "items": items})
+        bullets = []
+
+    for raw_line in _safe_text(markdown).splitlines():
+        line = _safe_text(raw_line)
+        if not line:
+            flush_paragraph()
+            flush_bullets()
+            continue
+        heading_match = re.match(r"^(#{1,3})\s+(.+)$", line)
+        if heading_match:
+            flush_paragraph()
+            flush_bullets()
+            blocks.append(
+                {
+                    "id": f"heading-{len(blocks) + 1}",
+                    "type": "heading",
+                    "text": _safe_text(heading_match.group(2)),
+                    "level": min(3, max(1, len(heading_match.group(1)))),
+                }
+            )
+            continue
+        bullet_match = re.match(r"^(?:[-*]|\d+[.)])\s+(.+)$", line)
+        if bullet_match:
+            flush_paragraph()
+            bullets.append(_safe_text(bullet_match.group(1)))
+            continue
+        flush_bullets()
+        paragraph.append(line)
+
+    flush_paragraph()
+    flush_bullets()
+    return blocks[:80]
+
+
+def _summary_document_blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        block_type = _safe_text(block.get("type"))
+        if block_type == "heading":
+            level = min(3, max(1, _safe_nonnegative_int(block.get("level"), 2) or 2))
+            text = _safe_text(block.get("text"), "제목")
+            chunks.append(f"{'#' * level} {text}")
+        elif block_type == "paragraph":
+            text = _safe_text(block.get("text"))
+            if text:
+                chunks.append(text)
+        elif block_type == "bullets":
+            items = [_safe_text(item) for item in block.get("items") or [] if _safe_text(item)]
+            if items:
+                chunks.append("\n".join(f"- {item}" for item in items))
+        elif block_type == "table":
+            columns = [_safe_text(item) for item in block.get("columns") or [] if _safe_text(item)] or ["항목", "내용"]
+
+            def cell(value: str) -> str:
+                return _safe_text(value).replace("\n", "<br>").replace("|", "\\|") or " "
+
+            title = _safe_text(block.get("title"))
+            table_lines = []
+            if title:
+                table_lines.append(f"### {title}")
+            table_lines.append("| " + " | ".join(cell(column) for column in columns) + " |")
+            table_lines.append("| " + " | ".join("---" for _ in columns) + " |")
+            for row in block.get("rows") or []:
+                if not isinstance(row, list):
+                    continue
+                table_lines.append("| " + " | ".join(cell(row[index] if index < len(row) else "") for index, _ in enumerate(columns)) + " |")
+            chunks.append("\n".join(table_lines))
+    return "\n\n".join(chunk for chunk in chunks if _safe_text(chunk)).strip()
+
+
 def _build_summary_document_structured(
     meeting_topic: str,
     groups: list[dict[str, Any]],
@@ -6082,9 +6317,10 @@ def _build_summary_document_structured(
 
     idea_groups: list[dict[str, Any]] = []
     discussion_flows: list[dict[str, Any]] = []
+    flow_sections: list[dict[str, Any]] = []
     conclusion_groups: list[dict[str, Any]] = []
     pending_items: list[str] = []
-    for group in groups:
+    for index, group in enumerate(groups, start=1):
         group_id = _safe_text(group.get("group_id"))
         group_title = _safe_text(group.get("title"), "정리 항목")
         section = section_by_group_id.get(group_id, {})
@@ -6118,6 +6354,26 @@ def _build_summary_document_structured(
                 ),
             }
         )
+        trigger = _safe_text((group.get("source_summary_items") or [None])[0]) or bullets[0]
+        settlement = _safe_text(group.get("rationale")) or (bullets[-1] if bullets else "")
+        open_questions = [] if _safe_text(group.get("status"), "draft") == "final" else [f"{group_title}에 대한 추가 확인과 합의가 필요합니다."]
+        flow_sections.append(
+            {
+                "section_id": f"flow-{index}",
+                "group_id": group_id,
+                "title": group_title,
+                "time_range": "",
+                "trigger": _to_summary_point(trigger, max_len=None),
+                "narrative": " ".join(_to_summary_point(item, max_len=None) for item in bullets[:3]),
+                "key_points": bullets[:6],
+                "opinions": [
+                    {"label": f"{chr(65 + opinion_index)} 의견", "text": _truncate_text(text, 180)}
+                    for opinion_index, text in enumerate(opinion_sources)
+                ],
+                "settlement": _to_summary_point(settlement, max_len=None),
+                "open_questions": open_questions,
+            }
+        )
         status = _safe_text(group.get("status"), "draft")
         if status != "final":
             pending_items.append(group_title)
@@ -6137,6 +6393,7 @@ def _build_summary_document_structured(
         "key_summary": key_summary,
         "idea_groups": idea_groups,
         "discussion_flows": discussion_flows,
+        "flow_sections": flow_sections,
         "pending_items": _dedup_preserve(pending_items, limit=10),
         "conclusion": {
             "title": f"{primary_topics} 정리",
@@ -6206,6 +6463,51 @@ def _normalize_summary_structured_document(raw: Any, fallback: dict[str, Any]) -
                 break
         return flows
 
+    def normalize_flow_sections(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        sections: list[dict[str, Any]] = []
+        for index, item in enumerate(value, start=1):
+            if not isinstance(item, dict):
+                continue
+            title = _safe_text(item.get("title"))
+            key_points = text_list(item.get("key_points") or item.get("keyPoints") or item.get("items") or item.get("bullets"), 8)
+            open_questions = text_list(
+                item.get("open_questions") or item.get("openQuestions") or item.get("pending_items") or item.get("pendingItems"),
+                8,
+            )
+            opinions: list[dict[str, str]] = []
+            for opinion in item.get("opinions") or []:
+                if not isinstance(opinion, dict):
+                    continue
+                text = _safe_text(opinion.get("text"))
+                if text:
+                    opinions.append({"label": _safe_text(opinion.get("label"), "의견"), "text": text})
+                if len(opinions) >= 4:
+                    break
+            trigger = _safe_text(item.get("trigger") or item.get("why") or item.get("context"))
+            narrative = _safe_text(item.get("narrative") or item.get("summary") or item.get("body"))
+            settlement = _safe_text(item.get("settlement") or item.get("conclusion") or item.get("decision"))
+            if not title and not trigger and not narrative and not key_points and not opinions and not settlement and not open_questions:
+                continue
+            sections.append(
+                {
+                    "section_id": _safe_text(item.get("section_id") or item.get("sectionId"), f"flow-{index}"),
+                    "group_id": _safe_text(item.get("group_id") or item.get("groupId")),
+                    "title": title or "논의 흐름",
+                    "time_range": _safe_text(item.get("time_range") or item.get("timeRange")),
+                    "trigger": trigger,
+                    "narrative": narrative,
+                    "key_points": key_points,
+                    "opinions": opinions,
+                    "settlement": settlement,
+                    "open_questions": open_questions,
+                }
+            )
+            if len(sections) >= 24:
+                break
+        return sections
+
     def normalize_conclusion_groups(value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
@@ -6240,6 +6542,7 @@ def _normalize_summary_structured_document(raw: Any, fallback: dict[str, Any]) -
         "key_summary": _safe_text(source.get("key_summary") or source.get("keySummary")),
         "idea_groups": normalize_idea_groups(source.get("idea_groups") or source.get("ideaGroups")),
         "discussion_flows": normalize_discussion_flows(source.get("discussion_flows") or source.get("discussionFlows")),
+        "flow_sections": normalize_flow_sections(source.get("flow_sections") or source.get("flowSections")),
         "pending_items": text_list(source.get("pending_items") or source.get("pendingItems"), 12),
         "conclusion": {
             "title": _safe_text(conclusion.get("title")),
@@ -6259,6 +6562,8 @@ def _normalize_summary_structured_document(raw: Any, fallback: dict[str, Any]) -
         normalized["idea_groups"] = fallback.get("idea_groups") if isinstance(fallback.get("idea_groups"), list) else []
     if not normalized["discussion_flows"]:
         normalized["discussion_flows"] = fallback.get("discussion_flows") if isinstance(fallback.get("discussion_flows"), list) else []
+    if not normalized["flow_sections"]:
+        normalized["flow_sections"] = fallback.get("flow_sections") if isinstance(fallback.get("flow_sections"), list) else []
     if not normalized["pending_items"]:
         normalized["pending_items"] = fallback.get("pending_items") if isinstance(fallback.get("pending_items"), list) else []
     if not normalized["conclusion"]["title"]:
@@ -6272,11 +6577,19 @@ def _normalize_summary_structured_document(raw: Any, fallback: dict[str, Any]) -
 
 def _build_summary_document_local_markdown(meeting_topic: str, groups: list[dict[str, Any]]) -> str:
     title = _safe_text(meeting_topic, "회의")
-    lines = [f"# {title} 요약", "", "## 전체 흐름", "2단계 구조화에서 나온 모든 그룹을 기준으로 회의 내용을 정리했습니다."]
+    group_titles = [_safe_text(group.get("title")) for group in groups if _safe_text(group.get("title"))]
+    flow_intro = ", ".join(group_titles[:3]) if group_titles else "주요 논점"
+    lines = [
+        f"# {title} 요약",
+        "",
+        "## 전체 흐름",
+        f"회의는 {flow_intro}을 중심으로 진행되었고, 각 논점의 주장과 근거를 확인한 뒤 남은 쟁점을 정리하는 흐름으로 마무리되었습니다.",
+    ]
     for index, group in enumerate(groups, start=1):
         status_label = _safe_text(group.get("status_label"), "확정")
         status_suffix = "" if group.get("status") == "final" else f" ({status_label})"
-        lines.extend(["", f"## {index}. {_safe_text(group.get('title'), f'정리 항목 {index}')}{status_suffix}", f"- 상태: {status_label}"])
+        group_title = _safe_text(group.get("title"), f"정리 항목 {index}")
+        lines.extend(["", f"## {index}. {group_title}{status_suffix}"])
         node_titles = [
             _safe_text(node.get("title"))
             for node in group.get("nodes") or []
@@ -6285,12 +6598,17 @@ def _build_summary_document_local_markdown(meeting_topic: str, groups: list[dict
         source_items = [_safe_text(item) for item in group.get("source_summary_items") or [] if _safe_text(item)]
         rationale = _safe_text(group.get("rationale"))
         flow_items = _dedup_preserve([*source_items, *node_titles, rationale], limit=4)
+        if source_items or flow_items:
+            lines.extend(["", "### 논점이 나온 이유"])
+            lines.append(_to_summary_point((source_items[0] if source_items else flow_items[0]), max_len=None))
         if flow_items:
-            lines.extend(["", "### 논의 흐름"])
+            lines.extend(["", "### 핵심 논의"])
             lines.extend(f"- {item}" for item in flow_items)
         lines.extend(["", "### 정리된 결론"])
-        conclusion = source_items[0] if source_items else (rationale or f"{_safe_text(group.get('title'), '이 항목')}을 중심으로 논의가 정리되었습니다.")
+        conclusion = rationale or (source_items[0] if source_items else f"{group_title}을 중심으로 논의가 정리되었습니다.")
         lines.append(_to_summary_point(conclusion, max_len=None))
+        if group.get("status") != "final":
+            lines.extend(["", "### 남은 확인 사항", f"- {group_title}에 대한 추가 확인과 합의가 필요합니다."])
     return "\n".join(lines).strip()
 
 
@@ -6350,7 +6668,8 @@ def _build_summary_document_prompt(
         "너는 회의가 끝난 뒤 사람들이 다시 읽을 수 있는 최종 회의 요약 문서를 쓰는 AI 퍼실리테이터다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
         "- 2단계 구조화에서 입력된 모든 그룹을 상태와 무관하게 기준으로 삼아 문서형 요약을 작성한다.\n"
-        "- 사람들이 회의가 끝난 뒤 읽었을 때 왜 이런 결론이 나왔는지 논의 흐름을 이해할 수 있어야 한다.\n"
+        "- 사람들이 회의가 끝난 뒤 읽었을 때 논점이 어떻게 등장했고, 어떤 주장과 근거를 거쳐 왜 이런 결론이 나왔는지 이해할 수 있어야 한다.\n"
+        "- 단순 항목 요약이 아니라 회의 진행 순서에 가까운 흐름 문서로 재구성한다.\n"
         "- 웹 LLM 서비스의 Markdown 요약처럼 제목, 하위 제목, bullet을 적절히 사용한다.\n"
         "- 각 그룹의 status_label은 참고 정보다. 확정되지 않은 그룹도 빠뜨리지 말고, 필요한 경우 본문에 상태를 자연스럽게 드러낸다.\n"
         "- 원문 발언의 직접 인용, 화자명, timestamp는 문서 본문에 넣지 않는다. 근거 발언은 UI에서 별도로 접어 보여준다.\n"
@@ -6360,21 +6679,33 @@ def _build_summary_document_prompt(
         "[출력 JSON 스키마]\n"
         "{\n"
         '  "markdown": "# 회의 요약\\n\\n## 전체 흐름\\n...\\n\\n## 1. 목적지 경복궁 설정\\n...",\n'
+        '  "document_blocks": [\n'
+        '    {"id":"heading-1","type":"heading","text":"최종 결론 제목","level":1},\n'
+        '    {"id":"paragraph-1","type":"paragraph","text":"핵심 결론 1~2문장"},\n'
+        '    {"id":"table-1","type":"table","title":"회의 성격에 맞는 표 제목","columns":["회의 내용에 맞게 정한 컬럼명"],"rows":[["셀 값"]]}\n'
+        "  ],\n"
         '  "structured": {\n'
         '    "meeting_overview": "회의 개요 1문장",\n'
         '    "attendee_summary": "참석자/논의 범위 요약",\n'
         '    "key_summary": "핵심 요약 1~2문장",\n'
         '    "idea_groups": [{"group_id":"...","title":"...","items":["짧은 bullet"]}],\n'
         '    "discussion_flows": [{"group_id":"...","title":"...","opinions":[{"label":"A 의견","text":"..."},{"label":"B 의견","text":"..."}],"conclusion":"정리 문장"}],\n'
+        '    "flow_sections": [{"section_id":"flow-1","group_id":"...","title":"짧은 논점 제목","time_range":"","trigger":"이 논점이 등장한 이유","narrative":"주장과 근거가 어떻게 이어졌는지 2~4문장으로 설명","key_points":["핵심 주장 또는 근거"],"opinions":[{"label":"한쪽 의견","text":"..."},{"label":"다른 의견","text":"..."}],"settlement":"회의가 정리한 방향","open_questions":["남은 확인 사항"]}],\n'
         '    "pending_items": ["보류 또는 추가 확인 항목"],\n'
         '    "conclusion": {"title":"결론 제목","summary":"결론 요약","groups":[{"group_id":"...","title":"...","status":"final","status_label":"확정","bullets":["결론 bullet"]}]}\n'
         "  }\n"
         "}\n\n"
         "[규칙]\n"
         "- markdown은 한국어 Markdown 문자열 하나다.\n"
+        "- document_blocks는 오른쪽 결론 문서 편집기의 원본이다. heading, paragraph, bullets, table 블록을 사용한다.\n"
+        "- table 블록은 의미 있을 때 1~3개 만든다. 컬럼명은 회의 성격에 맞게 직접 정하고, 3~6개 컬럼으로 제한한다.\n"
+        "- table은 결정 사항, 쟁점 비교, 우선순위, 실행 항목, 담당자, 추가 확인 사항처럼 표가 더 읽기 쉬운 정보에만 사용한다.\n"
+        "- table rows의 빈 셀은 만들지 말고 모르면 '추가 확인 필요'라고 적는다.\n"
         "- structured는 화면 표시용이다. 원문을 그대로 복사하지 말고 짧고 읽기 좋은 문장으로 정리한다.\n"
-        "- 문서에는 # 제목 1개, ## 그룹별 섹션, 필요한 경우 ### 논의 흐름 / 정리된 결론 / 남은 확인 사항을 둔다.\n"
-        "- 각 그룹은 1~3문단과 bullet 2~5개 정도로 간결하게 쓴다.\n"
+        "- flow_sections는 좌측 정리 카드의 핵심 데이터다. 각 섹션은 논점이 등장한 이유, 핵심 주장/근거, 의견 차이, 정리된 방향, 남은 확인 사항을 구분한다.\n"
+        "- 문서에는 # 제목 1개, ## 흐름별 섹션, 필요한 경우 ### 논점이 나온 이유 / 핵심 논의 / 정리된 결론 / 남은 확인 사항을 둔다.\n"
+        "- 각 흐름 섹션은 2~4문장 narrative와 bullet 2~5개 정도로 작성한다. 너무 짧은 라벨 나열만 반환하지 않는다.\n"
+        "- 결론은 flow_sections에서 실제로 정리된 방향만 압축한다. 결론 카드에 들어갈 내용은 상세 플로우를 반복하지 않는다.\n"
         "- 원문 그대로의 긴 인용은 금지한다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
@@ -11708,7 +12039,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     source_signature = _summary_document_source_signature(groups)
     signature = _canvas_llm_signature(
         {
-            "version": 2,
+            "version": 4,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "source_signature": source_signature,
             "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
@@ -11720,7 +12051,9 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
         sections = _summary_document_sections(groups, rows)
         fallback_markdown = _build_summary_document_local_markdown(payload.meeting_topic, groups)
         fallback_structured = _build_summary_document_structured(payload.meeting_topic, groups, sections)
+        fallback_document_blocks = _build_summary_document_blocks(fallback_structured)
         structured = fallback_structured
+        document_blocks = fallback_document_blocks
         used_llm = False
         warning = ""
 
@@ -11732,6 +12065,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
                 "generated_at": _now_ts(),
                 "source_signature": source_signature,
                 "markdown": "",
+                "document_blocks": [],
                 "sections": [],
                 "structured": fallback_structured,
             }
@@ -11781,11 +12115,19 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
                     parsed.get("structured") if isinstance(parsed, dict) else {},
                     fallback_structured,
                 )
+                document_blocks = _normalize_summary_document_blocks(
+                    parsed.get("document_blocks") if isinstance(parsed, dict) else [],
+                    structured,
+                    markdown,
+                )
+                if not markdown:
+                    markdown = _summary_document_blocks_to_markdown(document_blocks)
                 used_llm = True
                 RT.last_llm_parsed_json = {
                     "stage": "canvas_summary_document",
                     "source_signature": source_signature,
                     "markdown": markdown,
+                    "document_blocks": document_blocks,
                     "structured": structured,
                 }
                 RT.last_llm_parsed_at = _now_ts()
@@ -11801,6 +12143,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
             "generated_at": _now_ts(),
             "source_signature": source_signature,
             "markdown": markdown,
+            "document_blocks": document_blocks,
             "sections": sections,
             "structured": structured,
         }

@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo, type ReactNode, type RefObject } from "react";
-import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary } from "@/lib/types";
+import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
 import {
   buildSolutionPresentationModel,
   SolutionFinalDocumentPanel,
@@ -24,6 +24,7 @@ type SolutionCanvasViewProps = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   paneRef: RefObject<HTMLElement | null>;
   document: CanvasFinalSolutionSummary;
+  draftBlocks: CanvasSummaryDocumentBlock[];
   draftMarkdown: string;
   draftDirty: boolean;
   editMode: boolean;
@@ -34,6 +35,7 @@ type SolutionCanvasViewProps = {
   onRegenerate: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
   onSave: () => void | Promise<void>;
+  onBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
   onMarkdownChange: (markdown: string) => void;
   renderPreview: (markdown: string, onEdit: () => void) => ReactNode;
 };
@@ -49,6 +51,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   remoteEditPresenceByKey,
   paneRef,
   document,
+  draftBlocks,
   draftMarkdown,
   draftDirty,
   editMode,
@@ -59,6 +62,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   onRegenerate,
   onCopy,
   onSave,
+  onBlocksChange,
   onMarkdownChange,
   renderPreview,
 }: SolutionCanvasViewProps) {
@@ -84,6 +88,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
       <SolutionFinalDocumentPanel
         paneRef={paneRef}
         document={document}
+        draftBlocks={draftBlocks}
         draftMarkdown={draftMarkdown}
         draftDirty={draftDirty}
         editMode={editMode}
@@ -91,10 +96,12 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
         saving={saving}
         eligibleGroupCount={groups.length}
         presentation={presentation}
+        remoteEditPresenceByKey={remoteEditPresenceByKey}
         onSetEditMode={onSetEditMode}
         onRegenerate={onRegenerate}
         onCopy={onCopy}
         onSave={onSave}
+        onBlocksChange={onBlocksChange}
         onMarkdownChange={onMarkdownChange}
         renderPreview={renderPreview}
       />

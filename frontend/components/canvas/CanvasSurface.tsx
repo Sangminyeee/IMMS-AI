@@ -11,7 +11,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { memo, type ReactNode, type RefObject } from "react";
-import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary } from "@/lib/types";
+import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
 import {
   CanvasStageEmptyOverlay,
   CanvasStatusToast,
@@ -59,6 +59,7 @@ export type CanvasSurfaceSolutionState = {
   meetingGoal: string;
   participants: SummaryParticipant[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  summaryDocumentDraftBlocks: CanvasSummaryDocumentBlock[];
   summaryDocumentDraftMarkdown: string;
   summaryDocumentDraftDirty: boolean;
   summaryEligibleStructureGroups: SummaryProblemStructureGroup[];
@@ -105,6 +106,7 @@ export type CanvasSurfaceSolutionHandlers = {
   onRegenerateSummaryDocument: () => void | Promise<void>;
   onCopyFinalSolutionMarkdown: () => void | Promise<void>;
   onSaveSummaryDocument: () => void | Promise<void>;
+  onSummaryDocumentBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
   onSummaryDocumentMarkdownChange: (markdown: string) => void;
 };
 
@@ -204,7 +206,7 @@ function ProblemGroupingRationaleOverlay({
     <div className="absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#a13ab8]">Grouping Rationale</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Grouping Rationale</p>
           <h4 className="mt-1 line-clamp-2 text-[17px] font-semibold leading-6 text-black">
             {title || "문제정의 그룹"}
           </h4>
@@ -212,7 +214,7 @@ function ProblemGroupingRationaleOverlay({
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#f7ecfb] hover:text-[#a13ab8]"
+          className="shrink-0 rounded-[8px] border border-black/10 bg-[#f9f9f9] px-2.5 py-1.5 text-xs font-semibold text-[#4d4d4d] transition hover:bg-[#eef8ff] hover:text-[#236cf3]"
         >
           닫기
         </button>
@@ -230,7 +232,7 @@ function ProblemGroupingRationaleOverlay({
         </div>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-medium text-[#777]">
-        <span className="rounded-full bg-[#f7ecfb] px-2.5 py-1 text-[#a13ab8]">
+        <span className="rounded-full bg-[#eef8ff] px-2.5 py-1 text-[#236cf3]">
           {rationale.usedLlm ? "AI 추정" : "로컬 추정"}
         </span>
         {rationale.warning ? (
@@ -265,6 +267,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     meetingGoal,
     meetingTitle,
     participants,
+    summaryDocumentDraftBlocks,
     summaryDocumentDraftMarkdown,
     summaryDocumentDraftDirty,
     summaryEligibleStructureGroups,
@@ -306,6 +309,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     onRegenerateSummaryDocument,
     onCopyFinalSolutionMarkdown,
     onSaveSummaryDocument,
+    onSummaryDocumentBlocksChange,
     onSummaryDocumentMarkdownChange,
   } = solutionHandlers;
   const {
@@ -373,7 +377,7 @@ export const CanvasSurface = memo(function CanvasSurface({
                 zoomable
                 pannable
                 maskColor="rgba(15, 23, 42, 0.08)"
-                nodeColor="#a13ab8"
+                nodeColor="#236cf3"
               />
             ) : null}
           </ReactFlow>
@@ -389,6 +393,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             remoteEditPresenceByKey={remoteEditPresenceByKey}
             paneRef={solutionRightPaneRef}
             document={finalSummaryDocument}
+            draftBlocks={summaryDocumentDraftBlocks}
             draftMarkdown={summaryDocumentDraftMarkdown}
             draftDirty={summaryDocumentDraftDirty}
             editMode={summaryDocumentEditMode}
@@ -399,6 +404,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             onRegenerate={onRegenerateSummaryDocument}
             onCopy={onCopyFinalSolutionMarkdown}
             onSave={onSaveSummaryDocument}
+            onBlocksChange={onSummaryDocumentBlocksChange}
             onMarkdownChange={onSummaryDocumentMarkdownChange}
             renderPreview={renderSummaryMarkdownPreview}
           />
@@ -413,7 +419,10 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {stage === "solution" && !finalSummaryDocument.markdown.trim() && !summaryDocumentPending ? (
+      {stage === "solution" &&
+      !finalSummaryDocument.markdown.trim() &&
+      !(finalSummaryDocument.document_blocks || []).length &&
+      !summaryDocumentPending ? (
         <CanvasStageEmptyOverlay
           eyebrow="Summary Stage"
           message={

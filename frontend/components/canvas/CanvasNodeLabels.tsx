@@ -248,7 +248,7 @@ export function makeProblemTopicNodeLabel(
             </button>
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] bg-[#01a3ff] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#236cf3]"
+              className="nodrag nopan rounded-[8px] border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-3 py-1.5 text-xs font-semibold tracking-[-0.03px] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
               onClick={onSaveEdit}
             >
               저장
@@ -288,7 +288,7 @@ export function makeProblemTopicNodeLabel(
             </button>
             <button
               type="button"
-              className="nodrag nopan rounded-[8px] border border-[#01a3ff] bg-[#01a3ff] px-2.5 py-1.5 text-xs font-semibold text-white transition hover:border-[#236cf3] hover:bg-[#236cf3] disabled:cursor-wait disabled:opacity-60"
+              className="nodrag nopan rounded-[8px] border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-2.5 py-1.5 text-xs font-semibold tracking-[-0.03px] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105 disabled:cursor-wait disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
               disabled={childLoading}
               onClick={onGenerateChildren}
               onPointerDown={(event) => event.stopPropagation()}

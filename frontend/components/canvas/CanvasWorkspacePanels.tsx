@@ -237,7 +237,7 @@ function StageSteps({
             onClick={() => onStageSelect(item)}
             className={`flex h-[33px] w-full items-center rounded-full border px-[11px] text-left shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition ${
               active
-                ? "border-[#01a3ff] bg-[linear-gradient(90deg,#01a3ff_33%,#236cf3_158%)] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)]"
+                ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)]"
                 : "border-[rgba(1,163,255,0.33)] bg-white text-[#7c7c7c] hover:border-[#01a3ff] hover:bg-[#f4fbff]"
             }`}
           >
@@ -297,16 +297,16 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   );
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-[17px] z-20 flex -translate-x-1/2 flex-col items-center">
+    <div className="pointer-events-none absolute left-1/2 top-[31px] z-20 flex -translate-x-1/2 flex-col items-center">
       <button
         type="button"
         onClick={meetingGoalEditorOpen ? onCancelMeetingGoalEdit : onOpenMeetingGoalEditor}
-        className="pointer-events-auto min-w-[210px] rounded-full border border-white bg-white px-8 py-[8px] text-center text-[12px] font-medium leading-none text-[#181818] shadow-[0_4px_12px_rgba(0,0,0,0.06)] transition hover:border-[#01a3ff]/25"
+        className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
       >
         {meetingGoalDraft.trim() || meetingTitle || "회의 목표 입력란"}
       </button>
-      <div className="mt-[8px] inline-flex h-[24px] items-center gap-[6px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[10px] font-medium text-[#505050] shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-        <ClockIcon className={`h-[12px] w-[12px] ${isRecording ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
+      <div className="mt-[9px] inline-flex h-[32px] w-[110px] items-center justify-center gap-[8px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)]">
+        <ClockIcon className={`h-[16.4px] w-[16.4px] ${isRecording ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
         <span>{recordingElapsedText}</span>
       </div>
 
@@ -339,7 +339,7 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
             <button type="button" onClick={onCancelMeetingGoalEdit} className="rounded-full bg-[#eff0f6] px-4 py-2 text-[12px] font-semibold text-[#505050]">
               취소
             </button>
-            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full bg-[#01a3ff] px-5 py-2 text-[12px] font-semibold text-white disabled:opacity-50">
+            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 text-[12px] font-semibold tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
               {meetingGoalSaving ? "저장 중" : "저장"}
             </button>
           </div>
@@ -488,7 +488,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onSaveEdit(note.id)}
                 aria-label="메모 저장"
                 title="저장"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full bg-[#01a3ff] text-white transition hover:bg-[#236cf3]"
+                className="grid h-[22px] w-[22px] place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
               >
                 <CheckIcon className="h-[13px] w-[13px]" />
               </button>
@@ -636,7 +636,7 @@ function CurrentProblemDefinitionStagePanel({
           void problemHandlers.onStartProblemStructure();
         }}
         disabled={buttonDisabled}
-        className="mt-[13px] flex h-[33px] w-full items-center justify-center rounded-full bg-[linear-gradient(90deg,#01a3ff_33%,#236cf3_158%)] text-[12px] font-semibold leading-[1.4] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
+        className="mt-[13px] flex h-[33px] w-full items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
       >
         {problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기"}
       </button>
@@ -706,8 +706,8 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button type="button" className="flex h-[32.4px] items-center gap-[8px] rounded-full bg-[#4b4b50] px-[12px] text-[12px] font-semibold tracking-[-0.03px] text-[#ededed] transition hover:bg-[#3f3f43]" aria-label="회의 공유">
-          <ShareIcon className="h-[14px] w-[14px]" />
+        <button type="button" className="flex h-[32.4px] items-center gap-[8.1px] rounded-full bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.2px] text-[12px] font-semibold leading-[20px] tracking-[-0.03px] text-[#ededed] transition hover:bg-[#3f3f43]" aria-label="회의 공유">
+          <ShareIcon className="h-[12.825px] w-[12.825px]" />
           공유
         </button>
       </div>
@@ -765,8 +765,8 @@ function RightAiPanel({
       </div>
 
       <form onSubmit={quickAskHandlers.onSubmit} className="absolute left-[var(--canvas-right-search-x)] right-[var(--canvas-right-search-x)] top-[var(--canvas-right-search-top)] z-10 flex h-[48px] items-center rounded-full border border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]">
-        <button type="button" className="grid h-[34px] w-[34px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
-          <PaperclipIcon className="h-[18px] w-[18px]" />
+        <button type="button" className="grid h-[33.936px] w-[33.936px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
+          <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
         </button>
         <input
           value={quickAskDraft}
@@ -775,18 +775,18 @@ function RightAiPanel({
             if (!quickAskOpen) quickAskHandlers.onToggle();
           }}
           placeholder="무엇이든 물어보세요"
-          className="min-w-0 flex-1 bg-transparent px-1 text-[14px] leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
+          className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
         />
-        <button type="button" className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
-          <MicIcon className="h-[18px] w-[18px]" />
+        <button type="button" className="grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
+          <MicIcon className="h-[20.36px] w-[20.36px]" />
         </button>
         <button
           type="submit"
           disabled={!quickAskDraft.trim()}
           aria-label="AI 가이드 질문 보내기"
-          className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-[#01a3ff] text-white transition disabled:bg-[#d8d8d8]"
+          className="ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
         >
-          <SendIcon className="h-[19px] w-[19px]" />
+          <SendIcon className="h-[17.4px] w-[17.4px]" />
         </button>
       </form>
     </aside>

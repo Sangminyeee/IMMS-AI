@@ -15,8 +15,8 @@ export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
 }: CanvasStageEmptyOverlayProps) {
   const eyebrowClassName =
     tone === "summary"
-      ? "text-sm font-semibold uppercase tracking-[0.16em] text-[#a13ab8]"
-      : "text-sm font-semibold uppercase tracking-[0.16em] text-violet-600";
+      ? "text-sm font-semibold uppercase tracking-[0.16em] text-[#236cf3]"
+      : "text-sm font-semibold uppercase tracking-[0.16em] text-[#236cf3]";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
@@ -34,10 +34,10 @@ export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinition
   return (
     <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
       <div className="w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]">
-        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-violet-100 text-4xl">
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[#eef8ff] text-4xl">
           ⏳
         </div>
-        <p className="mt-5 text-sm font-semibold uppercase tracking-[0.18em] text-violet-700">
+        <p className="mt-5 text-sm font-semibold uppercase tracking-[0.18em] text-[#236cf3]">
           Problem Definition
         </p>
         <h3 className="mt-2 text-2xl font-semibold text-slate-900">
@@ -60,7 +60,7 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
             {[0, 1, 2, 3].map((item) => (
               <div
                 key={`loading-problem-${item}`}
-                className="h-16 w-16 animate-pulse rounded-2xl bg-violet-100 shadow-sm"
+                className="h-16 w-16 animate-pulse rounded-2xl bg-[#eef8ff] shadow-sm"
               />
             ))}
           </div>

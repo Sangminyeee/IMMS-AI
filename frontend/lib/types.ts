@@ -464,7 +464,8 @@ export interface CanvasEditPresencePayload {
     | "problem_structure_group"
     | "problem_structure_node"
     | "solution_topic"
-    | "solution_note";
+    | "solution_note"
+    | "summary_document";
   target_id: string;
   note_id?: string;
   status: "start" | "stop";
@@ -514,6 +515,7 @@ export interface CanvasFinalSolutionSummary {
   topics: CanvasFinalSolutionSummaryTopic[];
   items: CanvasFinalSolutionSummaryItem[];
   markdown: string;
+  document_blocks?: CanvasSummaryDocumentBlock[];
   document_status?: "empty" | "ready" | "edited" | string;
   generated_at?: string;
   used_llm?: boolean;
@@ -558,6 +560,19 @@ export interface CanvasSummaryStructuredDiscussionFlow {
   conclusion: string;
 }
 
+export interface CanvasSummaryStructuredFlowSection {
+  section_id: string;
+  group_id: string;
+  title: string;
+  time_range?: string;
+  trigger?: string;
+  narrative: string;
+  key_points: string[];
+  opinions: CanvasSummaryStructuredOpinion[];
+  settlement: string;
+  open_questions: string[];
+}
+
 export interface CanvasSummaryStructuredConclusionGroup {
   group_id: string;
   title: string;
@@ -566,12 +581,38 @@ export interface CanvasSummaryStructuredConclusionGroup {
   bullets: string[];
 }
 
+export type CanvasSummaryDocumentBlock =
+  | {
+      id: string;
+      type: "heading";
+      text: string;
+      level?: 1 | 2 | 3;
+    }
+  | {
+      id: string;
+      type: "paragraph";
+      text: string;
+    }
+  | {
+      id: string;
+      type: "bullets";
+      items: string[];
+    }
+  | {
+      id: string;
+      type: "table";
+      title?: string;
+      columns: string[];
+      rows: string[][];
+    };
+
 export interface CanvasSummaryStructuredDocument {
   meeting_overview: string;
   attendee_summary?: string;
   key_summary: string;
   idea_groups: CanvasSummaryStructuredIdeaGroup[];
   discussion_flows: CanvasSummaryStructuredDiscussionFlow[];
+  flow_sections: CanvasSummaryStructuredFlowSection[];
   pending_items: string[];
   conclusion: {
     title: string;
@@ -587,6 +628,7 @@ export interface CanvasSummaryDocumentResponse {
   generated_at: string;
   source_signature: string;
   markdown: string;
+  document_blocks?: CanvasSummaryDocumentBlock[];
   sections: CanvasSummaryDocumentSection[];
   structured?: CanvasSummaryStructuredDocument;
 }

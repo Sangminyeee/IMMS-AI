@@ -115,6 +115,7 @@ import type {
   CanvasProblemDefinitionGroup,
   CanvasProblemStructureState,
   CanvasRealtimeSyncPayload,
+  CanvasSummaryDocumentBlock,
   CanvasProblemDiscussionItem,
   CanvasWorkspaceStateResponse,
   CanvasWorkspaceItem,
@@ -688,6 +689,7 @@ export default function MeetingCanvasTab({
     createEmptyFinalSolutionSummary(),
   );
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
+  const [summaryDocumentDraftBlocks, setSummaryDocumentDraftBlocks] = useState<CanvasSummaryDocumentBlock[]>([]);
   const [summaryDocumentDraftMarkdown, setSummaryDocumentDraftMarkdown] = useState("");
   const [summaryDocumentDraftDirty, setSummaryDocumentDraftDirty] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
@@ -811,7 +813,10 @@ export default function MeetingCanvasTab({
       (localEditPresenceTarget.targetType === "problem_structure_group" &&
         editingProblemStructureGroupId === localEditPresenceTarget.targetId) ||
       (localEditPresenceTarget.targetType === "problem_structure_node" &&
-        editingProblemStructureNodeId === localEditPresenceTarget.targetId);
+        editingProblemStructureNodeId === localEditPresenceTarget.targetId) ||
+      (localEditPresenceTarget.targetType === "summary_document" &&
+        summaryDocumentEditMode &&
+        localEditPresenceTarget.targetId === "final");
 
     if (!stillEditing) {
       setLocalEditPresenceTarget(null);
@@ -821,6 +826,7 @@ export default function MeetingCanvasTab({
     editingProblemStructureGroupId,
     editingProblemStructureNodeId,
     localEditPresenceTarget,
+    summaryDocumentEditMode,
   ]);
 
   useEffect(() => {
@@ -2356,6 +2362,8 @@ export default function MeetingCanvasTab({
     handleGenerateSummaryDocument,
     handleRegenerateSummaryDocument,
     handleSaveSummaryDocument,
+    handleSetSummaryDocumentEditMode,
+    handleSummaryDocumentBlocksChange,
     handleSummaryDocumentMarkdownChange,
     handleToggleSummaryEvidence,
     summaryDocumentSaving,
@@ -2379,11 +2387,14 @@ export default function MeetingCanvasTab({
     setSelectedProblemGroupId,
     setStage,
     setSummaryDocumentDraftDirty,
+    setSummaryDocumentDraftBlocks,
     setSummaryDocumentDraftMarkdown,
     setSummaryDocumentEditMode,
     setSummaryDocumentPending,
     setSummaryEvidenceOpenGroupIds,
+    setLocalEditPresenceTarget,
     sharedSyncEnabled,
+    summaryDocumentDraftBlocks,
     summaryDocumentDraftDirty,
     summaryDocumentDraftMarkdown,
     summaryDocumentEditMode,
@@ -2407,7 +2418,8 @@ export default function MeetingCanvasTab({
         }
 
         const hasExistingSummaryDocument =
-          finalSummaryDocument.markdown.trim() && (finalSummaryDocument.sections || []).length > 0;
+          (finalSummaryDocument.markdown.trim() || (finalSummaryDocument.document_blocks || []).length > 0) &&
+          (finalSummaryDocument.sections || []).length > 0;
         if (!hasExistingSummaryDocument) {
           await handleGenerateSummaryDocument();
           return;
@@ -2451,6 +2463,7 @@ export default function MeetingCanvasTab({
       clearProblemStructureDrag,
       conclusionBatchBusy,
       finalSummaryDocument.markdown,
+      finalSummaryDocument.document_blocks,
       finalSummaryDocument.sections,
       flushProblemDiscussionBuffer,
       handleGenerateProblemDefinition,
@@ -2843,6 +2856,7 @@ export default function MeetingCanvasTab({
       meetingGoal: meetingGoalDraft.trim(),
       participants: canvasParticipants,
       finalSummaryDocument,
+      summaryDocumentDraftBlocks,
       summaryDocumentDraftMarkdown,
       summaryDocumentDraftDirty,
       summaryEligibleStructureGroups,
@@ -2882,10 +2896,11 @@ export default function MeetingCanvasTab({
     },
     surfaceSolutionHandlers: {
       onToggleSummaryEvidence: handleToggleSummaryEvidence,
-      onSetSummaryDocumentEditMode: setSummaryDocumentEditMode,
+      onSetSummaryDocumentEditMode: handleSetSummaryDocumentEditMode,
       onRegenerateSummaryDocument: handleRegenerateSummaryDocument,
       onCopyFinalSolutionMarkdown: handleCopyFinalSolutionMarkdown,
       onSaveSummaryDocument: handleSaveSummaryDocument,
+      onSummaryDocumentBlocksChange: handleSummaryDocumentBlocksChange,
       onSummaryDocumentMarkdownChange: handleSummaryDocumentMarkdownChange,
     },
     surfaceProblemHandlers: {
