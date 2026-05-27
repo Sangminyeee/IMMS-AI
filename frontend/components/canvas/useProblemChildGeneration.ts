@@ -52,12 +52,29 @@ export function useProblemChildGeneration<TGroup extends ProblemChildGenerationG
 
       setProblemChildGenerationPendingId(group.group_id);
       try {
+        const groupById = new Map(problemGroups.map((item) => [item.group_id, item]));
+        const resolveGroupDepth = (target: TGroup) => {
+          let depth = 0;
+          let cursor: TGroup | undefined = target;
+          const visited = new Set<string>();
+
+          while (cursor?.parent_group_id && !visited.has(cursor.group_id)) {
+            visited.add(cursor.group_id);
+            const parent = groupById.get(cursor.parent_group_id);
+            if (!parent) break;
+            depth += 1;
+            cursor = parent;
+          }
+
+          return depth;
+        };
+        const parentDepth = resolveGroupDepth(group);
         const result = await generateCanvasProblemTaxonomy({
           meeting_id: meetingId,
           meeting_topic: meetingTopicForAi,
           parent_group_id: group.group_id,
           parent_topic: group.topic,
-          parent_depth: group.depth || 0,
+          parent_depth: parentDepth,
           parent_evidence_utterance_ids: group.evidence_utterance_ids || [],
           existing_group_ids: problemGroups.map((item) => item.group_id),
           existing_groups: buildExistingGroupsPayload(problemGroups),
@@ -70,8 +87,8 @@ export function useProblemChildGeneration<TGroup extends ProblemChildGenerationG
           .filter((item) => !isDuplicateProblemTaxonomyGroup(item, problemGroups, group.group_id, group.topic))
           .map((item) => ({
             ...item,
-            parent_group_id: item.parent_group_id || group.group_id,
-            depth: Math.max(0, item.depth ?? (group.depth || 0) + 1),
+            parent_group_id: group.group_id,
+            depth: parentDepth + 1,
             status: "draft" as ProblemGroupStatus,
           }) as TGroup);
 

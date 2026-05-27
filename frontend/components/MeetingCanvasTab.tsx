@@ -2510,7 +2510,7 @@ export default function MeetingCanvasTab({
     () =>
       problemDefinitionPhase === "structure"
         ? ["structure-back", "structure-ai-group", "structure-add-group"]
-        : ["structure-start"],
+        : [],
     [problemDefinitionPhase],
   );
 

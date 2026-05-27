@@ -45,13 +45,12 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-note-composer-pt": "clamp(16px, 1.481vh, 21px)",
   "--canvas-note-composer-pb": "clamp(26px, 2.407vh, 35px)",
   "--canvas-note-list-pt": "clamp(29px, 2.685vh, 39px)",
-  "--canvas-note-card-height": "clamp(278px, 25.741vh, 371px)",
   "--canvas-note-card-gap": "clamp(12px, 1.111vh, 16px)",
   "--canvas-input-height": "clamp(33px, 3.056vh, 44px)",
   "--canvas-textarea-height": "clamp(85px, 7.87vh, 113px)",
   "--canvas-right-pad": "clamp(23px, 1.198vw, 31px)",
   "--canvas-right-header": "clamp(76px, 7.037vh, 101px)",
-  "--canvas-right-stage-bottom": "clamp(305px, 28.241vh, 407px)",
+  "--canvas-right-stage-bottom": "clamp(291px, 26.944vh, 388px)",
   "--canvas-right-ai-title-top": "clamp(332px, 30.741vh, 443px)",
   "--canvas-right-ai-status-top": "clamp(354px, 32.778vh, 472px)",
   "--canvas-right-assistant-top": "clamp(605px, 56.019vh, 807px)",
@@ -84,9 +83,11 @@ export type CanvasWorkspaceParticipant = {
   title?: string;
 };
 
-function stageLabel(stage: CanvasStage) {
+function stageLabel(stage: CanvasStage, problemDefinitionPhase: ProblemDefinitionPhase) {
   if (stage === "ideation") return "아이디어 발산";
-  if (stage === "problem-definition") return "문제정의";
+  if (stage === "problem-definition") {
+    return problemDefinitionPhase === "structure" ? "문제정의 · 2단계" : "문제정의 · 1단계";
+  }
   return "요약 및 정리";
 }
 
@@ -219,9 +220,11 @@ function RecordingWaveIcon({ className = "" }: { className?: string }) {
 
 function StageSteps({
   activeStage,
+  problemDefinitionPhase,
   onStageSelect,
 }: {
   activeStage: CanvasStage;
+  problemDefinitionPhase: ProblemDefinitionPhase;
   onStageSelect: (stage: CanvasStage) => void;
 }) {
   return (
@@ -244,7 +247,7 @@ function StageSteps({
             <span className={`grid h-[20.5px] w-[20.5px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
               {stageNumber(item)}
             </span>
-            <span className="ml-[8px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]">{stageLabel(item)}</span>
+            <span className="ml-[8px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]">{stageLabel(item, problemDefinitionPhase)}</span>
             {!active ? <ChevronRightIcon className="ml-auto h-[14px] w-[14px] text-[#90a1b9]" /> : null}
           </button>
         );
@@ -448,6 +451,9 @@ function PersonalNoteCard({
   draftBody: string;
   handlers: CanvasRightDrawerNoteHandlers;
 }) {
+  const bodyText = note.body.trim();
+  const editRows = Math.min(10, Math.max(3, draftBody.split(/\r\n|\r|\n/).length + 1));
+
   return (
     <article
       draggable={stage === "problem-definition" && !isEditing}
@@ -459,7 +465,7 @@ function PersonalNoteCard({
         handlers.onDragStart(note.id);
       }}
       onDragEnd={handlers.onDragEnd}
-      className={`h-[var(--canvas-note-card-height)] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
+      className={`min-h-[72px] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         {isEditing ? (
@@ -521,10 +527,15 @@ function PersonalNoteCard({
         <textarea
           value={draftBody}
           onChange={(event) => handlers.onDraftBodyChange(event.target.value)}
-          className="mt-3 h-[170px] w-full resize-none rounded-[8px] border border-[#cecccc] px-2 py-2 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none"
+          rows={editRows}
+          className="mt-3 min-h-[76px] w-full resize-y rounded-[8px] border border-[#cecccc] px-2 py-2 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none"
         />
+      ) : bodyText ? (
+        <p className="mt-[12px] whitespace-pre-wrap break-words text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982]">
+          {note.body}
+        </p>
       ) : (
-        <p className="mt-[12px] line-clamp-[14] text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982]">{note.body}</p>
+        <p className="mt-[8px] text-[10px] leading-[1.4] tracking-[-0.25px] text-[#a3aab5]">내용 없음</p>
       )}
     </article>
   );
@@ -622,13 +633,15 @@ function CurrentProblemDefinitionStagePanel({
   const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
 
   return (
-    <section className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[clamp(292px,27.037vh,389px)] z-10 text-left">
-      <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
-      <p className="mt-[8px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 - 1단계</p>
-      <p className="mt-[4px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
-        문제 후보를 검토하고, 필요한 문제를 선택해
+    <section className="absolute left-[var(--canvas-right-pad)] right-[clamp(17px,0.885vw,23px)] top-[clamp(308px,28.519vh,411px)] z-10 text-left">
+      <div className="flex items-start gap-[12px]">
+        <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
+        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 · 1단계</p>
+      </div>
+      <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+        문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
         <br />
-        2단계 구조화로 이동할 수 있습니다.
+        남은 후보는 모두 다음 단계로 이동합니다.
       </p>
       <button
         type="button"
@@ -636,7 +649,7 @@ function CurrentProblemDefinitionStagePanel({
           void problemHandlers.onStartProblemStructure();
         }}
         disabled={buttonDisabled}
-        className="mt-[13px] flex h-[33px] w-full items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
+        className="mt-[20px] flex h-[33px] w-full items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
       >
         {problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기"}
       </button>
@@ -676,7 +689,9 @@ function RightAiPanel({
     <aside className="relative h-full min-h-0 overflow-hidden border-l border-[#cecccc] bg-white">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute left-[var(--canvas-ai-bg-main-left)] top-[var(--canvas-ai-bg-main-top)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat"
+        className={`pointer-events-none absolute left-[var(--canvas-ai-bg-main-left)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat ${
+          showProblemStagePanel ? "top-[clamp(441px,40.833vh,588px)]" : "top-[var(--canvas-ai-bg-main-top)]"
+        }`}
         style={AI_GUIDE_BACKGROUND_STYLE}
       />
       <div
@@ -715,7 +730,11 @@ function RightAiPanel({
       <div className="absolute inset-x-0 top-[var(--canvas-right-header)] z-10 h-[calc(var(--canvas-right-stage-bottom)-var(--canvas-right-header))] border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] pt-[21px]">
         <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">회의 단계 이동</h3>
         <div className="mt-[21px]">
-          <StageSteps activeStage={header.view.stage} onStageSelect={header.handlers.onStageSelect} />
+          <StageSteps
+            activeStage={header.view.stage}
+            problemDefinitionPhase={problem.problemDefinitionPhase}
+            onStageSelect={header.handlers.onStageSelect}
+          />
         </div>
       </div>
 
@@ -723,9 +742,13 @@ function RightAiPanel({
         <CurrentProblemDefinitionStagePanel problem={problem} problemHandlers={problemHandlers} />
       ) : null}
 
+      {showProblemStagePanel ? (
+        <div className="absolute inset-x-0 top-[clamp(441px,40.833vh,588px)] z-10 h-px bg-[#dfdfdf]" />
+      ) : null}
+
       <div
         className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${
-          showProblemStagePanel ? "top-[clamp(439px,40.648vh,585px)]" : "top-[var(--canvas-right-ai-title-top)]"
+          showProblemStagePanel ? "top-[clamp(458px,42.407vh,611px)]" : "top-[var(--canvas-right-ai-title-top)]"
         }`}
       >
         <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
@@ -735,7 +758,7 @@ function RightAiPanel({
       </div>
       <p
         className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${
-          showProblemStagePanel ? "top-[clamp(461px,42.685vh,615px)]" : "top-[var(--canvas-right-ai-status-top)]"
+          showProblemStagePanel ? "top-[clamp(480px,44.444vh,640px)]" : "top-[var(--canvas-right-ai-status-top)]"
         }`}
       >
         {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중"}
@@ -745,7 +768,7 @@ function RightAiPanel({
         <div
           ref={quickAskScrollRef}
           className={`imms-overlay-scroll absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 max-h-[clamp(150px,13.889vh,200px)] space-y-2 overflow-y-auto text-left ${
-            showProblemStagePanel ? "top-[clamp(492px,45.556vh,656px)]" : "top-[clamp(384px,35.556vh,512px)]"
+            showProblemStagePanel ? "top-[clamp(511px,47.315vh,681px)]" : "top-[clamp(384px,35.556vh,512px)]"
           }`}
         >
           {recentMessages.map((message) => (
@@ -756,7 +779,11 @@ function RightAiPanel({
         </div>
       ) : null}
 
-      <div className="absolute inset-x-0 top-[var(--canvas-right-assistant-top)] z-10 text-center">
+      <div
+        className={`absolute inset-x-0 z-10 text-center ${
+          showProblemStagePanel ? "top-[clamp(682px,63.148vh,909px)]" : "top-[var(--canvas-right-assistant-top)]"
+        }`}
+      >
         <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
         <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
           아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />

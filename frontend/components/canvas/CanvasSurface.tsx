@@ -3,7 +3,6 @@
 import {
   Background,
   BackgroundVariant,
-  MiniMap,
   ReactFlow,
   type Edge,
   type Node,
@@ -137,61 +136,6 @@ export type CanvasSurfaceProps = {
 
 const EMPTY_EDGES: Edge[] = [];
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
-const CANVAS_FLOATING_STATUS_INACTIVE_CLASS_NAME =
-  "border-black/10 bg-[#eff0f6] text-[#4d4d4d] hover:bg-[#e3e5ee]";
-const PROBLEM_STATUSES: ProblemGroupStatus[] = ["draft", "review", "final"];
-
-function problemGroupStatusLabel(status: ProblemGroupStatus) {
-  if (status === "final") return "확정";
-  if (status === "review") return "검토 중";
-  return "초안";
-}
-
-function problemGroupStatusTone(status: ProblemGroupStatus) {
-  if (status === "final") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "review") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-slate-200 bg-slate-50 text-slate-600";
-}
-
-function CanvasFloatingStatusControls({
-  stage,
-  selectedProblemStatus,
-  onSetProblemGroupStatus,
-}: {
-  stage: CanvasStage;
-  selectedProblemStatus: ProblemGroupStatus | "";
-  onSetProblemGroupStatus: (status: ProblemGroupStatus) => void;
-}) {
-  const buttonClassName = (active: boolean, activeTone: string) =>
-    `rounded-[8px] border px-3 py-1.5 text-xs font-semibold leading-none transition ${
-      active ? activeTone : CANVAS_FLOATING_STATUS_INACTIVE_CLASS_NAME
-    }`;
-  if (stage === "ideation") return null;
-
-  if (stage === "problem-definition" && selectedProblemStatus) {
-    return (
-      <div className="pointer-events-none absolute left-1/2 top-[clamp(0.75rem,1.5vh,1rem)] z-[12] -translate-x-1/2 xl:left-[69%]">
-        <div className="pointer-events-auto flex items-center justify-center gap-1 rounded-[12px] border border-black/10 bg-white/95 p-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.08)] backdrop-blur">
-          {PROBLEM_STATUSES.map((status) => {
-            const active = selectedProblemStatus === status;
-            return (
-              <button
-                key={`canvas-floating-problem-status-${status}`}
-                type="button"
-                onClick={() => onSetProblemGroupStatus(status)}
-                className={buttonClassName(active, problemGroupStatusTone(status))}
-              >
-                {problemGroupStatusLabel(status)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
 
 function ProblemGroupingRationaleOverlay({
   title,
@@ -292,7 +236,6 @@ export const CanvasSurface = memo(function CanvasSurface({
     activeProblemGroupingRationale,
     activeProblemGroupingRationaleTitle,
     problemCanvasToolbarActions,
-    selectedProblemStatus,
   } = problem;
   const {
     onFlowInit,
@@ -321,17 +264,11 @@ export const CanvasSurface = memo(function CanvasSurface({
     getProblemToolbarActionLabel,
     isProblemToolbarActionActive,
     onProblemToolbarAction,
-    onSetProblemGroupStatus,
   } = problemHandlers;
 
   return (
     <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
       <div className="relative min-h-0 w-full flex-1">
-        <CanvasFloatingStatusControls
-          stage={stage}
-          selectedProblemStatus={selectedProblemStatus}
-          onSetProblemGroupStatus={onSetProblemGroupStatus}
-        />
         {stage === "ideation" || stage === "problem-definition" ? (
           <ReactFlow<Node, Edge>
             nodes={nodes}
@@ -370,14 +307,6 @@ export const CanvasSurface = memo(function CanvasSurface({
                 gap={28}
                 size={1}
                 variant={problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
-              />
-            ) : null}
-            {stage === "problem-definition" && problemDefinitionPhase !== "structure" ? (
-              <MiniMap
-                zoomable
-                pannable
-                maskColor="rgba(15, 23, 42, 0.08)"
-                nodeColor="#236cf3"
               />
             ) : null}
           </ReactFlow>
@@ -461,7 +390,7 @@ export const CanvasSurface = memo(function CanvasSurface({
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase !== "structure" ? (
+      {stage === "problem-definition" && problemDefinitionPhase !== "structure" && problemCanvasToolbarActions.length > 0 ? (
         <ProblemCanvasToolbar
           actions={problemCanvasToolbarActions}
           getActionLabel={getProblemToolbarActionLabel}
