@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { classNames } from "@/lib/classNames";
 import { BellIcon, PlusIcon, SearchIcon } from "./DashboardIcons";
 import {
-  formatDashboardDateTime,
+  formatDashboardCompactDateTime,
   getMeetingActionLabel,
   getMeetingSortDate,
   getMeetingStatusLabel,
@@ -58,152 +58,158 @@ export function DashboardMeetingsView({
   }, [meetings, searchQuery, statusFilter]);
 
   return (
-    <div className="moa-dashboard-type min-h-full bg-[var(--moa-surface)] pb-16">
-      <section className="relative ml-[clamp(11px,0.71vw,20px)] mt-[clamp(12px,0.74vw,21px)] min-h-[clamp(458px,28.63vw,811px)] overflow-hidden rounded-tl-[clamp(27px,1.66vw,47px)] bg-[linear-gradient(104deg,var(--moa-hero-start)_1%,var(--moa-hero-end)_87%)]">
-        <div className="absolute left-[clamp(83px,5.15vw,146px)] top-[clamp(50px,3.14vw,89px)]">
-          <h1 className="moa-dt-hero">
-            <span className="block">오늘의 회의를</span>
-            <span className="block">하나의 흐름으로 정리하세요</span>
-          </h1>
-        </div>
+    <div className="moa-dashboard-type relative h-full overflow-hidden bg-[var(--moa-surface)]">
+      <section
+        className="absolute left-[19px] right-0 top-[19px] h-[550px] overflow-hidden rounded-tl-[31.853px] bg-[linear-gradient(104deg,#fcfcfc_1%,#f0f0f2_87%)] bg-[length:100%_100%] bg-no-repeat"
+        style={{ backgroundImage: "url('/figma-assets/dashboard-hero-blue.png')" }}
+      >
+        <h1 className="moa-dt-hero absolute left-[98.95px] top-[60.32px] whitespace-nowrap">
+          <span className="block">
+            <span className="text-[#e9fffc]">오늘의 회의</span>를
+          </span>
+          <span className="block">
+            <span className="text-[#e9fffc]">하나의 흐름</span>으로 정리하세요
+          </span>
+        </h1>
 
-        <div className="absolute left-[clamp(83px,5.15vw,146px)] right-[clamp(250px,15.6vw,442px)] top-[clamp(118px,7.38vw,209px)] h-px bg-[linear-gradient(90deg,var(--moa-primary)_0%,var(--moa-placeholder-text)_100%)] opacity-70" />
+        <div className="absolute left-[98.95px] right-[67px] top-[141.65px] h-px bg-white/60" />
 
         <button
           type="button"
           onClick={onCreateMeeting}
-          className="absolute left-[clamp(874px,54.54vw,1545px)] top-[clamp(70px,4.34vw,123px)] inline-flex h-[64px] w-[202px] items-center justify-start rounded-[68px] bg-[var(--moa-primary)] pl-[22px] transition hover:bg-[var(--moa-primary-hover)]"
+          className="moa-dashboard-primary-button absolute right-[232px] top-[79px] inline-flex h-[43px] w-[143px] items-center justify-center rounded-[46.085px] px-[12px] text-white transition"
         >
-          <PlusIcon className="mr-[7px] h-[26px] w-[26px]" />
-          <span className="moa-dt-main-cta block">새 회의 만들기</span>
+          <PlusIcon className="h-[17.621px] w-[17.621px] shrink-0 text-white" />
+          <span className="moa-dt-main-cta ml-[5px] block whitespace-nowrap text-white">새 회의 만들기</span>
         </button>
 
-        <div className="absolute left-[clamp(83px,5.15vw,146px)] top-[clamp(222px,13.9vw,394px)]">
-          <div className="mb-[clamp(5px,0.32vw,9px)] ml-[clamp(9px,0.56vw,16px)] flex items-center gap-[clamp(4px,0.25vw,7px)]">
-            <BellIcon className="h-[39px] w-[39px] text-[var(--moa-primary)]" />
-            <h2 className="moa-dt-section-title">
-              <span className="block">예정된 회의</span>
-            </h2>
-          </div>
+        <div className="absolute left-[103.69px] top-[267.03px] flex items-start text-white">
+          <h2 className="text-[20px] font-bold leading-[28px] tracking-[-0.05px]">예정된 회의</h2>
+          <BellIcon className="ml-[10.31px] mt-[1.97px] h-[23.043px] w-[23.043px] shrink-0 text-white" />
+        </div>
 
+        <div className="absolute left-[99.37px] top-[311.8px] flex gap-[35.92px]">
           {loading ? (
             <UpcomingSkeleton />
           ) : upcomingMeetings.length === 0 ? (
-            <div className="flex h-[282px] w-[577px] items-center rounded-[29px] bg-[var(--moa-surface)] px-[33px] shadow-[0_12px_22px_rgba(143,143,143,0.08)]">
-              <p className="text-[20px] font-semibold text-[var(--moa-disabled-text)]">
-                <span className="block">예정된 회의가 없습니다.</span>
-              </p>
+            <div className="flex h-[191.119px] w-[391.048px] items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
+              <p className="text-[14px] font-semibold text-[var(--moa-disabled-text)]">예정된 회의가 없습니다.</p>
             </div>
           ) : (
-            <div className="relative -mx-2 overflow-hidden">
-              <div className="flex max-w-[calc(100vw-var(--dashboard-sidebar)-clamp(120px,7.5vw,212px))] gap-[53px] overflow-x-auto px-2 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {upcomingMeetings.map((meeting) => (
-                  <UpcomingMeetingCard key={meeting.id} meeting={meeting} onJoinMeeting={onJoinMeeting} />
-                ))}
-              </div>
-              <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[110px] bg-gradient-to-r from-white/0 to-white lg:block" />
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="pl-[clamp(94px,5.86vw,166px)] pr-[clamp(90px,5.58vw,158px)] pt-[clamp(29px,1.84vw,52px)]">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <h2 className="moa-dt-section-title">
-              <span className="block">전체 회의 목록</span>
-            </h2>
-            <div className="flex flex-wrap gap-[clamp(4px,0.28vw,8px)]">
-              {statusFilters.map((filter) => (
-                <button
-                  key={filter.value}
-                  type="button"
-                  onClick={() => onStatusFilterChange(filter.value)}
-                  className={classNames(
-                    "moa-dt-filter inline-flex h-8 items-center rounded-lg px-3 transition",
-                    statusFilter === filter.value
-                      ? "bg-[var(--moa-filter-selected-bg)] text-[var(--moa-filter-selected-text)]"
-                      : "bg-[var(--moa-surface-soft)] text-[var(--moa-filter-text)] hover:bg-[var(--moa-filter-hover)]",
-                  )}
-                >
-                  {filter.value === "all" && statusFilter === "all" ? <span className="mr-1.5 text-[13px]">✓</span> : null}
-                  <span className="block">{filter.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <label className="flex h-[45px] w-[223px] items-center rounded-full border border-[var(--moa-border-soft)] bg-[var(--moa-surface)] px-4 text-[var(--moa-text-body)]">
-            <input
-              value={searchQuery}
-              onChange={(event) => onSearchQueryChange(event.target.value)}
-              placeholder="Search"
-              className="moa-dt-search-input min-w-0 flex-1 bg-transparent text-[var(--moa-text-strong)] outline-none"
-            />
-            <SearchIcon className="ml-2 h-4 w-4 shrink-0 text-[var(--moa-text)]" />
-          </label>
-        </div>
-
-        <div className="mt-[clamp(31px,1.94vw,55px)] space-y-[clamp(5px,0.32vw,9px)]">
-          {loading ? (
-            <MeetingRowsSkeleton />
-          ) : filteredMeetings.length === 0 ? (
-            <div className="flex h-[128px] items-center justify-center rounded-[29px] bg-[var(--moa-surface-muted)] px-6 text-center">
-              <p className="text-[20px] font-semibold text-[var(--moa-disabled-text)]">
-                <span className="block">
-                  {meetings.length === 0 ? "아직 생성된 회의가 없습니다." : "조건에 맞는 회의가 없습니다."}
-                </span>
-              </p>
-            </div>
-          ) : (
-            filteredMeetings.map((meeting) => (
-              <MeetingListRow
+            upcomingMeetings.map((meeting, index) => (
+              <UpcomingMeetingCard
                 key={meeting.id}
+                featured={index === 0}
                 meeting={meeting}
                 onJoinMeeting={onJoinMeeting}
-                onOpenMeetingResult={onOpenMeetingResult}
               />
             ))
           )}
         </div>
+
+        <div className="pointer-events-none absolute right-0 top-[311.12px] h-[191.797px] w-[107.081px] bg-gradient-to-r from-white/0 to-white backdrop-blur-[1.355px]" />
       </section>
+
+      <h2 className="moa-dt-section-title absolute left-[118.37px] top-[599.18px] whitespace-nowrap">
+        전체 회의 목록
+      </h2>
+
+      <div className="absolute left-[120.4px] top-[642.55px] flex items-center gap-[5.422px]">
+        {statusFilters.map((filter) => {
+          const active = statusFilter === filter.value;
+          return (
+            <button
+              key={filter.value}
+              type="button"
+              onClick={() => onStatusFilterChange(filter.value)}
+              className={classNames(
+                "moa-dt-filter inline-flex h-[26px] items-center justify-center rounded-[6px] px-[8px] transition",
+                active
+                  ? "moa-dt-filter-active gap-[5px] bg-[var(--moa-filter-selected-bg)] text-[var(--moa-filter-selected-text)]"
+                  : "bg-[var(--moa-surface-soft)] text-[var(--moa-filter-text)] hover:bg-[var(--moa-filter-hover)] hover:text-[var(--moa-dashboard-action-text)]",
+              )}
+            >
+              {active ? <span className="text-[11.5px] leading-none text-white">✓</span> : null}
+              <span className={classNames("block leading-none", active ? "text-white" : "")}>{filter.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <label className="absolute right-[107.08px] top-[647.98px] flex h-[27.265px] w-[151.133px] items-center rounded-full border-[0.678px] border-[var(--moa-border-soft)] bg-white px-[10.844px] py-[8.133px] text-[var(--moa-text-body)]">
+        <input
+          value={searchQuery}
+          onChange={(event) => onSearchQueryChange(event.target.value)}
+          placeholder="Search"
+          className="moa-dt-search-input min-w-0 flex-1 bg-transparent text-[var(--moa-text-strong)] outline-none"
+        />
+        <SearchIcon className="ml-[5.422px] h-[10.844px] w-[10.844px] shrink-0 text-[var(--moa-text)]" />
+      </label>
+
+      <div className="imms-overlay-scroll absolute bottom-0 left-[118.37px] right-[107.08px] top-[701.52px] space-y-[6.1px] overflow-y-auto pb-4 pr-1">
+        {loading ? (
+          <MeetingRowsSkeleton />
+        ) : filteredMeetings.length === 0 ? (
+          <div className="flex h-[88px] items-center justify-center rounded-[19.654px] bg-[var(--moa-surface-muted)] px-6 text-center">
+            <p className="text-[13px] font-semibold text-[var(--moa-disabled-text)]">
+              {meetings.length === 0 ? "아직 생성된 회의가 없습니다." : "조건에 맞는 회의가 없습니다."}
+            </p>
+          </div>
+        ) : (
+          filteredMeetings.map((meeting) => (
+            <MeetingListRow
+              key={meeting.id}
+              meeting={meeting}
+              onJoinMeeting={onJoinMeeting}
+              onOpenMeetingResult={onOpenMeetingResult}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }
 
 function UpcomingMeetingCard({
+  featured,
   meeting,
   onJoinMeeting,
 }: {
+  featured: boolean;
   meeting: DashboardMeeting;
   onJoinMeeting: (meetingId: string) => void;
 }) {
   const tone = getMeetingStatusTone(meeting.status);
 
   return (
-    <article className="flex h-[282px] w-[577px] shrink-0 flex-col rounded-[29px] bg-[var(--moa-surface)] px-[33px] py-[25px] shadow-[0_22px_22px_rgba(143,143,143,0.09),0_1px_3px_rgba(143,143,143,0.1)]">
-      <h3 className="moa-dt-card-title truncate">
-        <span className="block truncate">{meeting.title}</span>
+    <article
+      className={classNames(
+        "relative h-[191.119px] w-[391.048px] shrink-0 overflow-hidden rounded-[19.654px] bg-white",
+        featured
+          ? "border-[0.949px] border-[rgba(19,127,188,0.5)] shadow-[21.01px_92.849px_26.431px_rgba(138,204,255,0),13.555px_59.64px_24.398px_rgba(138,204,255,0.01),7.455px_33.209px_20.332px_rgba(138,204,255,0.05),3.389px_14.91px_14.91px_rgba(138,204,255,0.09),0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]"
+          : "border-[0.678px] border-[#b5b5b5] shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1),0_1.355px_2.711px_-1.355px_rgba(23,23,23,0.06)]",
+      )}
+    >
+      <h3 className="moa-dt-card-title absolute left-[21.42px] top-[15.99px] max-w-[330px] truncate whitespace-nowrap">
+        {meeting.title}
       </h3>
-      <div className="mt-auto flex items-center justify-between gap-4">
-        <p className="moa-dt-card-date truncate">
-          <span className="block truncate">{formatDashboardDateTime(getMeetingSortDate(meeting))}</span>
-        </p>
-        <button
-          type="button"
-          onClick={() => onJoinMeeting(meeting.id)}
-          className={classNames(
-            "inline-flex h-16 w-[210px] items-center justify-center rounded-full px-10 transition",
-            tone === "active"
-              ? "border-2 border-white bg-[var(--moa-primary-border)] text-white hover:bg-[var(--moa-primary)]"
-              : "border-2 border-[var(--moa-primary-border)] bg-[var(--moa-surface)] text-[var(--moa-primary-border)] hover:bg-[var(--moa-primary-soft)]",
-          )}
-        >
-          <span className="moa-dt-card-cta block">
-            {getUpcomingMeetingActionLabel(meeting.status)}
-          </span>
-        </button>
-      </div>
+      <p className="moa-dt-card-date absolute left-[21.42px] top-[127.82px] max-w-[160px] truncate whitespace-nowrap">
+        {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
+      </p>
+      <button
+        type="button"
+        onClick={() => onJoinMeeting(meeting.id)}
+        className={classNames(
+          "absolute left-[264.04px] top-[133.24px] inline-flex h-[33.213px] w-[98.256px] items-center justify-center rounded-[54.896px] transition",
+          featured || tone === "active"
+            ? "moa-dashboard-primary-button border-0 text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)]"
+            : "border-[0.949px] border-[var(--moa-dashboard-outline)] bg-white text-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)]",
+        )}
+      >
+        <span className={classNames("moa-dt-card-cta block whitespace-nowrap", featured || tone === "active" ? "moa-dt-card-cta-strong text-white" : "text-[var(--moa-dashboard-outline)]")}>
+          {getUpcomingMeetingActionLabel(meeting.status)}
+        </span>
+      </button>
     </article>
   );
 }
@@ -218,48 +224,49 @@ function MeetingListRow({
   onOpenMeetingResult: (meeting: DashboardMeeting) => void;
 }) {
   const completed = isCompletedMeeting(meeting.status);
+  const tone = getMeetingStatusTone(meeting.status);
 
   return (
-    <div className="grid h-16 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 rounded-[29px] bg-[var(--moa-surface-muted)] px-[18px] transition hover:bg-[var(--moa-hover-muted)]">
+    <div className="relative h-[43.375px] w-full overflow-hidden rounded-[19.654px] bg-[var(--moa-surface-muted)] transition hover:bg-[var(--moa-hover-muted)]">
       <span
         className={classNames(
-          "inline-flex h-[41px] min-w-[67px] items-center justify-center rounded-full border border-[var(--moa-border)] px-[21px] text-white",
-          completed ? "bg-[var(--moa-status-completed)]" : getMeetingStatusTone(meeting.status) === "active" ? "bg-[var(--moa-status-active)]" : "bg-[var(--moa-status-scheduled)]",
+          "absolute left-[12.88px] top-[8.13px] inline-flex h-[27.787px] min-w-[45.408px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-border)] px-[8.7px] text-white",
+          completed ? "bg-[var(--moa-status-completed)]" : tone === "active" ? "bg-[var(--moa-status-active)]" : "bg-[var(--moa-status-scheduled)]",
         )}
       >
-        <span className="moa-dt-pill-text block text-white">{getMeetingStatusLabel(meeting.status)}</span>
+        <span className="moa-dt-pill-text block whitespace-nowrap text-white">{getMeetingStatusLabel(meeting.status)}</span>
       </span>
 
       <button
         type="button"
         onClick={() => (completed ? onOpenMeetingResult(meeting) : onJoinMeeting(meeting.id))}
-        className="grid min-w-0 grid-cols-[minmax(0,max-content)_auto_minmax(0,1fr)] items-center gap-4 text-left"
+        className="absolute inset-y-0 left-[71.16px] right-[170px] flex min-w-0 items-center text-left"
       >
-        <span className="moa-dt-row-title truncate">
-          <span className="block truncate">{meeting.title}</span>
+        <span className="moa-dt-row-title max-w-[min(780px,45vw)] truncate whitespace-nowrap">
+          {meeting.title}
         </span>
-        <span className="h-[29px] w-px bg-[var(--moa-row-divider)]" />
-        <span className="moa-dt-row-date truncate">
-          <span className="block truncate">{formatDashboardDateTime(getMeetingSortDate(meeting))}</span>
+        <span className="mx-[12px] h-[19.654px] w-px shrink-0 bg-[var(--moa-row-divider)]" />
+        <span className="moa-dt-row-date shrink-0 whitespace-nowrap">
+          {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
         </span>
       </button>
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="absolute right-[20.67px] top-[8.13px] flex items-center gap-[8px]">
         {completed ? (
           <button
             type="button"
             onClick={() => onOpenMeetingResult(meeting)}
-            className="inline-flex h-[41px] items-center justify-center rounded-full border border-[var(--moa-border)] bg-[var(--moa-result-button)] px-[21px] text-white transition hover:bg-[var(--moa-result-button-hover)]"
+            className="inline-flex h-[27.78px] min-w-[70.973px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-result-button)] bg-[var(--moa-result-button)] px-[14.233px] text-white transition hover:bg-[var(--moa-result-button-hover)]"
           >
-            <span className="moa-dt-pill-text block text-white">결과 보기</span>
+            <span className="moa-dt-row-action-text moa-dt-row-action-text-strong block whitespace-nowrap">결과 보기</span>
           </button>
         ) : null}
         <button
           type="button"
           onClick={() => onJoinMeeting(meeting.id)}
-          className="group inline-flex h-[41px] min-w-[103px] items-center justify-center rounded-full border border-[var(--moa-border)] bg-[var(--moa-surface)] px-[21px] text-[var(--moa-control-text)] transition hover:bg-[var(--moa-primary-soft)] hover:text-[var(--moa-primary)]"
+          className="group inline-flex h-[27.78px] min-w-[69.467px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-dashboard-action-border)] bg-white px-[14.233px] text-[var(--moa-dashboard-action-text)] transition hover:border-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)] hover:text-[var(--moa-dashboard-outline)]"
         >
-          <span className="moa-dt-pill-text block text-[var(--moa-control-text)] transition group-hover:text-[var(--moa-primary)]">{getMeetingActionLabel(meeting.status)}</span>
+          <span className="moa-dt-row-action-text block whitespace-nowrap transition group-hover:text-[var(--moa-dashboard-outline)]">{getMeetingActionLabel(meeting.status)}</span>
         </button>
       </div>
     </div>
@@ -268,22 +275,22 @@ function MeetingListRow({
 
 function UpcomingSkeleton() {
   return (
-    <div className="flex gap-[53px] overflow-hidden">
+    <>
       {Array.from({ length: 3 }).map((_, index) => (
         <div
           key={index}
-          className="h-[282px] w-[577px] shrink-0 animate-pulse rounded-[29px] bg-white/80 shadow-[0_12px_22px_rgba(143,143,143,0.08)]"
+          className="h-[191.119px] w-[391.048px] shrink-0 animate-pulse rounded-[19.654px] bg-white/90 shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1)]"
         />
       ))}
-    </div>
+    </>
   );
 }
 
 function MeetingRowsSkeleton() {
   return (
     <>
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-16 animate-pulse rounded-[29px] bg-[var(--moa-surface-muted)]" />
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div key={index} className="h-[43.375px] animate-pulse rounded-[19.654px] bg-[var(--moa-surface-muted)]" />
       ))}
     </>
   );

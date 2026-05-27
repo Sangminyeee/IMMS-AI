@@ -41,15 +41,15 @@ export function DashboardCreateMeetingDialog({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-[44px] min-w-[112px] items-center justify-center rounded-full border border-[var(--moa-border-soft)] bg-white px-5 text-[15px] font-bold text-[var(--moa-text-body)] transition hover:bg-[var(--moa-surface-muted)]"
+            className="inline-flex h-[44px] min-w-[112px] items-center justify-center rounded-full border border-[var(--moa-dashboard-action-border)] bg-white px-5 text-[15px] font-medium text-[var(--moa-dashboard-action-text)] transition hover:border-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)] hover:text-[var(--moa-dashboard-outline)]"
           >
-            <span className="block text-[15px] font-bold leading-normal tracking-normal text-[var(--moa-text-body)]">취소</span>
+            <span className="block text-[15px] font-medium leading-normal tracking-normal">취소</span>
           </button>
           <button
             type="button"
             onClick={onCreate}
             disabled={!meetingTitle.trim()}
-            className="inline-flex h-[44px] min-w-[112px] items-center justify-center rounded-full bg-[var(--moa-primary)] px-5 text-[15px] font-bold text-white transition hover:bg-[var(--moa-primary-hover)] disabled:cursor-not-allowed disabled:bg-[#d8d8d8]"
+            className="moa-dashboard-primary-button inline-flex h-[44px] min-w-[112px] items-center justify-center rounded-full px-5 text-[15px] font-bold text-white transition disabled:cursor-not-allowed disabled:bg-none disabled:bg-[#d8d8d8]"
           >
             <span className="block text-[15px] font-bold leading-normal tracking-normal text-white">시작</span>
           </button>

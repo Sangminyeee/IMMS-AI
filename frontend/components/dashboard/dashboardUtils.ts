@@ -78,3 +78,26 @@ export function formatDashboardDateTime(value?: string) {
     .replace(/\. /g, ".")
     .replace(/\.$/, "");
 }
+
+export function formatDashboardCompactDateTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+
+  const datePart = new Intl.DateTimeFormat("ko-KR", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(date)
+    .replace(/\. /g, ".")
+    .replace(/\.$/, "");
+
+  const timePart = new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+  }).format(date);
+
+  return `${datePart} ${timePart}`;
+}
