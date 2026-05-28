@@ -117,11 +117,36 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
     .slice(0, IDEATION_KEYWORD_MAX_TOTAL_BUBBLES);
   const labelById = new Map(visibleBubbles.map((bubble) => [bubble.id, bubble.label] as const));
   const maxCount = Math.max(1, ...visibleBubbles.map((bubble) => Number(bubble.count || 1)));
+  const durableCandidates = visibleBubbles.filter((bubble) => {
+    const kind = normalizeIdeationKeywordBubbleKind(bubble.kind);
+    return !bubble.off_topic && kind !== "off_topic";
+  });
+  const durableTopCount = Math.max(1, Math.ceil(durableCandidates.length * 0.2));
+  const durableIds = new Set([
+    ...[...durableCandidates]
+      .sort((left, right) =>
+        Math.max(1, Number(right.count || 1)) - Math.max(1, Number(left.count || 1)) ||
+        clampNumber(Number(right.importance ?? 0.6), 0, 1) - clampNumber(Number(left.importance ?? 0.6), 0, 1) ||
+        left.label.localeCompare(right.label),
+      )
+      .slice(0, durableTopCount)
+      .map((bubble) => bubble.id),
+    ...[...durableCandidates]
+      .sort((left, right) =>
+        clampNumber(Number(right.importance ?? 0.6), 0, 1) - clampNumber(Number(left.importance ?? 0.6), 0, 1) ||
+        Math.max(1, Number(right.count || 1)) - Math.max(1, Number(left.count || 1)) ||
+        left.label.localeCompare(right.label),
+      )
+      .slice(0, durableTopCount)
+      .map((bubble) => bubble.id),
+  ]);
 
   return visibleBubbles.map((bubble) => {
     const kind = normalizeIdeationKeywordBubbleKind(bubble.kind);
     const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
     const activity = clampNumber(Number(bubble.activity ?? (bubble.display_state === "dimmed" ? 0.22 : 0.72)), 0, 1);
+    const durable = durableIds.has(bubble.id);
+    const layoutZone = bubble.layout_zone || (bubble.display_state === "dimmed" ? "peripheral" : "default");
     return {
       id: bubble.id,
       text: bubble.label,
@@ -138,7 +163,8 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
       offTopicReason: bubble.off_topic_reason || "",
       anchorText: labelById.get(bubble.anchor_id || "") || "",
       activity,
-      layoutZone: bubble.layout_zone || (bubble.display_state === "dimmed" ? "peripheral" : "default"),
+      layoutZone: durable && layoutZone === "default" ? "core" : layoutZone,
+      durable,
     };
   });
 }

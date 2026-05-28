@@ -37,6 +37,8 @@ import {
   CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP,
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
   CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH,
+  CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT,
+  CANVAS_IDEATION_BUBBLE_PLANE_WIDTH,
   buildStableIdeationBubbleVisuals,
   getIdeationBubbleEnterSettleDelayMs,
   settleEnteringIdeationBubbleVisuals,
@@ -763,6 +765,7 @@ export default function MeetingCanvasTab({
   } = useCanvasEndMeetingState();
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef } = useCanvasFlowRefs();
+  const ideationViewportCenteredKeyRef = useRef("");
   const autoProblemDefinitionRef = useRef(false);
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
@@ -2737,9 +2740,44 @@ export default function MeetingCanvasTab({
     setSelectedAgendaId,
   });
 
+  const centerIdeationViewportOnce = useCallback((instance: ReactFlowInstance<Node, Edge>) => {
+    if (stage !== "ideation") return;
+    const viewportKey = `${meetingId}:ideation`;
+    if (ideationViewportCenteredKeyRef.current === viewportKey) return;
+    ideationViewportCenteredKeyRef.current = viewportKey;
+
+    window.requestAnimationFrame(() => {
+      const bounds = canvasSurfaceRef.current?.getBoundingClientRect();
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return;
+      const zoom = Math.min(
+        1,
+        Math.max(
+          0.45,
+          Math.min(
+            bounds.width / (CANVAS_IDEATION_BUBBLE_PLANE_WIDTH + 160),
+            bounds.height / (CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT + 120),
+          ),
+        ),
+      );
+      void instance.setViewport(
+        {
+          x: Math.round(bounds.width / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2) * zoom),
+          y: Math.round(bounds.height / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2) * zoom),
+          zoom,
+        },
+        { duration: 0 },
+      );
+    });
+  }, [canvasSurfaceRef, meetingId, stage]);
+
   const handleFlowInitStable = useStableEvent((instance: ReactFlowInstance<Node, Edge>) => {
     flowRef.current = instance;
+    centerIdeationViewportOnce(instance);
   });
+  useEffect(() => {
+    if (!flowRef.current) return;
+    centerIdeationViewportOnce(flowRef.current);
+  }, [centerIdeationViewportOnce, flowRef]);
   const handleCanvasNodeClickStable = useStableEvent(handleCanvasNodeClick);
   const handleCanvasPaneClickStable = useStableEvent(handleCanvasPaneClick);
   const handleNodesChangeStable = useStableEvent(onNodesChange);
