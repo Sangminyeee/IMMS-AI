@@ -160,6 +160,47 @@ const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
 
+function buildMeetingShareUrl(meetingId: string) {
+  if (typeof window === "undefined" || !meetingId) return "";
+  const url = new URL("/", window.location.origin);
+  url.searchParams.set("meeting_id", meetingId);
+  return url.toString();
+}
+
+async function copyTextToClipboard(text: string) {
+  if (!text) return false;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the selection-based copy path for browsers that block Clipboard API.
+  }
+
+  if (typeof document === "undefined") return false;
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function clipClientText(value: unknown, limit: number) {
   const text = String(value || "").trim();
   if (text.length <= limit) return text;
@@ -2835,6 +2876,20 @@ export default function MeetingCanvasTab({
   const handleCloseQuickAsk = useCallback(() => {
     setQuickAskOpen(false);
   }, [setQuickAskOpen]);
+  const handleShareMeetingLink = useCallback(async () => {
+    const shareUrl = buildMeetingShareUrl(meetingId);
+    if (!shareUrl) {
+      setActivityMessage("복사할 회의 링크가 없습니다.");
+      return;
+    }
+
+    const copied = await copyTextToClipboard(shareUrl);
+    setActivityMessage(
+      copied
+        ? "회의 링크를 복사했습니다."
+        : "브라우저 권한 문제로 회의 링크 복사에 실패했습니다.",
+    );
+  }, [meetingId, setActivityMessage]);
   const handleRightDrawerResizeStart = useMemo(
     () => startPanelResize("right"),
     [startPanelResize],
@@ -3042,6 +3097,7 @@ export default function MeetingCanvasTab({
       onDraftChange: setQuickAskDraft,
       onSubmit: handleSubmitQuickAsk,
     },
+    onShareMeetingLink: handleShareMeetingLink,
   });
   const endMeetingDialogProps = useCanvasEndMeetingDialogModels({
     view: {

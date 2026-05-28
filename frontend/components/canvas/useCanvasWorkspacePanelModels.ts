@@ -48,6 +48,7 @@ export function useCanvasWorkspacePanelModels({
   rightDrawerNoteHandlers: incomingRightDrawerNoteHandlers,
   quickAskState: incomingQuickAskState,
   quickAskHandlers: incomingQuickAskHandlers,
+  onShareMeetingLink,
 }: UseCanvasWorkspacePanelModelsInput): CanvasWorkspacePanelsProps {
   const surfaceView = useMemo<CanvasSurfaceViewState>(() => ({
     stage: incomingSurfaceView.stage,
@@ -334,11 +335,13 @@ export function useCanvasWorkspacePanelModels({
     rightDrawerNoteHandlers,
     quickAskState,
     quickAskHandlers,
+    onShareMeetingLink,
   }), [
     canvasSurfaceRef,
     header,
     isDesktopLayout,
     keywordSummary,
+    onShareMeetingLink,
     participants,
     quickAskHandlers,
     quickAskState,

@@ -775,6 +775,7 @@ function RightAiPanel({
   problemHandlers,
   quickAskState,
   quickAskHandlers,
+  onShareMeetingLink,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
@@ -782,6 +783,7 @@ function RightAiPanel({
   problemHandlers: CanvasSurfaceProblemHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
+  onShareMeetingLink: () => void;
 }) {
   const {
     open: quickAskOpen,
@@ -819,7 +821,7 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button type="button" className={panelButtonClasses.share} aria-label="회의 공유">
+        <button type="button" className={panelButtonClasses.share} aria-label="회의 공유" onClick={onShareMeetingLink}>
           <ShareIcon className="h-[13px] w-[13px]" />
           <span className={panelButtonTextClasses.share}>공유</span>
         </button>
@@ -939,6 +941,7 @@ export type CanvasWorkspacePanelsProps = {
   rightDrawerNoteHandlers: CanvasRightDrawerNoteHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
+  onShareMeetingLink: () => void;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
@@ -959,6 +962,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   rightDrawerNoteHandlers,
   quickAskState,
   quickAskHandlers,
+  onShareMeetingLink,
 }: CanvasWorkspacePanelsProps) {
   return (
     <div
@@ -996,6 +1000,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
         problemHandlers={surfaceProblemHandlers}
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
+        onShareMeetingLink={onShareMeetingLink}
       />
     </div>
   );

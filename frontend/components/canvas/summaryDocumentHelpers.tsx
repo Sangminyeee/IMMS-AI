@@ -51,6 +51,35 @@ function normalizeStringList(value: unknown, limit: number) {
     : [];
 }
 
+const MAX_SUMMARY_BULLET_INDENT = 3;
+
+function getSummaryBulletIndent(item: string) {
+  const match = item.match(/^\t*/);
+  return Math.min(MAX_SUMMARY_BULLET_INDENT, match?.[0].length || 0);
+}
+
+function getSummaryBulletText(item: string) {
+  return item.replace(/^\t+/, "").trim();
+}
+
+function withSummaryBulletIndent(text: string, indent: number) {
+  return `${"\t".repeat(Math.max(0, Math.min(MAX_SUMMARY_BULLET_INDENT, indent)))}${text.trim()}`;
+}
+
+function normalizeBulletStringList(value: unknown, limit: number) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => {
+          if (typeof item !== "string") return "";
+          const indent = getSummaryBulletIndent(item);
+          const text = getSummaryBulletText(item);
+          return text ? withSummaryBulletIndent(text, indent) : "";
+        })
+        .filter(Boolean)
+        .slice(0, limit)
+    : [];
+}
+
 const SUMMARY_PLACEHOLDER_TEXTS = new Set([
   "...",
   "…",
@@ -229,7 +258,7 @@ function filterMeaningfulSummaryTableRows(rows: CanvasSummaryTableRow[], columns
 
 function summaryBlockHasContent(block: CanvasSummaryDocumentBlock) {
   if (block.type === "paragraph") return !isSummaryPlaceholderText(block.text);
-  if (block.type === "bullets") return block.items.some((item) => !isSummaryPlaceholderText(item));
+  if (block.type === "bullets") return block.items.some((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
   if (block.type === "table") return filterMeaningfulSummaryTableRows(block.rows, block.columns).length > 0;
   return !isSummaryPlaceholderText(block.text);
 }
@@ -239,7 +268,7 @@ function pruneEmptySummarySections(blocks: CanvasSummaryDocumentBlock[]) {
     .map((block): CanvasSummaryDocumentBlock | null => {
       if (block.type === "paragraph") return isSummaryPlaceholderText(block.text) ? null : block;
       if (block.type === "bullets") {
-        const items = block.items.filter((item) => !isSummaryPlaceholderText(item));
+        const items = block.items.filter((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
         return items.length > 0 ? { ...block, items } : null;
       }
       if (block.type === "table") {
@@ -316,7 +345,7 @@ function normalizeSummaryDocumentBlock(raw: unknown, index: number): CanvasSumma
   }
 
   if (type === "bullets") {
-    const items = normalizeStringList(source.items, 20).filter((item) => !isSummaryPlaceholderText(item));
+    const items = normalizeBulletStringList(source.items, 20).filter((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
     return items.length > 0 ? { id, type, items } : null;
   }
 
@@ -432,10 +461,12 @@ function markdownToSummaryDocumentBlocks(markdown: string): CanvasSummaryDocumen
       continue;
     }
 
-    const bulletMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+[.)]\s+(.+)$/);
+    const rawLine = lines[index];
+    const bulletMatch = rawLine.match(/^(\s*)[-*]\s+(.+)$/) || rawLine.match(/^(\s*)\d+[.)]\s+(.+)$/);
     if (bulletMatch) {
       flushParagraph();
-      bulletBuffer.push(bulletMatch[1]);
+      const indentWidth = bulletMatch[1].replace(/\t/g, "  ").length;
+      bulletBuffer.push(withSummaryBulletIndent(bulletMatch[2], Math.floor(indentWidth / 2)));
       index += 1;
       continue;
     }
@@ -537,7 +568,12 @@ export function summaryDocumentBlocksToMarkdown(blocks: CanvasSummaryDocumentBlo
       return;
     }
     if (block.type === "bullets") {
-      chunks.push(block.items.filter(Boolean).map((item) => `- ${item}`).join("\n"));
+      chunks.push(
+        block.items
+          .filter((item) => getSummaryBulletText(item))
+          .map((item) => `${"  ".repeat(getSummaryBulletIndent(item))}- ${getSummaryBulletText(item)}`)
+          .join("\n"),
+      );
       return;
     }
     if (block.type === "table") {
