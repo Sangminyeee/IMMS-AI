@@ -3,6 +3,7 @@
   CanvasArtifactGenerationState,
   CanvasLocalState,
   CanvasFinalSolutionSummary,
+  CanvasFinalReportShareResponse,
   CanvasIdeaAssimilationUtterance,
   CanvasIdeationBubbleGraphUpdateResponse,
   CanvasIdeationKeywordResponse,
@@ -14,6 +15,7 @@
   CanvasQuickAskResponse,
   CanvasSummaryDocumentResponse,
   CanvasWorkspaceStateResponse,
+  PublicFinalReportResponse,
 } from "./types";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -194,6 +196,26 @@ export async function generateCanvasSummaryConclusion(payload: {
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
   });
+}
+
+export async function createCanvasFinalReportShare(payload: {
+  meeting_id: string;
+  regenerate?: boolean;
+}): Promise<CanvasFinalReportShareResponse> {
+  return requestJson<CanvasFinalReportShareResponse>("/api/canvas/final-report-share", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getPublicCanvasFinalReport(
+  meetingId: string,
+  token: string,
+): Promise<PublicFinalReportResponse> {
+  return requestJson<PublicFinalReportResponse>(
+    `/api/public/final-report/${encodeURIComponent(meetingId)}/${encodeURIComponent(token)}`,
+  );
 }
 
 export async function askCanvasQuickQuestion(payload: {

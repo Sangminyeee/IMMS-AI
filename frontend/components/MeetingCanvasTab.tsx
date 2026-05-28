@@ -8,6 +8,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createCanvasFinalReportShare,
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
   startCanvasArtifactGeneration,
@@ -179,6 +180,14 @@ function buildMeetingShareUrl(meetingId: string) {
   const url = new URL("/", window.location.origin);
   url.searchParams.set("meeting_id", meetingId);
   return url.toString();
+}
+
+function buildFinalReportShareUrl(meetingId: string, token: string) {
+  if (typeof window === "undefined" || !meetingId || !token) return "";
+  return new URL(
+    `/final-report/${encodeURIComponent(meetingId)}/${encodeURIComponent(token)}`,
+    window.location.origin,
+  ).toString();
 }
 
 async function copyTextToClipboard(text: string) {
@@ -829,6 +838,12 @@ export default function MeetingCanvasTab({
     handleCancelEndMeeting,
     handleBackToEndMeetingConfirm,
   } = useCanvasEndMeetingState();
+  const [finalReportQrOpen, setFinalReportQrOpen] = useState(false);
+  const [finalReportQrLoading, setFinalReportQrLoading] = useState(false);
+  const [finalReportQrUrl, setFinalReportQrUrl] = useState("");
+  const [finalReportQrImageDataUrl, setFinalReportQrImageDataUrl] = useState("");
+  const [finalReportQrError, setFinalReportQrError] = useState("");
+  const [finalReportQrCopied, setFinalReportQrCopied] = useState(false);
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef } = useCanvasFlowRefs();
   const ideationViewportCenteredKeyRef = useRef("");
@@ -856,7 +871,15 @@ export default function MeetingCanvasTab({
   const applyingRemoteSharedSyncRef = useRef(false);
   const lastIncomingSharedSyncIdRef = useRef("");
   const lastSharedSyncSignatureRef = useRef("");
+  const finalReportQrCopiedTimerRef = useRef<number | null>(null);
   const localNodeOverridesRef = useRef(createLocalNodeOverrideMap());
+
+  useEffect(() => () => {
+    if (finalReportQrCopiedTimerRef.current !== null) {
+      window.clearTimeout(finalReportQrCopiedTimerRef.current);
+      finalReportQrCopiedTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!localEditPresenceTarget || !meetingId || !userId) return;
@@ -2882,6 +2905,84 @@ export default function MeetingCanvasTab({
     }
   };
 
+  const handleCloseFinalReportQr = useCallback(() => {
+    setFinalReportQrOpen(false);
+    setFinalReportQrError("");
+    setFinalReportQrCopied(false);
+  }, []);
+
+  const handleCopyFinalReportQrUrl = useCallback(async () => {
+    if (!finalReportQrUrl) return;
+    const copied = await copyTextToClipboard(finalReportQrUrl);
+    if (!copied) {
+      setFinalReportQrError("링크를 복사할 수 없습니다. 주소를 직접 선택해 복사해 주세요.");
+      return;
+    }
+
+    setFinalReportQrCopied(true);
+    if (finalReportQrCopiedTimerRef.current !== null) {
+      window.clearTimeout(finalReportQrCopiedTimerRef.current);
+    }
+    finalReportQrCopiedTimerRef.current = window.setTimeout(() => {
+      setFinalReportQrCopied(false);
+      finalReportQrCopiedTimerRef.current = null;
+    }, 1600);
+  }, [finalReportQrUrl]);
+
+  const handleCreateFinalReportQr = useCallback(async () => {
+    if (!meetingId) {
+      setFinalReportQrOpen(true);
+      setFinalReportQrError("회의 정보를 찾을 수 없어 QR코드를 생성할 수 없습니다.");
+      return;
+    }
+
+    const finalSummarySnapshot = getEndingFinalSummaryDocumentSnapshot();
+    const finalSolutionSummary = buildFinalSolutionSummaryPayload(finalSummarySnapshot);
+    if (!finalSolutionSummary.markdown.trim() && !(finalSolutionSummary.document_blocks || []).length) {
+      setFinalReportQrOpen(true);
+      setFinalReportQrError("공유할 최종 정리 문서가 없습니다.");
+      return;
+    }
+
+    setFinalReportQrOpen(true);
+    setFinalReportQrLoading(true);
+    setFinalReportQrError("");
+    setFinalReportQrCopied(false);
+
+    try {
+      await saveCanvasWorkspacePatch({
+        meeting_id: meetingId,
+        final_solution_summary: finalSolutionSummary,
+        imported_state: persistedSharedImportedState,
+      });
+      const share = await createCanvasFinalReportShare({ meeting_id: meetingId });
+      const reportUrl = buildFinalReportShareUrl(share.meeting_id, share.token);
+      if (!reportUrl) {
+        throw new Error("공유 링크를 만들 수 없습니다.");
+      }
+
+      const { toDataURL } = await import("qrcode");
+      const imageDataUrl = await toDataURL(reportUrl, {
+        errorCorrectionLevel: "M",
+        margin: 2,
+        width: 248,
+        color: {
+          dark: "#181818",
+          light: "#ffffff",
+        },
+      });
+
+      setFinalReportQrUrl(reportUrl);
+      setFinalReportQrImageDataUrl(imageDataUrl);
+    } catch (error) {
+      console.error("Failed to create final report QR:", error);
+      const message = error instanceof Error ? error.message : "QR코드 생성에 실패했습니다.";
+      setFinalReportQrError(message);
+    } finally {
+      setFinalReportQrLoading(false);
+    }
+  }, [getEndingFinalSummaryDocumentSnapshot, meetingId, persistedSharedImportedState]);
+
   const handleSaveAndEndMeeting = async (finalSummarySnapshot: CanvasFinalSolutionSummary) => {
     setEndMeetingSaving(true);
 
@@ -3366,10 +3467,19 @@ export default function MeetingCanvasTab({
       preview: endMeetingPreview,
       summaryPreviewMarkdown: endMeetingSummaryPreviewMarkdown,
       summaryPreviewHtml: endMeetingSummaryPreviewHtml,
+      finalReportQrOpen,
+      finalReportQrLoading,
+      finalReportQrUrl,
+      finalReportQrImageDataUrl,
+      finalReportQrError,
+      finalReportQrCopied,
     },
     onCancel: handleCancelEndMeeting,
     onConfirm: handleConfirmEndMeeting,
     onDownloadPdf: handleDownloadEndMeetingSummaryPdf,
+    onCreateFinalReportQr: handleCreateFinalReportQr,
+    onCloseFinalReportQr: handleCloseFinalReportQr,
+    onCopyFinalReportQrUrl: handleCopyFinalReportQrUrl,
     onBackToConfirm: handleBackToEndMeetingConfirm,
     onSaveAndEnd: handleSaveAndEndMeeting,
     getFinalSummarySnapshot: getEndingFinalSummaryDocumentSnapshot,

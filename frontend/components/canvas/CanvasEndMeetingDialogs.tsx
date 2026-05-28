@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 
 type CanvasEndMeetingDialogPreview = {
@@ -13,12 +14,21 @@ export type CanvasEndMeetingDialogsViewState = {
   preview: CanvasEndMeetingDialogPreview;
   summaryPreviewMarkdown: string;
   summaryPreviewHtml: string;
+  finalReportQrOpen: boolean;
+  finalReportQrLoading: boolean;
+  finalReportQrUrl: string;
+  finalReportQrImageDataUrl: string;
+  finalReportQrError: string;
+  finalReportQrCopied: boolean;
 };
 
 export type CanvasEndMeetingDialogsHandlers = {
   onCancel: () => void;
   onConfirm: () => void;
   onDownloadPdf: () => void;
+  onCreateFinalReportQr: () => void;
+  onCloseFinalReportQr: () => void;
+  onCopyFinalReportQrUrl: () => void;
   onBackToConfirm: () => void;
   onSaveAndEnd: () => void;
 };
@@ -38,11 +48,20 @@ export function CanvasEndMeetingDialogs({
     preview,
     summaryPreviewMarkdown,
     summaryPreviewHtml,
+    finalReportQrOpen,
+    finalReportQrLoading,
+    finalReportQrUrl,
+    finalReportQrImageDataUrl,
+    finalReportQrError,
+    finalReportQrCopied,
   } = view;
   const {
     onCancel,
     onConfirm,
     onDownloadPdf,
+    onCreateFinalReportQr,
+    onCloseFinalReportQr,
+    onCopyFinalReportQrUrl,
     onBackToConfirm,
     onSaveAndEnd,
   } = handlers;
@@ -145,6 +164,16 @@ export function CanvasEndMeetingDialogs({
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
+                onClick={onCreateFinalReportQr}
+                disabled={saving || finalReportQrLoading}
+                className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                  {finalReportQrLoading ? "QR 생성 중" : "QR코드 생성"}
+                </span>
+              </button>
+              <button
+                type="button"
                 onClick={onDownloadPdf}
                 disabled={saving}
                 className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff] disabled:cursor-not-allowed disabled:opacity-50"
@@ -212,6 +241,89 @@ export function CanvasEndMeetingDialogs({
               />
             </main>
           </div>
+          {finalReportQrOpen ? (
+            <div className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0f172a]/42 p-5 backdrop-blur-[3px]">
+              <div className="moa-font-pretendard w-full max-w-[420px] overflow-hidden rounded-[28px] border border-[#dbe7f5] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.18)]">
+                <div className="relative border-b border-[#e7edf6] px-6 pb-5 pt-6">
+                  <div className="moa-dashboard-primary-button absolute inset-x-0 top-0 h-[5px]" />
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">
+                      QR코드로 문서 열기
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={onCloseFinalReportQr}
+                      className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-full border border-[#e1e7f2] bg-white text-[18px] font-semibold leading-none text-[#505050] transition hover:bg-[#f5f8ff]"
+                      aria-label="QR코드 닫기"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#667085]">
+                    로그인 없이 최종 정리 문서만 읽기 전용으로 열립니다. 열린 문서에서 PDF로 저장할 수 있습니다.
+                  </p>
+                </div>
+                <div className="px-6 py-6">
+                  {finalReportQrLoading ? (
+                    <div className="flex min-h-[248px] items-center justify-center rounded-[24px] border border-[#e1e7f2] bg-[#f8f8f8]">
+                      <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-[#d8e7ff] border-t-[#067bf8]" />
+                    </div>
+                  ) : finalReportQrImageDataUrl ? (
+                    <div className="rounded-[24px] border border-[#e1e7f2] bg-[#f8f8f8] p-4">
+                      <Image
+                        src={finalReportQrImageDataUrl}
+                        alt="최종 정리 문서 QR코드"
+                        width={220}
+                        height={220}
+                        unoptimized
+                        className="mx-auto h-[220px] w-[220px] rounded-[18px] bg-white"
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-[18px] border border-[#f0c6c6] bg-[#fff5f5] px-4 py-4 text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#b23b3b]">
+                      {finalReportQrError || "QR코드를 생성할 수 없습니다."}
+                    </div>
+                  )}
+                  {finalReportQrError && finalReportQrImageDataUrl ? (
+                    <p className="mt-3 rounded-[18px] border border-[#f0c6c6] bg-[#fff5f5] px-4 py-3 text-[12px] font-medium leading-[1.7] tracking-[-0.3px] text-[#b23b3b]">
+                      {finalReportQrError}
+                    </p>
+                  ) : null}
+                  {finalReportQrUrl ? (
+                    <div className="mt-4 rounded-[18px] border border-[#e1e7f2] bg-[#fbfdff] px-4 py-3">
+                      <p className="truncate text-[12px] font-medium leading-[1.6] tracking-[-0.3px] text-[#667085]">
+                        {finalReportQrUrl}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="flex justify-end gap-2 border-t border-[#e7edf6] bg-[#fbfdff] px-6 py-4">
+                  <button
+                    type="button"
+                    onClick={onCopyFinalReportQrUrl}
+                    disabled={!finalReportQrUrl}
+                    className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="block whitespace-nowrap text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                      {finalReportQrCopied ? "복사완료" : "링크 복사"}
+                    </span>
+                  </button>
+                  <a
+                    href={finalReportQrUrl || undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`moa-dashboard-primary-button inline-flex h-[40px] items-center justify-center rounded-full px-5 shadow-[0_12px_28px_rgba(5,66,255,0.18)] transition ${
+                      finalReportQrUrl ? "" : "pointer-events-none opacity-40"
+                    }`}
+                  >
+                    <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">
+                      문서 열기
+                    </span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </>

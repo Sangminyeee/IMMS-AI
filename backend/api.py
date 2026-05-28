@@ -11,6 +11,7 @@ import threading
 import time
 import importlib.util
 import copy
+import hmac
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -437,6 +438,8 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
         "imported_state": copy.deepcopy(workspace.get("imported_state"))
         if isinstance(workspace.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(workspace.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(workspace.get("final_report_share_created_at")),
         "saved_at": _safe_text(workspace.get("saved_at")),
     }
 
@@ -484,6 +487,8 @@ def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[st
         "imported_state": copy.deepcopy(shared_state.get("imported_state"))
         if isinstance(shared_state.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(shared_state.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(shared_state.get("final_report_share_created_at")),
         "saved_at": _safe_text(shared_state.get("saved_at") or row.get("updated_at")),
         "llm_cache": copy.deepcopy(llm_cache),
     }
@@ -1250,6 +1255,8 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
         "imported_state": copy.deepcopy(source.get("imported_state"))
         if isinstance(source.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(source.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(source.get("final_report_share_created_at")),
         "saved_at": _safe_text(saved_at),
         "llm_cache": copy.deepcopy(source.get("llm_cache") or {})
         if isinstance(source.get("llm_cache"), dict)
@@ -1296,6 +1303,16 @@ def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
         else None,
         "saved_at": _safe_text(workspace.get("saved_at")),
     }
+
+
+def _canvas_final_report_has_content(summary: dict[str, Any]) -> bool:
+    normalized = _normalize_canvas_final_solution_summary(summary)
+    return bool(
+        _safe_text(normalized.get("markdown")).strip()
+        or int(normalized.get("final_count") or 0) > 0
+        or normalized.get("document_blocks")
+        or normalized.get("sections")
+    )
 
 
 def _load_canvas_workspace_from_db(meeting_id: str) -> dict[str, Any] | None:
@@ -1502,6 +1519,8 @@ def _ensure_canvas_workspace_entry(rt: "RuntimeStore", meeting_id: str) -> dict[
     workspace.setdefault("idea_create_stack", 0)
     workspace.setdefault("idea_processed_utterance_ids", [])
     workspace.setdefault("imported_state", None)
+    workspace.setdefault("final_report_share_token", "")
+    workspace.setdefault("final_report_share_created_at", "")
     workspace.setdefault("saved_at", "")
     workspace.setdefault("llm_cache", {})
     rt.canvas_workspace_by_meeting[normalized_meeting_id] = workspace
@@ -2587,6 +2606,11 @@ class CanvasArtifactGenerationStartInput(BaseModel):
     artifact_key: str = ""
     user_id: str = ""
     force: bool = False
+
+
+class CanvasFinalReportShareInput(BaseModel):
+    meeting_id: str = ""
+    regenerate: bool = False
 
 
 class CanvasPersonalNotesStateInput(BaseModel):
@@ -13971,6 +13995,69 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         },
     )
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/final-report-share")
+def post_canvas_final_report_share(payload: CanvasFinalReportShareInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    final_summary = _normalize_canvas_final_solution_summary(workspace.get("final_solution_summary"))
+    if not _canvas_final_report_has_content(final_summary):
+        raise HTTPException(status_code=400, detail="final report is empty")
+
+    token = _safe_text(workspace.get("final_report_share_token"))
+    created_at = _safe_text(workspace.get("final_report_share_created_at"))
+    if payload.regenerate or not token:
+        token = f"fr_{uuid4().hex}{uuid4().hex}"
+        created_at = saved_at
+
+    workspace["final_report_share_token"] = token
+    workspace["final_report_share_created_at"] = created_at
+
+    with RT.lock:
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "token": token,
+        "created_at": created_at,
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
+
+
+@app.get("/api/public/final-report/{meeting_id}/{token}")
+def get_public_canvas_final_report(meeting_id: str, token: str):
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_token = _safe_text(token)
+    if not normalized_meeting_id or not normalized_token:
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    expected_token = _safe_text(workspace.get("final_report_share_token"))
+    if not expected_token or not hmac.compare_digest(expected_token, normalized_token):
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    final_summary = _normalize_canvas_final_solution_summary(workspace.get("final_solution_summary"))
+    if not _canvas_final_report_has_content(final_summary):
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "markdown": _safe_text(final_summary.get("markdown")),
+        "document_blocks": copy.deepcopy(final_summary.get("document_blocks") or []),
+        "document_status": _safe_text(final_summary.get("document_status")),
+        "generated_at": _safe_text(final_summary.get("generated_at")),
+        "created_at": _safe_text(workspace.get("final_report_share_created_at")),
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
 
 
 @app.post("/api/stt/chunk")

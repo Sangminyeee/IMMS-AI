@@ -420,6 +420,25 @@ export interface CanvasWorkspacePatchRequest {
   imported_state?: MeetingState | null;
 }
 
+export interface CanvasFinalReportShareResponse {
+  ok: boolean;
+  meeting_id: string;
+  token: string;
+  created_at?: string;
+  saved_at?: string;
+}
+
+export interface PublicFinalReportResponse {
+  ok: boolean;
+  meeting_id: string;
+  markdown: string;
+  document_blocks?: CanvasSummaryDocumentBlock[];
+  document_status?: string;
+  generated_at?: string;
+  created_at?: string;
+  saved_at?: string;
+}
+
 export interface CanvasLocalState {
   shared_sync_enabled?: boolean;
   meeting_goal?: string;
