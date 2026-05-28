@@ -40,8 +40,6 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-left-logo-top": "clamp(34px, 3.148vh, 45px)",
   "--canvas-left-title-gap": "clamp(11px, 1.019vh, 15px)",
   "--canvas-left-keyword-gap": "clamp(12px, 1.111vh, 16px)",
-  "--canvas-left-divider": "clamp(159px, 14.722vh, 212px)",
-  "--canvas-left-content-top": "clamp(171px, 15.833vh, 228px)",
   "--canvas-note-composer-pt": "clamp(16px, 1.481vh, 21px)",
   "--canvas-note-composer-pb": "clamp(26px, 2.407vh, 35px)",
   "--canvas-note-list-pt": "clamp(29px, 2.685vh, 39px)",
@@ -50,22 +48,8 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-textarea-height": "clamp(85px, 7.87vh, 113px)",
   "--canvas-right-pad": "clamp(23px, 1.198vw, 31px)",
   "--canvas-right-header": "clamp(76px, 7.037vh, 101px)",
-  "--canvas-right-stage-bottom": "clamp(306px, 28.333vh, 408px)",
-  "--canvas-right-current-stage-top": "calc(var(--canvas-right-stage-bottom) + 20px)",
-  "--canvas-right-current-stage-height": "clamp(112px, 10.37vh, 149px)",
-  "--canvas-right-problem-ai-title-top": "calc(var(--canvas-right-current-stage-top) + var(--canvas-right-current-stage-height) + 20px)",
-  "--canvas-right-problem-ai-status-top": "calc(var(--canvas-right-problem-ai-title-top) + 22px)",
-  "--canvas-right-ai-title-top": "clamp(332px, 30.741vh, 443px)",
-  "--canvas-right-ai-status-top": "clamp(354px, 32.778vh, 472px)",
-  "--canvas-right-assistant-top": "clamp(605px, 56.019vh, 807px)",
-  "--canvas-right-search-top": "clamp(994px, 92.037vh, 1325px)",
-  "--canvas-right-search-x": "clamp(19px, 0.99vw, 25px)",
   "--canvas-ai-bg-width": "clamp(296px, 15.417vw, 395px)",
   "--canvas-ai-bg-height": "clamp(527px, 48.796vh, 703px)",
-  "--canvas-ai-bg-main-left": "clamp(180px, 9.375vw, 240px)",
-  "--canvas-ai-bg-main-top": "clamp(305px, 28.241vh, 407px)",
-  "--canvas-ai-bg-secondary-left": "clamp(15px, 0.781vw, 20px)",
-  "--canvas-ai-bg-secondary-top": "clamp(890px, 82.407vh, 1187px)",
   "--canvas-transport-bottom": "clamp(39px, 3.611vh, 52px)",
   "--canvas-transport-width": "clamp(198px, 10.313vw, 264px)",
   "--canvas-transport-height": "clamp(47px, 4.352vh, 63px)",
@@ -573,8 +557,8 @@ function LeftMeetingPanel({
   noteHandlers: CanvasRightDrawerNoteHandlers;
 }) {
   return (
-    <aside className="relative h-full min-h-0 overflow-hidden border-r border-[#cecccc] bg-white">
-      <div className="px-[var(--canvas-left-pad)] pt-[var(--canvas-left-logo-top)]">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white">
+      <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
         <MoaLogo size="md" markClassName="h-[23.264px] w-[38.115px]" className="moa-dt-logo gap-[11.5px]" />
         <div className="mt-[var(--canvas-left-title-gap)]">
           <div className="flex items-center gap-[9px]">
@@ -585,40 +569,37 @@ function LeftMeetingPanel({
             {keywordSummary || "키워드가 추출되면 이곳에 표시됩니다"}
           </p>
         </div>
-      </div>
+      </header>
 
-      <div className="absolute left-0 right-0 top-[var(--canvas-left-divider)] h-px bg-[#dfdfdf]" />
-      <div className="absolute inset-x-0 bottom-0 top-[var(--canvas-left-content-top)] flex min-h-0 flex-col">
-        <PersonalNoteComposerPanel composer={composer} handlers={composerHandlers} />
-        <section className="imms-overlay-scroll min-h-0 flex-1 overflow-y-auto pb-[22px] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-list-pt)]">
-          <div className="w-[var(--canvas-left-content)]">
-            <div className="mb-[14px] flex items-center gap-[7px]">
-              <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.35px] text-[#111]">내 메모 목록</h3>
-              <span className="text-[12px] font-bold tracking-[-0.3px] text-black/50">{notesState.notes.length}</span>
-            </div>
-            {notesState.notes.length === 0 ? (
-              <p className="rounded-[8.66px] border border-dashed border-[#cecccc] bg-white px-3 py-5 text-[11px] leading-5 text-[#737982]">
-                저장한 개인 메모가 없습니다.
-              </p>
-            ) : (
-              <div className="space-y-[var(--canvas-note-card-gap)]">
-                {notesState.notes.map((note) => (
-                  <PersonalNoteCard
-                    key={note.id}
-                    note={note}
-                    stage={notesState.stage}
-                    isEditing={notesState.editingPersonalNoteId === note.id}
-                    dragging={notesState.draggingPersonalNoteId === note.id}
-                    draftTitle={notesState.personalNoteDraftTitle}
-                    draftBody={notesState.personalNoteDraftBody}
-                    handlers={noteHandlers}
-                  />
-                ))}
-              </div>
-            )}
+      <PersonalNoteComposerPanel composer={composer} handlers={composerHandlers} />
+      <section className="imms-overlay-scroll min-h-0 flex-1 overflow-y-auto pb-[22px] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-list-pt)]">
+        <div className="w-[var(--canvas-left-content)]">
+          <div className="mb-[14px] flex items-center gap-[7px]">
+            <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.35px] text-[#111]">내 메모 목록</h3>
+            <span className="text-[12px] font-bold tracking-[-0.3px] text-black/50">{notesState.notes.length}</span>
           </div>
-        </section>
-      </div>
+          {notesState.notes.length === 0 ? (
+            <p className="rounded-[8.66px] border border-dashed border-[#cecccc] bg-white px-3 py-5 text-[11px] leading-5 text-[#737982]">
+              저장한 개인 메모가 없습니다.
+            </p>
+          ) : (
+            <div className="space-y-[var(--canvas-note-card-gap)]">
+              {notesState.notes.map((note) => (
+                <PersonalNoteCard
+                  key={note.id}
+                  note={note}
+                  stage={notesState.stage}
+                  isEditing={notesState.editingPersonalNoteId === note.id}
+                  dragging={notesState.draggingPersonalNoteId === note.id}
+                  draftTitle={notesState.personalNoteDraftTitle}
+                  draftBody={notesState.personalNoteDraftBody}
+                  handlers={noteHandlers}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </aside>
   );
 }
@@ -649,7 +630,7 @@ function CurrentProblemDefinitionStagePanel({
   const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
 
   return (
-    <section className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[var(--canvas-right-current-stage-top)] z-10 text-left">
+    <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
       <div className="flex items-start gap-[12px]">
         <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
         <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 · 1단계</p>
@@ -698,35 +679,14 @@ function RightAiPanel({
   const visibleParticipants = useMemo(() => participants.slice(0, 5), [participants]);
   const hiddenParticipantCount = Math.max(0, participants.length - visibleParticipants.length);
   const recentMessages = quickAskMessages.slice(-4);
+  const quickAskHasMessages = quickAskMessages.length > 0;
   const showProblemStagePanel =
     header.view.stage === "problem-definition" && (problem.problemDefinitionPhase as ProblemDefinitionPhase) !== "structure";
-  const stageSectionBottom = "var(--canvas-right-stage-bottom)";
-  const aiGuideTitleTopClass = showProblemStagePanel
-    ? "top-[var(--canvas-right-problem-ai-title-top)]"
-    : "top-[var(--canvas-right-ai-title-top)]";
-  const aiGuideStatusTopClass = showProblemStagePanel
-    ? "top-[var(--canvas-right-problem-ai-status-top)]"
-    : "top-[var(--canvas-right-ai-status-top)]";
-  const assistantTopClass = showProblemStagePanel
-    ? "top-[clamp(682px,63.148vh,909px)]"
-    : "top-[var(--canvas-right-assistant-top)]";
+  const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중";
 
   return (
-    <aside className="relative h-full min-h-0 overflow-hidden border-l border-[#cecccc] bg-white">
-      <div
-        aria-hidden="true"
-        className={`pointer-events-none absolute left-[var(--canvas-ai-bg-main-left)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat ${
-          showProblemStagePanel ? "top-[clamp(441px,40.833vh,588px)]" : "top-[var(--canvas-ai-bg-main-top)]"
-        }`}
-        style={AI_GUIDE_BACKGROUND_STYLE}
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute left-[var(--canvas-ai-bg-secondary-left)] top-[var(--canvas-ai-bg-secondary-top)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat"
-        style={AI_GUIDE_BACKGROUND_STYLE}
-      />
-
-      <div className="absolute inset-x-0 top-0 z-10 flex h-[var(--canvas-right-header)] items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
+    <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
+      <header className="relative z-10 flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
         <div className="flex items-center">
           {visibleParticipants.map((participant, index) => (
             <span
@@ -751,12 +711,9 @@ function RightAiPanel({
           <ShareIcon className="h-[12.825px] w-[12.825px]" />
           공유
         </button>
-      </div>
+      </header>
 
-      <div
-        className="absolute inset-x-0 top-[var(--canvas-right-header)] z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] pt-[21px]"
-        style={{ height: `calc(${stageSectionBottom} - var(--canvas-right-header))` }}
-      >
+      <section className="relative z-10 shrink-0 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[21px]">
         <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">회의 단계 이동</h3>
         <div className="mt-[21px]">
           <StageSteps
@@ -765,78 +722,87 @@ function RightAiPanel({
             onStageSelect={header.handlers.onStageSelect}
           />
         </div>
-      </div>
+      </section>
 
       {showProblemStagePanel ? (
         <CurrentProblemDefinitionStagePanel problem={problem} problemHandlers={problemHandlers} />
       ) : null}
 
-      {showProblemStagePanel ? (
-        <div className="absolute inset-x-0 top-[clamp(441px,40.833vh,588px)] z-10 h-px bg-[#dfdfdf]" />
-      ) : null}
-
-      <div
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${aiGuideTitleTopClass}`}
-      >
-        <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
-          AI 가이드
-          <span className="text-[13px] font-bold text-[#01a3ff]">+</span>
-        </h3>
-      </div>
-      <p
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${aiGuideStatusTopClass}`}
-      >
-        {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중"}
-      </p>
-
-      {quickAskOpen && recentMessages.length > 0 ? (
+      <section className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden bg-white px-[var(--canvas-right-pad)] pb-[22px] pt-[24px]">
         <div
-          ref={quickAskScrollRef}
-          className={`imms-overlay-scroll absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 max-h-[clamp(150px,13.889vh,200px)] space-y-2 overflow-y-auto text-left ${
-            showProblemStagePanel ? "top-[clamp(511px,47.315vh,681px)]" : "top-[clamp(384px,35.556vh,512px)]"
-          }`}
-        >
-          {recentMessages.map((message) => (
-            <div key={message.id} className={`rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
-              {message.text}
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className={`absolute inset-x-0 z-10 text-center ${assistantTopClass}`}>
-        <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
-        <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
-          아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />
-          필요한 도움을 요청할 수 있습니다
-        </p>
-      </div>
-
-      <form onSubmit={quickAskHandlers.onSubmit} className="absolute left-[var(--canvas-right-search-x)] right-[var(--canvas-right-search-x)] top-[var(--canvas-right-search-top)] z-10 flex h-[48px] items-center rounded-full border border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]">
-        <button type="button" className="grid h-[33.936px] w-[33.936px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
-          <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
-        </button>
-        <input
-          value={quickAskDraft}
-          onChange={(event) => quickAskHandlers.onDraftChange(event.target.value)}
-          onFocus={() => {
-            if (!quickAskOpen) quickAskHandlers.onToggle();
-          }}
-          placeholder="무엇이든 물어보세요"
-          className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
+          aria-hidden="true"
+          className="pointer-events-none absolute right-[-180px] top-[18px] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat opacity-95"
+          style={AI_GUIDE_BACKGROUND_STYLE}
         />
-        <button type="button" className="grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
-          <MicIcon className="h-[20.36px] w-[20.36px]" />
-        </button>
-        <button
-          type="submit"
-          disabled={!quickAskDraft.trim()}
-          aria-label="AI 가이드 질문 보내기"
-          className="ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
-        >
-          <SendIcon className="h-[17.4px] w-[17.4px]" />
-        </button>
-      </form>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-[-330px] left-[-160px] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat opacity-70"
+          style={AI_GUIDE_BACKGROUND_STYLE}
+        />
+
+        <div className="relative z-10 shrink-0 text-left">
+          <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
+            AI 가이드
+            <span className="text-[13px] font-bold text-[#01a3ff]">+</span>
+          </h3>
+          <p className="mt-[4px] text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9]">
+            {aiGuideStatusText}
+          </p>
+        </div>
+
+        {recentMessages.length > 0 ? (
+          <div
+            ref={quickAskScrollRef}
+            className="imms-overlay-scroll relative z-10 mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto text-left"
+          >
+            {recentMessages.map((message) => (
+              <div key={message.id} className={`rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
+                {message.text}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="relative z-10 min-h-[120px] flex-1" />
+        )}
+
+        {!quickAskHasMessages ? (
+          <div className="pointer-events-none absolute inset-x-[var(--canvas-right-pad)] top-1/2 z-10 -translate-y-1/2 text-center">
+            <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
+            <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
+              아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />
+              필요한 도움을 요청할 수 있습니다
+            </p>
+          </div>
+        ) : null}
+
+        <div className="relative z-10 mt-auto shrink-0 pt-[24px] text-center">
+          <form onSubmit={quickAskHandlers.onSubmit} className="flex h-[48px] items-center rounded-full border border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]">
+            <button type="button" className="grid h-[33.936px] w-[33.936px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
+              <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
+            </button>
+            <input
+              value={quickAskDraft}
+              onChange={(event) => quickAskHandlers.onDraftChange(event.target.value)}
+              onFocus={() => {
+                if (!quickAskOpen) quickAskHandlers.onToggle();
+              }}
+              placeholder="무엇이든 물어보세요"
+              className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
+            />
+            <button type="button" className="grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
+              <MicIcon className="h-[20.36px] w-[20.36px]" />
+            </button>
+            <button
+              type="submit"
+              disabled={!quickAskDraft.trim()}
+              aria-label="AI 가이드 질문 보내기"
+              className="ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+            >
+              <SendIcon className="h-[17.4px] w-[17.4px]" />
+            </button>
+          </form>
+        </div>
+      </section>
     </aside>
   );
 }
