@@ -11,6 +11,7 @@ import threading
 import time
 import importlib.util
 import copy
+import hmac
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -417,6 +418,12 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
             workspace.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(workspace.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            workspace.get("artifact_generation") or {}
+        ),
+        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
+            workspace.get("ideation_bubble_graph")
+        ),
         "idea_create_stack": _safe_nonnegative_int(workspace.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -431,6 +438,8 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
         "imported_state": copy.deepcopy(workspace.get("imported_state"))
         if isinstance(workspace.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(workspace.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(workspace.get("final_report_share_created_at")),
         "saved_at": _safe_text(workspace.get("saved_at")),
     }
 
@@ -458,6 +467,12 @@ def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[st
             shared_state.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(shared_state.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            shared_state.get("artifact_generation") or {}
+        ),
+        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
+            shared_state.get("ideation_bubble_graph")
+        ),
         "idea_create_stack": _safe_nonnegative_int(shared_state.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -472,6 +487,8 @@ def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[st
         "imported_state": copy.deepcopy(shared_state.get("imported_state"))
         if isinstance(shared_state.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(shared_state.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(shared_state.get("final_report_share_created_at")),
         "saved_at": _safe_text(shared_state.get("saved_at") or row.get("updated_at")),
         "llm_cache": copy.deepcopy(llm_cache),
     }
@@ -1195,6 +1212,9 @@ def _normalize_canvas_local_state(payload: Any) -> dict[str, Any]:
             payload.get("final_solution_summary")
         )
         normalized["node_positions"] = _normalize_canvas_node_positions(payload.get("node_positions") or {})
+        normalized["artifact_generation"] = _normalize_canvas_artifact_generation(
+            payload.get("artifact_generation") or {}
+        )
         normalized["imported_state"] = (
             copy.deepcopy(payload.get("imported_state"))
             if isinstance(payload.get("imported_state"), dict)
@@ -1219,6 +1239,8 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
         "solution_topics": copy.deepcopy(source.get("solution_topics") or []),
         "final_solution_summary": _normalize_canvas_final_solution_summary(source.get("final_solution_summary")),
         "node_positions": _normalize_canvas_node_positions(source.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(source.get("artifact_generation") or {}),
+        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(source.get("ideation_bubble_graph")),
         "idea_create_stack": _safe_nonnegative_int(source.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -1233,6 +1255,8 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
         "imported_state": copy.deepcopy(source.get("imported_state"))
         if isinstance(source.get("imported_state"), dict)
         else None,
+        "final_report_share_token": _safe_text(source.get("final_report_share_token")),
+        "final_report_share_created_at": _safe_text(source.get("final_report_share_created_at")),
         "saved_at": _safe_text(saved_at),
         "llm_cache": copy.deepcopy(source.get("llm_cache") or {})
         if isinstance(source.get("llm_cache"), dict)
@@ -1257,6 +1281,12 @@ def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
             workspace.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(workspace.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            workspace.get("artifact_generation") or {}
+        ),
+        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
+            workspace.get("ideation_bubble_graph")
+        ),
         "idea_create_stack": _safe_nonnegative_int(workspace.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -1273,6 +1303,16 @@ def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
         else None,
         "saved_at": _safe_text(workspace.get("saved_at")),
     }
+
+
+def _canvas_final_report_has_content(summary: dict[str, Any]) -> bool:
+    normalized = _normalize_canvas_final_solution_summary(summary)
+    return bool(
+        _safe_text(normalized.get("markdown")).strip()
+        or int(normalized.get("final_count") or 0) > 0
+        or normalized.get("document_blocks")
+        or normalized.get("sections")
+    )
 
 
 def _load_canvas_workspace_from_db(meeting_id: str) -> dict[str, Any] | None:
@@ -1474,9 +1514,13 @@ def _ensure_canvas_workspace_entry(rt: "RuntimeStore", meeting_id: str) -> dict[
     workspace.setdefault("solution_topics", [])
     workspace.setdefault("final_solution_summary", _normalize_canvas_final_solution_summary({}))
     workspace.setdefault("node_positions", {})
+    workspace.setdefault("artifact_generation", {})
+    workspace.setdefault("ideation_bubble_graph", _normalize_canvas_ideation_bubble_graph({}))
     workspace.setdefault("idea_create_stack", 0)
     workspace.setdefault("idea_processed_utterance_ids", [])
     workspace.setdefault("imported_state", None)
+    workspace.setdefault("final_report_share_token", "")
+    workspace.setdefault("final_report_share_created_at", "")
     workspace.setdefault("saved_at", "")
     workspace.setdefault("llm_cache", {})
     rt.canvas_workspace_by_meeting[normalized_meeting_id] = workspace
@@ -2265,6 +2309,11 @@ class SummaryDocumentGenerateInput(BaseModel):
     nodes: list[SummaryDocumentNodeInput] = Field(default_factory=list, max_length=120)
 
 
+class SummaryConclusionGenerateInput(SummaryDocumentGenerateInput):
+    current_summary: dict[str, Any] = Field(default_factory=dict)
+    regenerate_nonce: str = ""
+
+
 class CanvasQuickAskInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
@@ -2294,6 +2343,16 @@ class IdeationKeywordExtractInput(BaseModel):
     context_utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     existing_keywords: list[IdeationExistingKeywordInput] = Field(default_factory=list, max_length=40)
     max_keywords: int = Field(default=18, ge=1, le=30)
+
+
+class IdeationBubbleGraphUpdateInput(BaseModel):
+    meeting_id: str = ""
+    meeting_topic: str = ""
+    meeting_goal: str = ""
+    meeting_goal_context: str = ""
+    utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
+    context_cache: str = Field(default="", max_length=20000)
+    max_keywords: int = Field(default=3, ge=1, le=3)
 
 
 class IdeationSuggestionTopicInput(BaseModel):
@@ -2494,6 +2553,18 @@ class CanvasWorkspaceProblemStructureInput(BaseModel):
     groups: list[CanvasWorkspaceProblemStructureGroupInput] = Field(default_factory=list)
 
 
+class CanvasArtifactGenerationEntryInput(BaseModel):
+    artifact_key: str = ""
+    status: str = "idle"
+    generation_id: str = ""
+    started_by: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    finished_at: str = ""
+    error: str = ""
+    version: int = 0
+
+
 class CanvasWorkspaceStateInput(BaseModel):
     meeting_id: str = ""
     meeting_goal: str = ""
@@ -2507,6 +2578,8 @@ class CanvasWorkspaceStateInput(BaseModel):
     solution_topics: list[CanvasWorkspaceSolutionTopicInput] = Field(default_factory=list)
     final_solution_summary: dict[str, Any] = Field(default_factory=dict)
     node_positions: dict[str, dict[str, CanvasNodePositionInput]] = Field(default_factory=dict)
+    artifact_generation: dict[str, CanvasArtifactGenerationEntryInput] = Field(default_factory=dict)
+    ideation_bubble_graph: dict[str, Any] = Field(default_factory=dict)
     imported_state: dict[str, Any] | None = None
 
 
@@ -2523,7 +2596,21 @@ class CanvasWorkspacePatchInput(BaseModel):
     solution_topics: list[CanvasWorkspaceSolutionTopicInput] | None = None
     final_solution_summary: dict[str, Any] | None = None
     node_positions: dict[str, dict[str, CanvasNodePositionInput]] | None = None
+    artifact_generation: dict[str, CanvasArtifactGenerationEntryInput] | None = None
+    ideation_bubble_graph: dict[str, Any] | None = None
     imported_state: dict[str, Any] | None = None
+
+
+class CanvasArtifactGenerationStartInput(BaseModel):
+    meeting_id: str = ""
+    artifact_key: str = ""
+    user_id: str = ""
+    force: bool = False
+
+
+class CanvasFinalReportShareInput(BaseModel):
+    meeting_id: str = ""
+    regenerate: bool = False
 
 
 class CanvasPersonalNotesStateInput(BaseModel):
@@ -5497,11 +5584,13 @@ def _build_canvas_quick_ask_prompt(payload: CanvasQuickAskInput, rows: list[dict
     context_json = _truncate_text(json.dumps(compact_context, ensure_ascii=False, indent=2), 10000)
     question = _truncate_text(payload.question, 2000)
     return (
-        "너는 하단 패널에서 구글 검색처럼 던지는 질문에 즉시 답하는 범용 LLM 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 일반 LLM 채팅 서비스처럼 사용자의 질문에 답하는 범용 AI 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
         "[역할]\n"
-        "- 사용자의 질문에 한국어로 바로 답한다.\n"
-        "- 질문이 회의나 캔버스와 관련 있으면 제공된 회의 맥락을 참고한다.\n"
-        "- 질문이 회의와 무관하면 제공된 회의 맥락을 억지로 끌어오지 말고 일반 LLM 답변으로 처리한다.\n"
+        "- 사용자의 질문에 한국어로 바로 답한다. 질문은 회의와 관련 없어도 된다.\n"
+        "- 제공된 회의/캔버스 맥락은 선택 참고자료일 뿐이며, 답변의 기본 주제가 아니다.\n"
+        "- 질문이 회의나 캔버스를 직접 가리킬 때만 제공된 회의 맥락을 참고한다.\n"
+        "- 질문이 일반 지식, 글쓰기, 코드, 번역, 아이디어, 잡담이면 회의 맥락을 무시하고 일반 LLM 답변으로 처리한다.\n"
+        "- 회의 맥락을 사용하지 않았다면 회의와 연결하려는 문장을 덧붙이지 않는다.\n"
         "- 실시간 웹 검색은 현재 연결되어 있지 않다. 최신성이나 실시간 사실 확인이 핵심이면 그 한계를 짧게 말한다.\n\n"
         "[참고 맥락 JSON]\n"
         f"{context_json}\n\n"
@@ -5540,14 +5629,14 @@ def _build_canvas_quick_ask_local_answer(question: str, rows: list[dict[str, str
     snippets = matches[:3]
     if snippets:
         lines = [
-            "LLM 연결이 없어 자동 답변 대신 회의 기록에서 관련 발언 후보를 찾았습니다.",
+            "LLM 연결이 없어 일반 답변을 생성하지 못했습니다. 참고로 회의 기록에서 질문과 겹치는 발언 후보는 아래와 같습니다.",
             *[
                 f"- {_safe_text(row.get('speaker'), '참가자')}: {_truncate_text(row.get('text'), 180)}"
                 for _score, _index, row in snippets
             ],
         ]
         return "\n".join(lines)
-    return "LLM 연결이 없어 지금은 답변을 생성하지 못했습니다. 회의 기록 검색에 쓸 만한 관련 발언도 찾지 못했습니다."
+    return "LLM 연결이 없어 지금은 일반 답변을 생성하지 못했습니다."
 
 
 _IDEATION_KEYWORD_NON_NOUN_PATTERNS = [
@@ -5899,6 +5988,537 @@ def _normalize_ideation_keyword_operations(
     return merge_keywords, remove_keywords
 
 
+IDEATION_BUBBLE_GRAPH_VERSION = 1
+IDEATION_BUBBLE_GRAPH_MAX_BUBBLES = 80
+IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT = 2000
+IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 4
+IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES = 2
+IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES = 3
+IDEATION_BUBBLE_GRAPH_CORE_TOP_RATIO = 0.2
+
+
+def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
+    return {
+        "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "update_cycle": 0,
+        "bubbles": [],
+        "processed_utterance_ids": [],
+        "updated_at": "",
+    }
+
+
+def _normalize_ideation_bubble_state(raw: Any) -> str:
+    state = _safe_text(raw, "active").lower()
+    return state if state in {"active", "dimmed", "archived"} else "active"
+
+
+def _normalize_ideation_bubble_layout_zone(raw: Any) -> str:
+    zone = _safe_text(raw, "default").lower()
+    return zone if zone in {"core", "default", "peripheral", "archived"} else "default"
+
+
+def _ideation_bubble_text_key(raw: Any) -> str:
+    return _safe_text(raw).strip().lower()
+
+
+def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return _empty_canvas_ideation_bubble_graph()
+
+    bubbles: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for index, item in enumerate(raw.get("bubbles") or []):
+        if not isinstance(item, dict):
+            continue
+        label = _normalize_ideation_keyword_text(
+            item.get("label") or item.get("text") or item.get("keyword")
+        )
+        if not label:
+            continue
+        bubble_id = _safe_text(item.get("id")) or f"ideation-bubble-{_stable_short_id(label)}"
+        bubble_id_base = bubble_id
+        suffix = 2
+        while bubble_id in used_ids:
+            bubble_id = f"{bubble_id_base}-{suffix}"
+            suffix += 1
+        used_ids.add(bubble_id)
+        aliases = _dedup_preserve(
+            [
+                _normalize_ideation_keyword_text(value)
+                for value in (item.get("aliases") or item.get("alias") or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+            limit=20,
+        )
+        aliases = [value for value in aliases if value != label]
+        kind = _safe_text(item.get("kind"), "topic").lower()
+        if kind not in {"entity", "topic", "relation", "action", "off_topic"}:
+            kind = "topic"
+        off_topic = bool(item.get("off_topic") or item.get("offTopic") or kind == "off_topic")
+        if off_topic:
+            kind = "off_topic"
+        count = max(1, _safe_nonnegative_int(item.get("count"), 1) or 1)
+        importance = max(0.0, min(1.0, _safe_float(item.get("importance"), 0.6)))
+        relevance = max(0.0, min(1.0, _safe_float(item.get("relevance"), 1.0)))
+        activity = max(0.0, min(1.0, _safe_float(item.get("activity"), 0.6)))
+        display_state = _normalize_ideation_bubble_state(
+            item.get("display_state") or item.get("displayState") or item.get("state")
+        )
+        missing_cycles = _safe_nonnegative_int(
+            item.get("missing_cycles") or item.get("missingCycles"),
+            0,
+        )
+        last_seen_cycle = _safe_nonnegative_int(
+            item.get("last_seen_cycle") or item.get("lastSeenCycle"),
+            0,
+        )
+        bubbles.append(
+            {
+                "id": bubble_id,
+                "label": label,
+                "aliases": aliases,
+                "kind": kind,
+                "count": count,
+                "importance": importance,
+                "relevance": relevance,
+                "activity": activity,
+                "display_state": display_state,
+                "layout_zone": _normalize_ideation_bubble_layout_zone(
+                    item.get("layout_zone") or item.get("layoutZone")
+                ),
+                "missing_cycles": missing_cycles,
+                "anchor_id": _safe_text(item.get("anchor_id") or item.get("anchorId")),
+                "related_ids": _dedup_preserve(
+                    [
+                        _safe_text(value)
+                        for value in (item.get("related_ids") or item.get("relatedIds") or [])
+                        if _safe_text(value)
+                    ],
+                    limit=12,
+                ),
+                "evidence_utterance_ids": _dedup_preserve(
+                    [
+                        _safe_text(value)
+                        for value in (item.get("evidence_utterance_ids") or item.get("evidenceUtteranceIds") or [])
+                        if _safe_text(value)
+                    ],
+                    limit=80,
+                ),
+                "first_seen_at": _safe_text(item.get("first_seen_at") or item.get("firstSeenAt")),
+                "last_seen_at": _safe_text(item.get("last_seen_at") or item.get("lastSeenAt")),
+                "last_seen_cycle": last_seen_cycle,
+                "off_topic": off_topic,
+                "off_topic_reason": _safe_text(item.get("off_topic_reason") or item.get("offTopicReason")),
+                "archive_reason": _safe_text(item.get("archive_reason") or item.get("archiveReason")),
+            }
+        )
+        if len(bubbles) >= IDEATION_BUBBLE_GRAPH_MAX_BUBBLES:
+            break
+
+    bubble_ids = {item["id"] for item in bubbles}
+    for item in bubbles:
+        if item.get("anchor_id") not in bubble_ids:
+            item["anchor_id"] = ""
+        item["related_ids"] = [
+            related_id
+            for related_id in item.get("related_ids", [])
+            if related_id in bubble_ids and related_id != item["id"]
+        ][:12]
+
+    processed_ids = _dedup_preserve(
+        [
+            _safe_text(value)
+            for value in (raw.get("processed_utterance_ids") or raw.get("processedUtteranceIds") or [])
+            if _safe_text(value)
+        ],
+        limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
+    )
+    return {
+        "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "update_cycle": _safe_nonnegative_int(raw.get("update_cycle") or raw.get("updateCycle"), 0),
+        "bubbles": bubbles,
+        "processed_utterance_ids": processed_ids,
+        "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
+    }
+
+
+def _ideation_bubble_graph_text_maps(
+    graph: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    by_text: dict[str, dict[str, Any]] = {}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        by_id[_safe_text(bubble.get("id"))] = bubble
+        texts = [_safe_text(bubble.get("label")), *[_safe_text(value) for value in (bubble.get("aliases") or [])]]
+        for text in texts:
+            key = _ideation_bubble_text_key(text)
+            if key:
+                by_text[key] = bubble
+    return by_id, by_text
+
+
+def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[IdeationExistingKeywordInput]:
+    bubbles = [item for item in (graph.get("bubbles") or []) if isinstance(item, dict)]
+    visible_rank = {"active": 0, "dimmed": 1, "archived": 2}
+    bubbles.sort(
+        key=lambda item: (
+            visible_rank.get(_normalize_ideation_bubble_state(item.get("display_state")), 3),
+            -_safe_nonnegative_int(item.get("count"), 1),
+            -_safe_float(item.get("importance"), 0.0),
+            _safe_text(item.get("label")),
+        )
+    )
+    by_id = {
+        _safe_text(item.get("id")): item
+        for item in bubbles
+        if _safe_text(item.get("id"))
+    }
+    existing: list[IdeationExistingKeywordInput] = []
+    for bubble in bubbles[:40]:
+        related_labels = [
+            _safe_text((by_id.get(related_id) or {}).get("label"))
+            for related_id in (bubble.get("related_ids") or [])
+            if _safe_text((by_id.get(related_id) or {}).get("label"))
+        ]
+        anchor_label = _safe_text((by_id.get(_safe_text(bubble.get("anchor_id"))) or {}).get("label"))
+        existing.append(
+            IdeationExistingKeywordInput(
+                text=_safe_text(bubble.get("label")),
+                count=max(1, _safe_nonnegative_int(bubble.get("count"), 1) or 1),
+                related=related_labels,
+                kind=_safe_text(bubble.get("kind"), "topic"),
+                importance=max(0.0, min(1.0, _safe_float(bubble.get("importance"), 0.6))),
+                relevance=max(0.0, min(1.0, _safe_float(bubble.get("relevance"), 1.0))),
+                off_topic=bool(bubble.get("off_topic")),
+                anchor=anchor_label,
+            )
+        )
+    return existing
+
+
+def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str) -> None:
+    bubble["display_state"] = "archived"
+    bubble["layout_zone"] = "archived"
+    bubble["activity"] = min(_safe_float(bubble.get("activity"), 0.0), 0.12)
+    bubble["missing_cycles"] = max(
+        _safe_nonnegative_int(bubble.get("missing_cycles"), 0),
+        1,
+    )
+    bubble["archive_reason"] = reason
+    bubble["last_seen_cycle"] = _safe_nonnegative_int(bubble.get("last_seen_cycle"), cycle)
+
+
+def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
+    candidates = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _safe_text(bubble.get("id"))
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and not bool(bubble.get("off_topic"))
+    ]
+    if not candidates:
+        return set()
+
+    top_n = max(1, int((len(candidates) + 4) / 5))
+    by_count = sorted(
+        candidates,
+        key=lambda bubble: (
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )[:top_n]
+    by_importance = sorted(
+        candidates,
+        key=lambda bubble: (
+            -_safe_float(bubble.get("importance"), 0.0),
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            _safe_text(bubble.get("label")),
+        ),
+    )[:top_n]
+    return {
+        _safe_text(bubble.get("id"))
+        for bubble in [*by_count, *by_importance]
+        if _safe_text(bubble.get("id"))
+    }
+
+
+def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str]) -> None:
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        state = _normalize_ideation_bubble_state(bubble.get("display_state"))
+        if state == "archived":
+            bubble["layout_zone"] = "archived"
+            continue
+        if bubble_id in core_ids and not bool(bubble.get("off_topic")):
+            missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0)
+            bubble["display_state"] = "active"
+            bubble["layout_zone"] = (
+                "peripheral"
+                if missing_cycles >= IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES
+                else "core"
+            )
+            bubble["activity"] = max(
+                _safe_float(bubble.get("activity"), 0.0),
+                0.42 if bubble["layout_zone"] == "peripheral" else 0.62,
+            )
+            continue
+        bubble["layout_zone"] = "peripheral" if state == "dimmed" else "default"
+
+
+def _apply_ideation_bubble_decay(
+    graph: dict[str, Any],
+    touched_ids: set[str],
+    core_ids: set[str],
+    cycle: int,
+) -> None:
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _safe_text(bubble.get("id")) in touched_ids:
+            continue
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+            continue
+        missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1
+        bubble["missing_cycles"] = missing_cycles
+        bubble["activity"] = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.4) * 0.62))
+        is_core = _safe_text(bubble.get("id")) in core_ids
+        if bool(bubble.get("off_topic")) and missing_cycles >= IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES:
+            _archive_ideation_bubble(bubble, cycle, "off_topic_inactive")
+        elif missing_cycles >= IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES and not is_core:
+            _archive_ideation_bubble(bubble, cycle, "inactive_low_importance")
+        elif missing_cycles >= IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES and not is_core:
+            bubble["display_state"] = "dimmed"
+        else:
+            bubble["display_state"] = "active"
+
+
+def _upsert_ideation_bubble_from_keyword(
+    graph: dict[str, Any],
+    keyword: dict[str, Any],
+    rows: list[dict[str, str]],
+    cycle: int,
+    now: str,
+) -> str:
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    text = _normalize_ideation_keyword_text(keyword.get("text"))
+    if not text:
+        return ""
+    bubble = by_text.get(_ideation_bubble_text_key(text))
+    if bubble is None:
+        bubble = {
+            "id": f"ideation-bubble-{_stable_short_id(text)}",
+            "label": text,
+            "aliases": [],
+            "kind": "topic",
+            "count": 0,
+            "importance": 0.5,
+            "relevance": 1.0,
+            "activity": 0.0,
+            "display_state": "active",
+            "layout_zone": "default",
+            "missing_cycles": 0,
+            "anchor_id": "",
+            "related_ids": [],
+            "evidence_utterance_ids": [],
+            "first_seen_at": now,
+            "last_seen_at": "",
+            "last_seen_cycle": 0,
+            "off_topic": False,
+            "off_topic_reason": "",
+            "archive_reason": "",
+        }
+        graph.setdefault("bubbles", []).append(bubble)
+    elif text != _safe_text(bubble.get("label")):
+        aliases = _dedup_preserve([*(bubble.get("aliases") or []), text], limit=20)
+        bubble["aliases"] = [value for value in aliases if value != _safe_text(bubble.get("label"))]
+
+    kind = _safe_text(keyword.get("kind"), "topic").lower()
+    off_topic = bool(keyword.get("off_topic") or kind == "off_topic")
+    bubble["kind"] = "off_topic" if off_topic else kind if kind in {"entity", "topic", "relation", "action"} else "topic"
+    bubble["off_topic"] = off_topic
+    bubble["off_topic_reason"] = _safe_text(keyword.get("off_topic_reason")) if off_topic else ""
+    bubble["count"] = max(1, _safe_nonnegative_int(bubble.get("count"), 0) + max(1, _safe_nonnegative_int(keyword.get("count"), 1) or 1))
+    bubble["importance"] = max(
+        _safe_float(bubble.get("importance"), 0.0),
+        max(0.0, min(1.0, _safe_float(keyword.get("importance"), 0.65))),
+    )
+    bubble["relevance"] = max(
+        0.0,
+        min(
+            1.0,
+            _safe_float(bubble.get("relevance"), 0.8) * 0.35
+            + max(0.0, min(1.0, _safe_float(keyword.get("relevance"), 1.0))) * 0.65,
+        ),
+    )
+    bubble["activity"] = max(
+        _safe_float(bubble.get("activity"), 0.0) * 0.35,
+        max(0.28, min(1.0, _safe_float(keyword.get("importance"), 0.65))),
+    )
+    bubble["display_state"] = "active"
+    bubble["layout_zone"] = "core"
+    bubble["missing_cycles"] = 0
+    bubble["last_seen_at"] = now
+    bubble["last_seen_cycle"] = cycle
+    bubble["archive_reason"] = ""
+    row_ids = [_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))]
+    bubble["evidence_utterance_ids"] = _dedup_preserve(
+        [*(bubble.get("evidence_utterance_ids") or []), *row_ids],
+        limit=80,
+    )
+    return _safe_text(bubble.get("id"))
+
+
+def _merge_ideation_bubbles(
+    graph: dict[str, Any],
+    source_text: str,
+    target_text: str,
+    cycle: int,
+) -> str:
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    source = by_text.get(_ideation_bubble_text_key(source_text))
+    target = by_text.get(_ideation_bubble_text_key(target_text))
+    if not source or not target or source is target:
+        return _safe_text(target.get("id")) if target else ""
+
+    target["count"] = max(1, _safe_nonnegative_int(target.get("count"), 1) + _safe_nonnegative_int(source.get("count"), 1))
+    target["importance"] = max(_safe_float(target.get("importance"), 0.0), _safe_float(source.get("importance"), 0.0))
+    target["relevance"] = max(_safe_float(target.get("relevance"), 0.0), _safe_float(source.get("relevance"), 0.0))
+    target["activity"] = max(_safe_float(target.get("activity"), 0.0), _safe_float(source.get("activity"), 0.0), 0.55)
+    target["aliases"] = _dedup_preserve(
+        [
+            *(target.get("aliases") or []),
+            _safe_text(source.get("label")),
+            *(source.get("aliases") or []),
+        ],
+        limit=20,
+    )
+    target["aliases"] = [value for value in target["aliases"] if value and value != _safe_text(target.get("label"))]
+    target["evidence_utterance_ids"] = _dedup_preserve(
+        [
+            *(target.get("evidence_utterance_ids") or []),
+            *(source.get("evidence_utterance_ids") or []),
+        ],
+        limit=80,
+    )
+    target["related_ids"] = _dedup_preserve(
+        [
+            *(target.get("related_ids") or []),
+            *(source.get("related_ids") or []),
+        ],
+        limit=12,
+    )
+    source_id = _safe_text(source.get("id"))
+    target_id = _safe_text(target.get("id"))
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _safe_text(bubble.get("anchor_id")) == source_id:
+            bubble["anchor_id"] = target_id
+        bubble["related_ids"] = [
+            target_id if related_id == source_id else related_id
+            for related_id in (bubble.get("related_ids") or [])
+        ]
+        bubble["related_ids"] = _dedup_preserve(
+            [value for value in bubble["related_ids"] if value and value != _safe_text(bubble.get("id"))],
+            limit=12,
+        )
+    _archive_ideation_bubble(source, cycle, "merged")
+    return target_id
+
+
+def _apply_ideation_bubble_graph_update(
+    graph: dict[str, Any],
+    rows: list[dict[str, str]],
+    keywords: list[dict[str, Any]],
+    merge_keywords: list[dict[str, str]],
+    remove_keywords: list[str],
+) -> dict[str, Any]:
+    next_graph = _normalize_canvas_ideation_bubble_graph(graph)
+    cycle = _safe_nonnegative_int(next_graph.get("update_cycle"), 0) + 1
+    now = _now_ts()
+    touched_ids: set[str] = set()
+
+    for keyword in keywords:
+        bubble_id = _upsert_ideation_bubble_from_keyword(next_graph, keyword, rows, cycle, now)
+        if bubble_id:
+            touched_ids.add(bubble_id)
+
+    for directive in merge_keywords:
+        target_id = _merge_ideation_bubbles(
+            next_graph,
+            _safe_text(directive.get("source")),
+            _safe_text(directive.get("target")),
+            cycle,
+        )
+        if target_id:
+            touched_ids.add(target_id)
+
+    _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
+    for text in remove_keywords:
+        bubble = by_text.get(_ideation_bubble_text_key(text))
+        if bubble and _safe_text(bubble.get("id")) not in touched_ids:
+            _archive_ideation_bubble(bubble, cycle, "llm_remove")
+
+    _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
+    for keyword in keywords:
+        current = by_text.get(_ideation_bubble_text_key(keyword.get("text")))
+        if not current:
+            continue
+        current_id = _safe_text(current.get("id"))
+        related_ids = [
+            _safe_text((by_text.get(_ideation_bubble_text_key(value)) or {}).get("id"))
+            for value in (keyword.get("related") or [])
+        ]
+        current["related_ids"] = _dedup_preserve(
+            [
+                *(current.get("related_ids") or []),
+                *[value for value in related_ids if value and value != current_id],
+            ],
+            limit=12,
+        )
+        anchor = by_text.get(_ideation_bubble_text_key(keyword.get("anchor")))
+        if anchor and _safe_text(anchor.get("id")) != current_id:
+            current["anchor_id"] = _safe_text(anchor.get("id"))
+
+    core_ids = _ideation_bubble_core_ids(next_graph)
+    _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
+    _apply_ideation_bubble_layout_zones(next_graph, core_ids)
+    processed_ids = _dedup_preserve(
+        [
+            *(next_graph.get("processed_utterance_ids") or []),
+            *[_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
+        ],
+        limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
+    )
+    next_graph["processed_utterance_ids"] = processed_ids
+    next_graph["update_cycle"] = cycle
+    next_graph["updated_at"] = now
+
+    def sort_key(item: dict[str, Any]) -> tuple[int, int, float, str]:
+        state_rank = {"active": 0, "dimmed": 1, "archived": 2}.get(
+            _normalize_ideation_bubble_state(item.get("display_state")),
+            3,
+        )
+        return (
+            state_rank,
+            -_safe_nonnegative_int(item.get("count"), 1),
+            -_safe_float(item.get("importance"), 0.0),
+            _safe_text(item.get("label")),
+        )
+
+    next_graph["bubbles"] = sorted(
+        [item for item in (next_graph.get("bubbles") or []) if isinstance(item, dict)],
+        key=sort_key,
+    )[:IDEATION_BUBBLE_GRAPH_MAX_BUBBLES]
+    return _normalize_canvas_ideation_bubble_graph(next_graph)
+
+
 def _summary_document_status_label(status: str) -> str:
     if status == "final":
         return "확정"
@@ -6085,13 +6705,252 @@ def _summary_document_group_bullets(group: dict[str, Any], limit: int = 5) -> li
     return [_to_summary_point(item, max_len=None) for item in _dedup_preserve([*source_items, *node_points, rationale], limit=limit)]
 
 
+def _summary_table_default_columns(block_id: str) -> list[dict[str, str]]:
+    return [
+        {"id": f"col-{_stable_short_id(f'{block_id}:item')}", "title": "항목", "type": "text"},
+        {"id": f"col-{_stable_short_id(f'{block_id}:content')}", "title": "내용", "type": "text"},
+    ]
+
+
+def _normalize_summary_table_columns(raw_columns: Any, block_id: str) -> list[dict[str, str]]:
+    if not isinstance(raw_columns, list):
+        return _summary_table_default_columns(block_id)
+    columns: list[dict[str, str]] = []
+    used_ids: set[str] = set()
+    for index, column in enumerate(raw_columns[:8]):
+        raw_id = ""
+        column_type = "text"
+        if isinstance(column, dict):
+            title = _safe_text(
+                column.get("title")
+                or column.get("name")
+                or column.get("header")
+                or column.get("text")
+                or column.get("id")
+            )
+            raw_id = _safe_text(column.get("id"))
+            column_type = _safe_text(column.get("type"), "text")
+        else:
+            title = _safe_text(column)
+        if not title:
+            continue
+        column_id = raw_id or f"col-{_stable_short_id(f'{block_id}:{index}:{title}')}"
+        if column_id in used_ids:
+            column_id = f"{column_id}-{index}"
+        used_ids.add(column_id)
+        columns.append({"id": column_id, "title": title, "type": column_type})
+    return columns or _summary_table_default_columns(block_id)
+
+
+def _blank_summary_table_row(columns: list[dict[str, str]], row_id: str) -> dict[str, Any]:
+    return {
+        "id": row_id,
+        "cells": {_safe_text(column.get("id")): "" for column in columns if _safe_text(column.get("id"))},
+    }
+
+
+def _normalize_summary_table_rows(raw_rows: Any, columns: list[dict[str, str]], block_id: str) -> list[dict[str, Any]]:
+    if not isinstance(raw_rows, list):
+        return [_blank_summary_table_row(columns, f"row-{_stable_short_id(f'{block_id}:blank')}")]
+    rows: list[dict[str, Any]] = []
+    for row_index, row in enumerate(raw_rows):
+        raw_id = ""
+        cells: dict[str, str] = {}
+        if isinstance(row, list):
+            for cell_index, column in enumerate(columns):
+                column_id = _safe_text(column.get("id"))
+                if not column_id:
+                    continue
+                cells[column_id] = _safe_text(row[cell_index] if cell_index < len(row) else "")
+        elif isinstance(row, dict):
+            raw_id = _safe_text(row.get("id"))
+            source_cells = row.get("cells") if isinstance(row.get("cells"), dict) else row
+            if not isinstance(source_cells, dict):
+                continue
+            for column in columns:
+                column_id = _safe_text(column.get("id"))
+                column_title = _safe_text(column.get("title"))
+                if not column_id:
+                    continue
+                cells[column_id] = _safe_text(source_cells.get(column_id) or source_cells.get(column_title))
+        else:
+            continue
+        if not any(_safe_text(value) for value in cells.values()):
+            continue
+        row_id = raw_id or f"row-{_stable_short_id(f'{block_id}:{row_index}:{json.dumps(cells, ensure_ascii=False, sort_keys=True)}')}"
+        rows.append({"id": row_id, "cells": cells})
+        if len(rows) >= 40:
+            break
+    return rows or [_blank_summary_table_row(columns, f"row-{_stable_short_id(f'{block_id}:blank')}")]
+
+
 def _normalize_summary_document_blocks(
     raw_blocks: Any,
     structured: dict[str, Any] | None = None,
     markdown: str = "",
 ) -> list[dict[str, Any]]:
+    placeholder_texts = {
+        "...",
+        "…",
+        "-",
+        "실제 회의 흐름에 근거한 항목",
+        "회의에서 실제로 정리된 방향",
+        "회의에서 실제로 남은 질문",
+        "짧은 핵심 논의",
+        "그 논의가 나온 근거",
+    }
+
     def stable_block_id(prefix: str, seed: str) -> str:
         return f"{prefix}-{_stable_short_id(seed or prefix)}"
+
+    def is_placeholder_text(value: Any) -> bool:
+        text = _safe_text(value)
+        return not text or text in placeholder_texts
+
+    def filter_meaningful_table_rows(
+        rows: list[dict[str, Any]],
+        columns: list[dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        status_ids = {
+            _safe_text(column.get("id"))
+            for column in columns
+            if _safe_text(column.get("title")) == "상태" or _safe_text(column.get("id")) == "col-status"
+        }
+        next_rows: list[dict[str, Any]] = []
+        for row in rows:
+            cells = row.get("cells") if isinstance(row, dict) and isinstance(row.get("cells"), dict) else {}
+            has_content = any(
+                not is_placeholder_text(value)
+                for key, value in cells.items()
+                if _safe_text(key) not in status_ids
+            )
+            if has_content:
+                next_rows.append(row)
+        return next_rows
+
+    def block_has_content(block: dict[str, Any]) -> bool:
+        block_type = _safe_text(block.get("type"))
+        if block_type == "paragraph":
+            return not is_placeholder_text(block.get("text"))
+        if block_type == "bullets":
+            return any(not is_placeholder_text(item) for item in block.get("items") or [])
+        if block_type == "table":
+            rows = block.get("rows") if isinstance(block.get("rows"), list) else []
+            columns = block.get("columns") if isinstance(block.get("columns"), list) else []
+            return bool(filter_meaningful_table_rows(rows, columns))
+        return block_type == "heading" and not is_placeholder_text(block.get("text"))
+
+    def prune_empty_sections(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned: list[dict[str, Any]] = []
+        for index, block in enumerate(blocks):
+            block_type = _safe_text(block.get("type"))
+            if block_type == "table":
+                columns = block.get("columns") if isinstance(block.get("columns"), list) else []
+                rows = block.get("rows") if isinstance(block.get("rows"), list) else []
+                next_rows = filter_meaningful_table_rows(rows, columns)
+                if not next_rows:
+                    continue
+                block = {**block, "rows": next_rows}
+            elif block_type == "bullets":
+                items = [item for item in block.get("items") or [] if not is_placeholder_text(item)]
+                if not items:
+                    continue
+                block = {**block, "items": items}
+            elif block_type == "paragraph" and is_placeholder_text(block.get("text")):
+                continue
+
+            if block_type == "heading":
+                level = _safe_nonnegative_int(block.get("level"), 2) or 2
+                if level > 1:
+                    has_section_content = False
+                    for next_block in blocks[index + 1:]:
+                        next_type = _safe_text(next_block.get("type"))
+                        if next_type == "heading":
+                            next_level = _safe_nonnegative_int(next_block.get("level"), 2) or 2
+                            if next_level <= level:
+                                break
+                        if block_has_content(next_block) and next_type != "heading":
+                            has_section_content = True
+                            break
+                    if not has_section_content:
+                        continue
+            cleaned.append(block)
+
+        deduped: list[dict[str, Any]] = []
+        for index, block in enumerate(cleaned):
+            block_type = _safe_text(block.get("type"))
+            if block_type == "heading":
+                level = _safe_nonnegative_int(block.get("level"), 2) or 2
+                if level > 1:
+                    next_block = next((item for item in cleaned[index + 1:] if _safe_text(item.get("type")) != "paragraph"), None)
+                    next_title = _safe_text(next_block.get("title")) if isinstance(next_block, dict) and _safe_text(next_block.get("type")) == "table" else ""
+                    if next_title and _safe_text(block.get("text")) == next_title:
+                        continue
+                    previous = deduped[-1] if deduped else None
+                    if isinstance(previous, dict) and _safe_text(previous.get("type")) == "heading" and _safe_text(previous.get("text")) == _safe_text(block.get("text")):
+                        continue
+            deduped.append(block)
+        return deduped
+
+    def normalize_table_title(value: Any) -> str:
+        title = _safe_text(value)
+        return "핵심 논의 사항" if title in {"핵심 결정 사항", "핵심결정사항"} else title
+
+    def compact_table_cell(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", _safe_text(value)).strip()
+        return _truncate_text(text, limit)
+
+    def normalize_discussion_table(
+        block_id: str,
+        title: str,
+        columns: list[dict[str, str]],
+        rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+        if title != "핵심 논의 사항" and block_id != "table-discussions":
+            return columns, rows
+
+        def column_id_by_title(*titles: str) -> str:
+            title_set = {_safe_text(title) for title in titles if _safe_text(title)}
+            for column in columns:
+                column_id = _safe_text(column.get("id"))
+                column_title = _safe_text(column.get("title"))
+                if column_id in title_set or column_title in title_set:
+                    return column_id
+            return ""
+
+        topic_id = column_id_by_title("col-topic", "항목")
+        discussion_id = column_id_by_title("col-discussion", "논의 내용")
+        evidence_id = column_id_by_title("col-evidence", "근거", "논의 근거")
+        status_id = column_id_by_title("col-status", "상태")
+        next_columns = [
+            {"id": "col-discussion", "title": "논의 내용", "type": "text"},
+            {"id": "col-evidence", "title": "논의 근거", "type": "text"},
+            {"id": "col-status", "title": "상태", "type": "select"},
+        ]
+        next_rows: list[dict[str, Any]] = []
+        for row_index, row in enumerate(rows):
+            cells = row.get("cells") if isinstance(row, dict) and isinstance(row.get("cells"), dict) else {}
+            old_topic = _safe_text(cells.get(topic_id)) if topic_id else ""
+            old_discussion = _safe_text(cells.get(discussion_id)) if discussion_id else ""
+            old_evidence = _safe_text(cells.get(evidence_id)) if evidence_id else ""
+            discussion = old_topic or old_discussion
+            evidence = old_discussion if old_topic and old_discussion and old_discussion != old_topic else old_evidence
+            status = _safe_text(cells.get(status_id)) if status_id else ""
+            if not discussion and not evidence:
+                continue
+            next_rows.append(
+                {
+                    "id": _safe_text(row.get("id") if isinstance(row, dict) else "", f"row-{row_index + 1}"),
+                    "cells": {
+                        "col-discussion": compact_table_cell(discussion, 34),
+                        "col-evidence": compact_table_cell(evidence, 72),
+                        "col-status": compact_table_cell(status or "검토 필요", 12),
+                    },
+                }
+            )
+            if len(next_rows) >= 6:
+                break
+        return next_columns, next_rows
 
     def normalize_block(raw: Any, index: int) -> dict[str, Any] | None:
         if not isinstance(raw, dict):
@@ -6109,27 +6968,22 @@ def _normalize_summary_document_blocks(
             text = _safe_text(raw.get("text"))
             return {"id": block_id, "type": "paragraph", "text": text} if text else None
         if block_type == "bullets":
-            items = [_safe_text(item) for item in raw.get("items") or [] if _safe_text(item)][:20]
+            items = [_safe_text(item) for item in raw.get("items") or [] if not is_placeholder_text(item)][:20]
             return {"id": block_id, "type": "bullets", "items": items} if items else None
         if block_type == "table":
-            columns = [_safe_text(item) for item in raw.get("columns") or [] if _safe_text(item)][:8]
-            if not columns:
-                columns = ["항목", "내용"]
-            rows: list[list[str]] = []
-            for row in raw.get("rows") or []:
-                if not isinstance(row, list):
-                    continue
-                normalized_row = [_safe_text(row[cell_index] if cell_index < len(row) else "") for cell_index, _ in enumerate(columns)]
-                if any(normalized_row):
-                    rows.append(normalized_row)
-                if len(rows) >= 40:
-                    break
+            columns = _normalize_summary_table_columns(raw.get("columns"), block_id)
+            title = normalize_table_title(raw.get("title"))
+            rows = _normalize_summary_table_rows(raw.get("rows"), columns, block_id)
+            columns, rows = normalize_discussion_table(block_id, title, columns, rows)
+            rows = filter_meaningful_table_rows(rows, columns)
+            if not rows:
+                return None
             return {
                 "id": block_id or stable_block_id("table", str(index)),
                 "type": "table",
-                "title": _safe_text(raw.get("title")),
+                "title": title,
                 "columns": columns,
-                "rows": rows or [["" for _ in columns]],
+                "rows": rows,
             }
         return None
 
@@ -6139,13 +6993,13 @@ def _normalize_summary_document_blocks(
         if block
     ] if isinstance(raw_blocks, list) else []
     if direct_blocks:
-        return direct_blocks[:80]
+        return prune_empty_sections(direct_blocks)[:80]
 
     structured_blocks = _build_summary_document_blocks(structured or {})
     if structured_blocks:
-        return structured_blocks
+        return prune_empty_sections(structured_blocks)
 
-    return _summary_markdown_to_document_blocks(markdown)
+    return prune_empty_sections(_summary_markdown_to_document_blocks(markdown))
 
 
 def _build_summary_document_blocks(structured: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6174,25 +7028,39 @@ def _build_summary_document_blocks(structured: dict[str, Any]) -> list[dict[str,
             ]
         )
     if rows:
+        columns = [
+            {"id": "col-summary-item", "title": "정리 항목", "type": "text"},
+            {"id": "col-status", "title": "상태", "type": "text"},
+            {"id": "col-core-content", "title": "핵심 내용", "type": "text"},
+        ]
         blocks.append(
             {
                 "id": "table-problem-solution",
                 "type": "table",
                 "title": "문제정의 & 해결 방향",
-                "columns": ["정리 항목", "상태", "핵심 내용"],
-                "rows": rows[:40],
+                "columns": columns,
+                "rows": _normalize_summary_table_rows(rows[:40], columns, "table-problem-solution"),
             }
         )
 
     pending_items = [_safe_text(item) for item in structured.get("pending_items") or [] if _safe_text(item)]
     if pending_items:
+        columns = [
+            {"id": "col-action-item", "title": "할 일", "type": "text"},
+            {"id": "col-owner", "title": "담당", "type": "text"},
+            {"id": "col-note", "title": "비고", "type": "text"},
+        ]
         blocks.append(
             {
                 "id": "table-next-actions",
                 "type": "table",
                 "title": "앞으로 할 일",
-                "columns": ["할 일", "담당", "비고"],
-                "rows": [[item, "추가 확인 필요", ""] for item in pending_items[:40]],
+                "columns": columns,
+                "rows": _normalize_summary_table_rows(
+                    [[item, "추가 확인 필요", ""] for item in pending_items[:40]],
+                    columns,
+                    "table-next-actions",
+                ),
             }
         )
     return blocks
@@ -6268,7 +7136,9 @@ def _summary_document_blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
             if items:
                 chunks.append("\n".join(f"- {item}" for item in items))
         elif block_type == "table":
-            columns = [_safe_text(item) for item in block.get("columns") or [] if _safe_text(item)] or ["항목", "내용"]
+            block_id = _safe_text(block.get("id"), f"table-{len(chunks) + 1}")
+            columns = _normalize_summary_table_columns(block.get("columns"), block_id)
+            rows = _normalize_summary_table_rows(block.get("rows"), columns, block_id)
 
             def cell(value: str) -> str:
                 return _safe_text(value).replace("\n", "<br>").replace("|", "\\|") or " "
@@ -6277,12 +7147,11 @@ def _summary_document_blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
             table_lines = []
             if title:
                 table_lines.append(f"### {title}")
-            table_lines.append("| " + " | ".join(cell(column) for column in columns) + " |")
+            table_lines.append("| " + " | ".join(cell(_safe_text(column.get("title"))) for column in columns) + " |")
             table_lines.append("| " + " | ".join("---" for _ in columns) + " |")
-            for row in block.get("rows") or []:
-                if not isinstance(row, list):
-                    continue
-                table_lines.append("| " + " | ".join(cell(row[index] if index < len(row) else "") for index, _ in enumerate(columns)) + " |")
+            for row in rows:
+                cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+                table_lines.append("| " + " | ".join(cell(cells.get(_safe_text(column.get("id")), "")) for column in columns) + " |")
             chunks.append("\n".join(table_lines))
     return "\n\n".join(chunk for chunk in chunks if _safe_text(chunk)).strip()
 
@@ -6682,7 +7551,7 @@ def _build_summary_document_prompt(
         '  "document_blocks": [\n'
         '    {"id":"heading-1","type":"heading","text":"최종 결론 제목","level":1},\n'
         '    {"id":"paragraph-1","type":"paragraph","text":"핵심 결론 1~2문장"},\n'
-        '    {"id":"table-1","type":"table","title":"회의 성격에 맞는 표 제목","columns":["회의 내용에 맞게 정한 컬럼명"],"rows":[["셀 값"]]}\n'
+        '    {"id":"table-1","type":"table","title":"회의 성격에 맞는 표 제목","columns":[{"id":"col-item","title":"항목","type":"text"},{"id":"col-content","title":"내용","type":"text"}],"rows":[{"id":"row-1","cells":{"col-item":"셀 값","col-content":"셀 값"}}]}\n'
         "  ],\n"
         '  "structured": {\n'
         '    "meeting_overview": "회의 개요 1문장",\n'
@@ -6698,7 +7567,9 @@ def _build_summary_document_prompt(
         "[규칙]\n"
         "- markdown은 한국어 Markdown 문자열 하나다.\n"
         "- document_blocks는 오른쪽 결론 문서 편집기의 원본이다. heading, paragraph, bullets, table 블록을 사용한다.\n"
-        "- table 블록은 의미 있을 때 1~3개 만든다. 컬럼명은 회의 성격에 맞게 직접 정하고, 3~6개 컬럼으로 제한한다.\n"
+        "- table 블록은 의미 있을 때 1~3개 만든다. columns는 id/title/type 객체 배열이고 rows는 id/cells 객체 배열이다.\n"
+        "- table의 column id는 col-purpose, col-owner처럼 영문 소문자/하이픈으로 안정적으로 만들고, row cells의 key는 반드시 column id와 일치시킨다.\n"
+        "- 컬럼명은 회의 성격에 맞게 직접 정하고, 3~6개 컬럼으로 제한한다.\n"
         "- table은 결정 사항, 쟁점 비교, 우선순위, 실행 항목, 담당자, 추가 확인 사항처럼 표가 더 읽기 쉬운 정보에만 사용한다.\n"
         "- table rows의 빈 셀은 만들지 말고 모르면 '추가 확인 필요'라고 적는다.\n"
         "- structured는 화면 표시용이다. 원문을 그대로 복사하지 말고 짧고 읽기 좋은 문장으로 정리한다.\n"
@@ -6707,6 +7578,166 @@ def _build_summary_document_prompt(
         "- 각 흐름 섹션은 2~4문장 narrative와 bullet 2~5개 정도로 작성한다. 너무 짧은 라벨 나열만 반환하지 않는다.\n"
         "- 결론은 flow_sections에서 실제로 정리된 방향만 압축한다. 결론 카드에 들어갈 내용은 상세 플로우를 반복하지 않는다.\n"
         "- 원문 그대로의 긴 인용은 금지한다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _build_summary_conclusion_prompt(
+    payload: SummaryConclusionGenerateInput,
+    groups: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    current_structured: dict[str, Any],
+    context: dict[str, Any],
+) -> str:
+    conclusion = current_structured.get("conclusion") if isinstance(current_structured.get("conclusion"), dict) else {}
+    overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
+    chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
+    rows = context.get("rows") if isinstance(context.get("rows"), list) else []
+    input_payload = {
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "source_policy": {
+            "note": "이번 출력은 오른쪽 결론 편집 문서만 다시 만드는 용도다.",
+            "primary_source": "전체 STT 전사 내용을 압축한 overview_summaries와 chunk_summaries를 우선 근거로 삼는다.",
+            "secondary_source": "current_summary.flow_sections와 structure_groups는 정리 방향과 구조를 이해하기 위한 참고자료다.",
+            "do_not_repeat": "좌측 정리 카드의 narrative를 그대로 반복하지 말고, 전체 전사 맥락에서 핵심 논의/근거/정리된 방향/보류 사항/후속 조치만 문서화한다.",
+        },
+        "transcript_context": {
+            "context_policy": {
+                "total_utterance_count": int(context.get("total_utterance_count") or len(rows)),
+                "included_raw_utterance_count": int(context.get("included_utterance_count") or len(rows)),
+                "total_chunk_summary_count": int(context.get("chunk_summary_count") or len(chunk_summaries)),
+                "included_chunk_summary_count": int(context.get("included_chunk_summary_count") or len(chunk_summaries)),
+                "overview_summary_count": len(overview_summaries),
+                "note": "overview_summaries는 긴 회의 전체 흐름을 압축한 개요, chunk_summaries는 구간별 요약, raw_utterances_for_nuance_only는 표현 뉘앙스 확인용 선별 원문이다.",
+            },
+            "overview_summaries": overview_summaries,
+            "chunk_summaries": chunk_summaries,
+            "raw_utterances_for_nuance_only": _problem_taxonomy_prompt_rows(rows[:36], 320),
+        },
+        "current_summary": {
+            "meeting_overview": _safe_text(current_structured.get("meeting_overview")),
+            "key_summary": _safe_text(current_structured.get("key_summary")),
+            "flow_sections": [
+                {
+                    "group_id": section.get("group_id"),
+                    "title": section.get("title"),
+                    "trigger": section.get("trigger"),
+                    "narrative": section.get("narrative"),
+                    "key_points": section.get("key_points", [])[:8],
+                    "opinions": section.get("opinions", [])[:4],
+                    "settlement": section.get("settlement"),
+                    "open_questions": section.get("open_questions", [])[:8],
+                }
+                for section in current_structured.get("flow_sections") or []
+                if isinstance(section, dict)
+            ][:24],
+            "pending_items": current_structured.get("pending_items", [])[:12]
+            if isinstance(current_structured.get("pending_items"), list)
+            else [],
+            "existing_conclusion": conclusion,
+        },
+        "structure_groups": [
+            {
+                "group_id": group.get("group_id"),
+                "title": group.get("title"),
+                "status": group.get("status"),
+                "status_label": group.get("status_label"),
+                "rationale": group.get("rationale"),
+                "nodes": [
+                    {
+                        "title": node.get("title"),
+                        "body": node.get("body"),
+                    }
+                    for node in group.get("nodes") or []
+                    if isinstance(node, dict)
+                ][:40],
+                "source_summary_items": group.get("source_summary_items", [])[:8],
+            }
+            for group in groups
+        ],
+        "evidence_hints": [
+            {
+                "group_id": section.get("group_id"),
+                "evidence_summaries": [
+                    _truncate_text(item.get("text"), 140)
+                    for item in section.get("evidence") or []
+                    if isinstance(item, dict) and _safe_text(item.get("text"))
+                ][:6],
+            }
+            for section in sections
+        ],
+    }
+    return (
+        "너는 회의가 끝난 뒤 참가자들이 공유하고 수정할 수 있는 Notion 스타일의 최종 결론 문서를 만드는 AI 퍼실리테이터다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- 오른쪽 결론 카드에 들어갈 최종 문서만 작성한다.\n"
+        "- 결론은 좌측 정리 결과만 보고 쓰지 말고, 전체 STT 전사 압축 맥락을 우선 근거로 작성한다.\n"
+        "- 좌측 정리 카드의 회의 흐름을 그대로 반복하지 않는다.\n"
+        "- 회의에서 실제로 논의된 핵심 사항, 정리된 방향, 합의된 판단, 남은 쟁점, 후속 실행 항목을 중심으로 문서를 구성한다.\n"
+        "- 확정된 결정이 적은 회의라도 '결정 사항'을 억지로 만들지 말고, 핵심 논의 사항과 보류/검토 상태를 중심으로 정리한다.\n"
+        "- 후속 실행 항목이 있더라도 핵심 논의 사항, 논의 흐름, 주요 쟁점과 관점, 정리된 방향, 남은 질문 중 전사에서 근거가 있는 섹션은 생략하지 않는다.\n"
+        "- 후속 실행 항목은 문서의 보조 섹션이며, 회의 내용 요약 섹션을 대체하면 안 된다.\n"
+        "- 결과는 사용자가 블록 단위로 수정할 수 있어야 하므로 document_blocks를 가장 중요한 출력으로 작성한다.\n"
+        "- 표가 더 읽기 쉬운 정보는 반드시 table 블록으로 만든다.\n"
+        "- 확정되지 않은 내용은 확정처럼 쓰지 말고 '검토 필요', '추가 확인 필요', '미정'으로 표시한다.\n"
+        "- 입력에 없는 사실, 담당자, 일정, 수치, 결정은 만들지 않는다.\n"
+        "- 화자명, timestamp, 긴 원문 인용은 넣지 않는다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "document_blocks": [\n'
+        '    {"id":"heading-conclusion","type":"heading","level":1,"text":"최종 결론 제목"},\n'
+        '    {"id":"paragraph-summary","type":"paragraph","text":"회의 결론을 1~2문장으로 압축한 문단"},\n'
+        '    {"id":"table-discussions","type":"table","title":"핵심 논의 사항","columns":[{"id":"col-discussion","title":"논의 내용","type":"text"},{"id":"col-evidence","title":"논의 근거","type":"text"},{"id":"col-status","title":"상태","type":"select"}],"rows":[{"id":"row-1","cells":{"col-discussion":"짧은 핵심 논의","col-evidence":"그 논의가 나온 근거","col-status":"검토 필요"}}]},\n'
+        '    {"id":"heading-flow","type":"heading","level":2,"text":"논의 흐름"},\n'
+        '    {"id":"bullets-flow","type":"bullets","items":["실제 회의 흐름에 근거한 항목"]},\n'
+        '    {"id":"table-issues","type":"table","title":"주요 쟁점과 관점","columns":[{"id":"col-issue","title":"쟁점","type":"text"},{"id":"col-perspectives","title":"관점","type":"text"},{"id":"col-direction","title":"정리 방향","type":"text"}],"rows":[{"id":"row-1","cells":{"col-issue":"...","col-perspectives":"...","col-direction":"..."}}]},\n'
+        '    {"id":"heading-direction","type":"heading","level":2,"text":"정리된 방향"},\n'
+        '    {"id":"bullets-direction","type":"bullets","items":["회의에서 실제로 정리된 방향"]},\n'
+        '    {"id":"heading-open-questions","type":"heading","level":2,"text":"남은 질문"},\n'
+        '    {"id":"bullets-open-questions","type":"bullets","items":["회의에서 실제로 남은 질문"]}\n'
+        "  ],\n"
+        '  "conclusion": {"title":"결론 제목","summary":"결론 요약 1~2문장","groups":[{"group_id":"...","title":"정리 항목 제목","status":"final","status_label":"확정","bullets":["실제 결론 bullet"]}]}\n'
+        "}\n\n"
+        "[블록 규칙]\n"
+        "- document_blocks는 반드시 2개 이상 만든다.\n"
+        "- 첫 블록은 반드시 heading level 1이다.\n"
+        "- 두 번째 블록은 반드시 paragraph이며, 전체 결론을 1~2문장으로 요약한다.\n"
+        "- heading, paragraph, bullets, table 타입만 사용한다.\n"
+        "- table은 1~3개까지 만들 수 있다.\n"
+        "- table이 필요 없는 회의라면 만들지 않아도 되지만, 핵심 논의 사항/쟁점 비교/후속 실행/우선순위/추가 확인 사항이 있으면 table을 사용한다.\n"
+        "- 첫 번째 표 제목은 '핵심 결정 사항'이 아니라 '핵심 논의 사항'을 우선 사용한다.\n"
+        "- 핵심 논의 사항 표에는 '항목' 컬럼을 만들지 않는다. '논의 내용', '논의 근거', '상태' 3개 컬럼만 사용한다.\n"
+        "- 핵심 논의 사항의 '논의 내용'은 기존 항목처럼 짧은 핵심 주제나 판단을 쓴다. 34자 이내로 쓴다.\n"
+        "- 핵심 논의 사항의 '논의 근거'는 해당 논의가 나온 이유나 회의 내 근거를 72자 이내의 한 문장으로 쓴다.\n"
+        "- document_blocks는 가능한 경우 다음 순서를 따른다: 제목, 전체 요약, 핵심 논의 사항, 논의 흐름, 주요 쟁점과 관점, 정리된 방향, 남은 질문, 후속 실행 항목.\n"
+        "- 각 섹션은 전사 근거가 있을 때만 만든다. 근거가 없는 섹션은 생략하되, 후속 실행 항목이 있다는 이유로 다른 근거 있는 섹션을 생략하지 않는다.\n"
+        "- 내용이 없는 섹션 heading만 만들지 않는다. 예시 placeholder 문구를 실제 출력에 넣지 않는다.\n"
+        "- '실제 회의 흐름에 근거한 항목', '회의에서 실제로 남은 질문', '회의에서 실제로 정리된 방향' 같은 안내 문구를 그대로 쓰지 않는다.\n"
+        "- table 블록에 title이 있으면 같은 제목의 heading 블록을 바로 앞에 만들지 않는다. 예: '주요 쟁점과 관점' heading과 같은 title의 table을 동시에 만들지 않는다.\n"
+        "- 후속 실행 항목 표가 필요하면 문서 마지막 쪽에 둔다. 실제 할 일, 담당, 목적, 상태가 명확하지 않으면 만들지 않는다.\n"
+        "- 후속 실행 항목이 없으면 빈 table이나 '추가 확인 필요'만 반복되는 table을 만들지 않는다.\n"
+        "- table columns는 객체 배열로 만든다. 각 column은 id, title, type을 가진다.\n"
+        "- column id는 같은 table 안에서 중복되면 안 된다.\n"
+        "- row id는 같은 table 안에서 중복되면 안 된다.\n"
+        "- row.cells의 key는 반드시 columns의 id와 일치해야 한다.\n"
+        "- table의 빈 셀은 만들지 않는다. 모르면 '추가 확인 필요'라고 쓴다.\n"
+        "- select 타입 셀에는 '확정', '검토 필요', '추가 확인 필요', '대기', '완료', '미정' 중 가장 적절한 값을 쓴다.\n"
+        "- columns는 회의 성격에 맞게 직접 정하되 3~6개로 제한한다.\n"
+        "- rows는 표마다 1~6개로 제한한다. 핵심 논의 사항 표는 가장 중요한 3~5개만 남긴다.\n"
+        "- 모든 table 셀은 화면에서 읽기 쉽게 짧게 쓴다. 한 셀에 여러 문장을 넣지 않는다.\n\n"
+        "[결론 작성 규칙]\n"
+        "- transcript_context의 overview_summaries와 chunk_summaries를 가장 우선 근거로 삼는다.\n"
+        "- 전체 전사 맥락에서 회의가 어떤 순서로 흘렀는지, 어떤 쟁점이 생겼는지, 어떤 방향으로 정리됐는지 먼저 정리한 뒤 후속 실행 항목을 분리한다.\n"
+        "- flow_sections의 settlement는 보조 근거로 사용하되, narrative를 그대로 반복하지 않는다.\n"
+        "- settlement가 없으면 key_points와 open_questions, transcript_context를 함께 보고 결론/후속 확인 사항을 분리한다.\n"
+        "- open_questions는 확정 결론이 아니라 후속 확인 사항으로 분리한다.\n"
+        "- '논의가 있었다', '요약을 제시했다', '중요성이 언급됐다' 같은 메타 문장은 쓰지 않는다.\n"
+        "- 좋은 문장: '방문지는 흥미만이 아니라 이동 부담과 학습 효과를 함께 비교해야 한다는 방향으로 정리됐다.'\n"
+        "- 나쁜 문장: '방문지 선택 기준에 대한 논의가 있었다.'\n"
+        "- 각 bullet은 실제 논의 내용, 판단, 근거, 결정, 보류 사항 중 하나를 담아야 한다.\n"
+        "- conclusion.groups의 status는 final, review, draft 중 하나를 쓴다. 확정되지 않은 내용은 review 또는 draft로 둔다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
@@ -9525,6 +10556,84 @@ def _normalize_canvas_node_positions(
     return normalized
 
 
+_CANVAS_ARTIFACT_KEYS = {
+    "problem-definition:explore",
+    "problem-definition:structure",
+    "solution:summary",
+}
+_CANVAS_ARTIFACT_GENERATION_STALE_SECONDS = 5 * 60
+
+
+def _parse_canvas_artifact_generation_time(raw: Any) -> float | None:
+    text = _safe_text(raw)
+    if not text:
+        return None
+    if "T" in text:
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except ValueError:
+            return None
+    try:
+        parsed_time = time.strptime(text, "%H:%M:%S")
+    except ValueError:
+        return None
+    return float(parsed_time.tm_hour * 3600 + parsed_time.tm_min * 60 + parsed_time.tm_sec)
+
+
+def _is_canvas_artifact_generation_stale(entry: dict[str, Any], now_text: str) -> bool:
+    if _safe_text(entry.get("status")) != "generating":
+        return False
+    started_or_updated_at = _safe_text(entry.get("updated_at")) or _safe_text(entry.get("started_at"))
+    started_seconds = _parse_canvas_artifact_generation_time(started_or_updated_at)
+    now_seconds = _parse_canvas_artifact_generation_time(now_text)
+    if started_seconds is None or now_seconds is None:
+        return True
+    age_seconds = now_seconds - started_seconds
+    if age_seconds < 0:
+        age_seconds += 24 * 60 * 60
+    return age_seconds >= _CANVAS_ARTIFACT_GENERATION_STALE_SECONDS
+
+
+def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_value in raw.items():
+        if hasattr(raw_value, "model_dump"):
+            try:
+                raw_value = raw_value.model_dump()
+            except Exception:
+                raw_value = {}
+        if not isinstance(raw_value, dict):
+            continue
+        key = _safe_text(raw_value.get("artifact_key") or raw_key)
+        if not key or key not in _CANVAS_ARTIFACT_KEYS:
+            continue
+        status = _safe_text(raw_value.get("status"))
+        if status not in {"idle", "generating", "ready", "failed"}:
+            status = "idle"
+        try:
+            version = max(0, int(raw_value.get("version") or 0))
+        except (TypeError, ValueError):
+            version = 0
+        normalized[key] = {
+            "artifact_key": key,
+            "status": status,
+            "generation_id": _safe_text(raw_value.get("generation_id")),
+            "started_by": _safe_text(raw_value.get("started_by")),
+            "started_at": _safe_text(raw_value.get("started_at")),
+            "updated_at": _safe_text(raw_value.get("updated_at")),
+            "finished_at": _safe_text(raw_value.get("finished_at")),
+            "error": _safe_text(raw_value.get("error")),
+            "version": version,
+        }
+    return normalized
+
+
 def _summarize_canvas_node_positions_for_debug(
     payload: dict[str, dict[str, Any]] | None,
 ) -> dict[str, Any]:
@@ -12039,7 +13148,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     source_signature = _summary_document_source_signature(groups)
     signature = _canvas_llm_signature(
         {
-            "version": 4,
+            "version": 6,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "source_signature": source_signature,
             "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
@@ -12152,6 +13261,164 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
         RT,
         normalized_meeting_id,
         "summary_document",
+        signature,
+        _compute,
+    )
+
+
+@app.post("/api/canvas/summary-conclusion")
+def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id) if normalized_meeting_id else {}
+    groups = _summary_document_groups(payload, workspace)
+    source_signature = _summary_document_source_signature(groups)
+    current_summary = payload.current_summary if isinstance(payload.current_summary, dict) else {}
+    current_structured_raw = current_summary.get("structured") if isinstance(current_summary.get("structured"), dict) else {}
+    signature_rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
+    utterance_signature = _canvas_llm_signature(
+        [
+            {
+                "id": row.get("id"),
+                "speaker": row.get("speaker"),
+                "text": row.get("text"),
+                "timestamp": row.get("timestamp"),
+            }
+            for row in signature_rows
+        ]
+    )
+    signature = _canvas_llm_signature(
+        {
+            "version": 7,
+            "meeting_topic": _safe_text(payload.meeting_topic),
+            "source_signature": source_signature,
+            "utterance_signature": utterance_signature,
+            "current_structured": current_structured_raw,
+            "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
+            "regenerate_nonce": _safe_text(payload.regenerate_nonce),
+        }
+    )
+
+    def _compute() -> dict[str, Any]:
+        rows = signature_rows
+        sections = _summary_document_sections(groups, rows)
+        fallback_structured = _build_summary_document_structured(payload.meeting_topic, groups, sections)
+        base_structured = _normalize_summary_structured_document(current_structured_raw, fallback_structured)
+        current_blocks = current_summary.get("document_blocks") or current_summary.get("documentBlocks")
+        current_markdown = _safe_text(current_summary.get("markdown"))
+        fallback_document_blocks = _normalize_summary_document_blocks(
+            current_blocks,
+            base_structured,
+            current_markdown,
+        )
+        fallback_markdown = current_markdown or _summary_document_blocks_to_markdown(fallback_document_blocks)
+        structured = base_structured
+        document_blocks = fallback_document_blocks
+        markdown = fallback_markdown
+        used_llm = False
+        warning = ""
+
+        if not groups:
+            return {
+                "ok": True,
+                "used_llm": False,
+                "warning": "결론 문서에 포함할 2단계 구조화 그룹이 없습니다.",
+                "generated_at": _now_ts(),
+                "source_signature": source_signature,
+                "markdown": "",
+                "document_blocks": [],
+                "sections": [],
+                "structured": structured,
+            }
+
+        client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        transcript_context: dict[str, Any] = {
+            "rows": rows,
+            "chunk_summaries": [],
+            "overview_summaries": [],
+            "total_utterance_count": len(rows),
+            "included_utterance_count": len(rows),
+            "included_chunk_summary_count": 0,
+            "overview_summary_count": 0,
+        }
+        if llm_ready:
+            try:
+                taxonomy_payload = ProblemTaxonomyGenerateInput(
+                    meeting_id=normalized_meeting_id,
+                    meeting_topic=_safe_text(payload.meeting_topic),
+                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                    max_groups=6,
+                )
+                transcript_context, context_warning = _build_problem_taxonomy_context(
+                    RT,
+                    taxonomy_payload,
+                    client,
+                    llm_ready,
+                )
+                if context_warning:
+                    warning = context_warning
+            except Exception as exc:
+                warning = f"결론 문서용 전체 전사 context 생성 실패: {exc}"
+
+        if llm_ready and client is not None:
+            try:
+                parsed = _call_llm_json(
+                    RT,
+                    client,
+                    prompt=_build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context),
+                    stage="canvas_summary_conclusion",
+                    temperature=0.16,
+                    max_tokens=5200,
+                )
+                if isinstance(parsed, dict):
+                    parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
+                    parsed_conclusion = parsed.get("conclusion") if isinstance(parsed.get("conclusion"), dict) else {}
+                    structured_source = parsed_structured if parsed_structured else {"conclusion": parsed_conclusion}
+                    normalized_structured = _normalize_summary_structured_document(structured_source, base_structured)
+                    structured = {
+                        **base_structured,
+                        "conclusion": normalized_structured.get("conclusion") or base_structured.get("conclusion", {}),
+                    }
+                    markdown = _normalize_summary_document_markdown(parsed, "")
+                    document_blocks = _normalize_summary_document_blocks(
+                        parsed.get("document_blocks"),
+                        structured,
+                        markdown,
+                    )
+                else:
+                    markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
+                    document_blocks = _normalize_summary_document_blocks([], structured, markdown)
+                if not markdown:
+                    markdown = _summary_document_blocks_to_markdown(document_blocks)
+                used_llm = True
+                RT.last_llm_parsed_json = {
+                    "stage": "canvas_summary_conclusion",
+                    "source_signature": source_signature,
+                    "markdown": markdown,
+                    "document_blocks": document_blocks,
+                    "structured": structured,
+                }
+                RT.last_llm_parsed_at = _now_ts()
+            except Exception as exc:
+                warning = f"결론 문서 LLM 생성 실패: {exc}"
+        else:
+            warning = llm_note or "LLM 미연결 상태로 기존 결론 문서를 유지했습니다."
+
+        return {
+            "ok": True,
+            "used_llm": used_llm,
+            "warning": warning,
+            "generated_at": _now_ts(),
+            "source_signature": source_signature,
+            "markdown": markdown,
+            "document_blocks": document_blocks,
+            "sections": sections,
+            "structured": structured,
+        }
+
+    return _run_canvas_llm_cached_request(
+        RT,
+        normalized_meeting_id,
+        "summary_conclusion",
         signature,
         _compute,
     )
@@ -12305,6 +13572,169 @@ def post_canvas_ideation_keywords(payload: IdeationKeywordExtractInput):
     )
 
 
+@app.post("/api/canvas/ideation-bubble-graph/update")
+def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    def _response(
+        graph: dict[str, Any],
+        used_llm: bool,
+        warning: str,
+        signature: str,
+        workspace: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+        workspace_payload["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(graph)
+        return {
+            "ok": bool(used_llm),
+            "used_llm": used_llm,
+            "warning": warning,
+            "generated_at": _now_ts(),
+            "source_signature": signature,
+            "bubble_graph": _normalize_canvas_ideation_bubble_graph(graph),
+            "workspace": _canvas_workspace_response(workspace_payload),
+        }
+
+    with RT.canvas_llm_request_lock:
+        workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+        graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+        processed_ids = {
+            _safe_text(value)
+            for value in (graph.get("processed_utterance_ids") or [])
+            if _safe_text(value)
+        }
+        rows = [
+            row
+            for row in _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
+            if _safe_text(row.get("id")) and _safe_text(row.get("id")) not in processed_ids
+        ]
+        existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
+        max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+        extract_payload = IdeationKeywordExtractInput(
+            meeting_id=normalized_meeting_id,
+            meeting_topic=_safe_text(payload.meeting_topic),
+            meeting_goal=_safe_text(payload.meeting_goal),
+            meeting_goal_context=_safe_text(payload.meeting_goal_context),
+            utterances=[ProblemTaxonomyUtteranceInput(**row) for row in rows],
+            context_cache=_safe_text(payload.context_cache),
+            existing_keywords=existing_inputs,
+            max_keywords=max_keywords,
+        )
+        context_cache = _ideation_context_cache_text(extract_payload)
+        existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
+        signature = _canvas_llm_signature(
+            {
+                "version": 1,
+                "meeting_id": normalized_meeting_id,
+                "meeting_topic": _safe_text(payload.meeting_topic),
+                "meeting_goal": _safe_text(payload.meeting_goal),
+                "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+                "graph_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
+                "existing_keywords": existing_keyword_rows,
+                "context_cache": context_cache,
+                "rows": rows,
+            }
+        )
+
+        if not rows:
+            return _response(
+                graph,
+                False,
+                "새로 처리할 아이디어 단계 발화가 없습니다.",
+                signature,
+                workspace,
+            )
+
+        client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        if not llm_ready or client is None:
+            return _response(
+                graph,
+                False,
+                llm_note or "LLM 미연결 상태라 서버 버블 그래프를 갱신하지 않았습니다.",
+                signature,
+                workspace,
+            )
+
+        warning = ""
+        parsed: Any = {}
+        try:
+            parsed = _call_llm_json(
+                RT,
+                client,
+                prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows),
+                stage="canvas_ideation_bubble_graph_update",
+                temperature=0.08,
+                max_tokens=1400,
+            )
+        except Exception as exc:
+            return _response(
+                graph,
+                False,
+                f"아이디어 버블 그래프 LLM 갱신 실패: {exc}",
+                signature,
+                workspace,
+            )
+
+        normalized_keywords = _normalize_ideation_keyword_items(
+            parsed,
+            [],
+            max_keywords,
+            existing_keyword_rows,
+        )
+        merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
+            parsed,
+            existing_keyword_rows,
+            normalized_keywords,
+        )
+        if not normalized_keywords and not merge_keywords and not remove_keywords:
+            warning = "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
+
+        next_graph = _apply_ideation_bubble_graph_update(
+            graph,
+            rows,
+            normalized_keywords,
+            merge_keywords,
+            remove_keywords,
+        )
+        saved_at = _now_ts()
+        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+        next_workspace["ideation_bubble_graph"] = next_graph
+        with RT.lock:
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+        _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+
+        RT.last_llm_parsed_json = {
+            "stage": "canvas_ideation_bubble_graph_update",
+            "source_signature": signature,
+            "merge_keywords": copy.deepcopy(merge_keywords),
+            "remove_keywords": copy.deepcopy(remove_keywords),
+            "keywords": copy.deepcopy(normalized_keywords),
+            "bubble_graph": copy.deepcopy(next_graph),
+        }
+        RT.last_llm_parsed_at = _now_ts()
+        print(
+            "[canvas ideation bubble graph]",
+            {
+                "meeting_id": normalized_meeting_id,
+                "rows": len(rows),
+                "keywords": len(normalized_keywords),
+                "merges": len(merge_keywords),
+                "removes": len(remove_keywords),
+                "cycle": next_graph.get("update_cycle"),
+                "visible_bubbles": len(
+                    [
+                        item
+                        for item in (next_graph.get("bubbles") or [])
+                        if _normalize_ideation_bubble_state(item.get("display_state")) != "archived"
+                    ]
+                ),
+            },
+        )
+        return _response(next_graph, True, warning, signature, next_workspace)
+
+
 @app.get("/api/canvas/personal-notes")
 def get_canvas_personal_notes(meeting_id: str, user_id: str):
     normalized_meeting_id = _safe_text(meeting_id)
@@ -12425,6 +13855,8 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
     workspace["final_solution_summary"] = _normalize_canvas_final_solution_summary(payload.final_solution_summary)
     workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions)
+    workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation)
+    workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     workspace["imported_state"] = (
         copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
     )
@@ -12448,6 +13880,56 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     )
 
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/artifact-generation/start")
+def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStartInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    artifact_key = _safe_text(payload.artifact_key)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if artifact_key not in _CANVAS_ARTIFACT_KEYS:
+        raise HTTPException(status_code=400, detail="invalid artifact_key")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+    current = generation_map.get(artifact_key) or {}
+    current_status = _safe_text(current.get("status"))
+    current_is_stale = _is_canvas_artifact_generation_stale(current, saved_at)
+    current_started_by = _safe_text(current.get("started_by"))
+    requested_by = _safe_text(payload.user_id)
+    current_started_by_requester = bool(requested_by) and current_started_by == requested_by
+
+    if current_status == "generating" and not payload.force and not current_is_stale and not current_started_by_requester:
+        generation = copy.deepcopy(current)
+        acquired = False
+    else:
+        generation = {
+            "artifact_key": artifact_key,
+            "status": "generating",
+            "generation_id": f"{artifact_key}:{uuid4().hex}",
+            "started_by": _safe_text(payload.user_id),
+            "started_at": saved_at,
+            "updated_at": saved_at,
+            "finished_at": "",
+            "error": "",
+            "version": int(current.get("version") or 0),
+        }
+        generation_map[artifact_key] = generation
+        workspace["artifact_generation"] = generation_map
+        with RT.lock:
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+        _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+        acquired = True
+
+    return {
+        "ok": True,
+        "acquired": acquired,
+        "generation": copy.deepcopy(generation),
+        "workspace": _canvas_workspace_response(workspace),
+    }
 
 
 @app.post("/api/canvas/workspace-patch")
@@ -12485,6 +13967,10 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         )
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
+    if "artifact_generation" in provided_fields:
+        workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
+    if "ideation_bubble_graph" in provided_fields:
+        workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     if "imported_state" in provided_fields:
         workspace["imported_state"] = (
             copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
@@ -12509,6 +13995,69 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         },
     )
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/final-report-share")
+def post_canvas_final_report_share(payload: CanvasFinalReportShareInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    final_summary = _normalize_canvas_final_solution_summary(workspace.get("final_solution_summary"))
+    if not _canvas_final_report_has_content(final_summary):
+        raise HTTPException(status_code=400, detail="final report is empty")
+
+    token = _safe_text(workspace.get("final_report_share_token"))
+    created_at = _safe_text(workspace.get("final_report_share_created_at"))
+    if payload.regenerate or not token:
+        token = f"fr_{uuid4().hex}{uuid4().hex}"
+        created_at = saved_at
+
+    workspace["final_report_share_token"] = token
+    workspace["final_report_share_created_at"] = created_at
+
+    with RT.lock:
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "token": token,
+        "created_at": created_at,
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
+
+
+@app.get("/api/public/final-report/{meeting_id}/{token}")
+def get_public_canvas_final_report(meeting_id: str, token: str):
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_token = _safe_text(token)
+    if not normalized_meeting_id or not normalized_token:
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    expected_token = _safe_text(workspace.get("final_report_share_token"))
+    if not expected_token or not hmac.compare_digest(expected_token, normalized_token):
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    final_summary = _normalize_canvas_final_solution_summary(workspace.get("final_solution_summary"))
+    if not _canvas_final_report_has_content(final_summary):
+        raise HTTPException(status_code=404, detail="final report not found")
+
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "markdown": _safe_text(final_summary.get("markdown")),
+        "document_blocks": copy.deepcopy(final_summary.get("document_blocks") or []),
+        "document_status": _safe_text(final_summary.get("document_status")),
+        "generated_at": _safe_text(final_summary.get("generated_at")),
+        "created_at": _safe_text(workspace.get("final_report_share_created_at")),
+        "saved_at": _safe_text(workspace.get("saved_at")),
+    }
 
 
 @app.post("/api/stt/chunk")

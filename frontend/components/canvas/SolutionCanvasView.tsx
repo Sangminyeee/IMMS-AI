@@ -33,6 +33,7 @@ type SolutionCanvasViewProps = {
   onToggleEvidence: (groupId: string) => void;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
+  onRefreshCache: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
   onSave: () => void | Promise<void>;
   onBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -60,6 +61,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   onToggleEvidence,
   onSetEditMode,
   onRegenerate,
+  onRefreshCache,
   onCopy,
   onSave,
   onBlocksChange,
@@ -99,6 +101,7 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
         remoteEditPresenceByKey={remoteEditPresenceByKey}
         onSetEditMode={onSetEditMode}
         onRegenerate={onRegenerate}
+        onRefreshCache={onRefreshCache}
         onCopy={onCopy}
         onSave={onSave}
         onBlocksChange={onBlocksChange}

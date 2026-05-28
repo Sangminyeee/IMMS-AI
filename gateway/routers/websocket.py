@@ -1357,6 +1357,7 @@ async def websocket_endpoint(
                     'markdown': '',
                 },
                 'node_positions': current_workspace.get('node_positions') or {},
+                'artifact_generation': current_workspace.get('artifact_generation') or {},
                 'imported_state': current_workspace.get('imported_state'),
                 'meeting_goal': current_workspace.get('meeting_goal') or '',
                 'meeting_goal_context': current_workspace.get('meeting_goal_context') or '',

@@ -15,9 +15,14 @@
   --radius-pill: 999px;
   --shadow-soft: 0 10px 28px rgba(15, 23, 42, 0.05);
   --section-gap: 12px;
-  --scrollbar-track: rgba(226, 232, 240, 0.55);
-  --scrollbar-thumb: rgba(148, 163, 184, 0.75);
-  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.9);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: rgba(8, 158, 245, 0.34);
+  --scrollbar-thumb-hover: rgba(5, 66, 255, 0.52);
+  --scrollbar-thumb-active: rgba(5, 66, 255, 0.68);
+  --scrollbar-thumb-gradient: linear-gradient(180deg, rgba(8, 158, 245, 0.58) 0%, rgba(5, 66, 255, 0.54) 100%);
+  --scrollbar-thumb-gradient-hover: linear-gradient(180deg, rgba(8, 158, 245, 0.74) 0%, rgba(5, 66, 255, 0.7) 100%);
+  --scrollbar-overlay-thumb: rgba(8, 158, 245, 0.28);
+  --scrollbar-overlay-thumb-hover: rgba(5, 66, 255, 0.46);
   --moa-primary: #067bf8;
   --moa-primary-gradient-start: #089ef5;
   --moa-primary-gradient-end: #0542ff;
@@ -105,8 +110,8 @@
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
 }
 
 *::-webkit-scrollbar-track {
@@ -115,14 +120,22 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
+  background: var(--scrollbar-thumb-gradient);
   border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-gradient-hover);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -317,6 +330,7 @@
 }
 
 .imms-overlay-scroll {
+  scrollbar-color: var(--scrollbar-overlay-thumb) transparent;
   scrollbar-gutter: auto;
 }
 
@@ -327,8 +341,8 @@
 }
 
 .imms-overlay-scroll::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 .imms-overlay-scroll::-webkit-scrollbar-track {
@@ -336,14 +350,41 @@
 }
 
 .imms-overlay-scroll::-webkit-scrollbar-thumb {
-  background: rgba(77, 77, 77, 0.22);
+  background: var(--scrollbar-overlay-thumb);
   border: 2px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
 }
 
 .imms-overlay-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(77, 77, 77, 0.38);
+  background: var(--scrollbar-overlay-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.moa-upcoming-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.72) transparent;
+  scrollbar-width: thin;
+}
+
+.moa-upcoming-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.moa-upcoming-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.moa-upcoming-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.68);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.moa-upcoming-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.86);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -383,11 +424,11 @@ body {
 }
 
 .moa-dt-logo {
-  color: var(--moa-logo-text);
-  font-family: var(--font-gmarket-sans, var(--font-body));
-  font-size: 19.909px;
+  color: #0651fe;
+  font-family: var(--font-logo);
+  font-size: 19.829px;
   font-style: normal;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 0;
   line-height: normal;
 }

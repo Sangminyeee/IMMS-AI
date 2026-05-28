@@ -14,6 +14,7 @@ import {
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
 import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDocumentHelpers";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import {
   flushCanvasPersonalNotes,
   flushCanvasWorkspacePatch,
@@ -21,8 +22,10 @@ import {
   saveCanvasWorkspacePatch,
 } from "@/lib/api";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasLocalState,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
@@ -61,6 +64,8 @@ type SharedWorkspaceSnapshot = {
   problemGroups: ProblemGroupModel[];
   problemStructure: CanvasProblemStructureState;
   finalSolutionSummary: CanvasFinalSolutionSummary;
+  artifactGeneration: CanvasArtifactGenerationMap;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   nodePositions: CanvasNodePositionsByStage;
   importedState: MeetingState | null;
 };
@@ -79,6 +84,8 @@ type UseCanvasPersistenceOptions = {
     problemGroups: ProblemGroupModel[];
     problemStructure?: CanvasProblemStructureState;
     finalSolutionSummary?: CanvasFinalSolutionSummary;
+    artifactGeneration?: CanvasArtifactGenerationMap;
+    ideationBubbleGraph?: CanvasIdeationBubbleGraph;
     nodePositions: CanvasNodePositionsByStage;
     importedState: MeetingState | null;
   }, "meetingId">>) => CanvasWorkspacePatchRequest;
@@ -87,6 +94,8 @@ type UseCanvasPersistenceOptions = {
   conclusionBatchBusy: boolean;
   customGroups: CanvasCustomGroup[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  artifactGeneration: CanvasArtifactGenerationMap;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   importOverrideActive: boolean;
   lastWorkspaceFieldSignaturesRef: MutableRefObject<WorkspaceFieldSignatures>;
   latestSharedSyncEnabledRef: MutableRefObject<boolean>;
@@ -118,6 +127,8 @@ export function useCanvasPersistence({
   conclusionBatchBusy,
   customGroups,
   finalSummaryDocument,
+  artifactGeneration,
+  ideationBubbleGraph,
   importOverrideActive,
   lastWorkspaceFieldSignaturesRef,
   latestSharedSyncEnabledRef,
@@ -170,6 +181,8 @@ export function useCanvasPersistence({
       problemGroups,
       problemStructure: problemStructureStatePayload,
       finalSolutionSummary: finalSummaryDocument,
+      artifactGeneration,
+      ideationBubbleGraph,
       nodePositions,
       importedState: persistedSharedImportedState,
     });
@@ -218,6 +231,14 @@ export function useCanvasPersistence({
       patch.final_solution_summary = buildFinalSolutionSummaryPayload(finalSummaryDocument);
       hasChanges = true;
     }
+    if (sharedSyncEnabled && nextSignatures.artifact_generation !== previousSignatures.artifact_generation) {
+      patch.artifact_generation = normalizeCanvasArtifactGeneration(artifactGeneration);
+      hasChanges = true;
+    }
+    if (sharedSyncEnabled && nextSignatures.ideation_bubble_graph !== previousSignatures.ideation_bubble_graph) {
+      patch.ideation_bubble_graph = ideationBubbleGraph;
+      hasChanges = true;
+    }
     if (sharedSyncEnabled && nextSignatures.imported_state !== previousSignatures.imported_state) {
       patch.imported_state = persistedSharedImportedState;
       hasChanges = true;
@@ -264,6 +285,8 @@ export function useCanvasPersistence({
     conclusionBatchBusy,
     customGroups,
     finalSummaryDocument,
+    artifactGeneration,
+    ideationBubbleGraph,
     lastWorkspaceFieldSignaturesRef,
     meetingGoalContextDraft,
     meetingGoalDraft,
@@ -305,7 +328,9 @@ export function useCanvasPersistence({
             problem_structure: problemStructureStatePayload,
             solution_topics: [],
             final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
+            artifact_generation: normalizeCanvasArtifactGeneration(artifactGeneration),
             node_positions: normalizeCanvasNodePositionsForComputedIdeation(nodePositions),
+            ideation_bubble_graph: ideationBubbleGraph,
             imported_state: persistedSharedImportedState,
             import_override_active: importOverrideActive,
           },
@@ -314,6 +339,8 @@ export function useCanvasPersistence({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      artifactGeneration,
+      ideationBubbleGraph,
       importOverrideActive,
       meetingGoalContextDraft,
       meetingGoalDraft,

@@ -28,6 +28,8 @@ export type IdeationKeywordBubble = {
   anchorText?: string;
   activity?: number;
   opacity?: number;
+  layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
+  durable?: boolean;
   emphasis?: "primary" | "default";
 };
 
@@ -37,8 +39,19 @@ export type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
   size: number;
   targetX: number;
   targetY: number;
+  settledTargetX?: number;
+  settledTargetY?: number;
+  visualScale?: number;
+  entering?: boolean;
   firstSeenTick: number;
   lastSeenTick: number;
+};
+
+export type IdeationBubbleLayoutAnchor = {
+  centerX: number;
+  centerY: number;
+  spawnX: number;
+  spawnY: number;
 };
 
 type IdeationKeywordBubblePlacement = {
@@ -258,8 +271,8 @@ const CANVAS_KEYWORD_TOKEN_PATTERN = /[A-Za-z0-9가-힣][A-Za-z0-9가-힣+#._-]{
 const CANVAS_IDEATION_BUBBLE_MIN_PHRASE_CHARS = 5;
 const CANVAS_IDEATION_BUBBLE_MAX_PHRASE_CHARS = 18;
 const CANVAS_IDEATION_BUBBLE_PHRASE_GAP_PATTERN = /^[ \t·ㆍ-]+$/u;
-const CANVAS_IDEATION_BUBBLE_PLANE_WIDTH = 1580;
-const CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT = 940;
+export const CANVAS_IDEATION_BUBBLE_PLANE_WIDTH = 1580;
+export const CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT = 940;
 const CANVAS_IDEATION_BUBBLE_ORGANIC_GAP = 12;
 const CANVAS_IDEATION_BUBBLE_CLUSTER_GAP = 145;
 const CANVAS_IDEATION_BUBBLE_CLUSTER_MAX_ITEMS = 6;
@@ -270,11 +283,36 @@ const CANVAS_IDEATION_BUBBLE_MIN_OPACITY = 0.22;
 const CANVAS_IDEATION_BUBBLE_DECAY_RATE = 0.72;
 const CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE = 260;
 const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
+const CANVAS_IDEATION_BUBBLE_ZONE_RETARGET_DISTANCE = 118;
+const CANVAS_IDEATION_BUBBLE_CORE_ZONE_RADIUS = 190;
+const CANVAS_IDEATION_BUBBLE_PERIPHERAL_ZONE_RADIUS = 460;
 const CANVAS_IDEATION_BUBBLE_COLLISION_GAP = 0;
 const CANVAS_IDEATION_BUBBLE_COLLISION_ITERATIONS = 32;
+const CANVAS_IDEATION_BUBBLE_RELAXATION_ITERATIONS = 8;
+const CANVAS_IDEATION_BUBBLE_RELAXATION_GAP = 10;
+const CANVAS_IDEATION_BUBBLE_RELAXATION_STEP = 0.42;
 const CANVAS_IDEATION_BUBBLE_MAX_PRIMARY_COUNT = 2;
+const CANVAS_IDEATION_BUBBLE_ENTER_SCALE = 0.58;
+const CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX = 0.34;
+const CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS = 70;
+const CANVAS_IDEATION_BUBBLE_SPAWN_GAP = 8;
 export const CANVAS_IDEATION_BUBBLE_TRANSITION =
-  "transform 560ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease";
+  "transform 2800ms cubic-bezier(0.22, 1, 0.36, 1), opacity 720ms ease";
+export const CANVAS_IDEATION_BUBBLE_LABEL_TRANSITION =
+  "transform 3100ms cubic-bezier(0.22, 1, 0.36, 1), opacity 720ms ease";
+
+function resolveIdeationBubbleLayoutAnchor(anchor?: IdeationBubbleLayoutAnchor | null): IdeationBubbleLayoutAnchor {
+  const defaultCenterX = CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2;
+  const defaultCenterY = CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2;
+  const centerX = clampNumber(Number(anchor?.centerX ?? defaultCenterX), 140, CANVAS_IDEATION_BUBBLE_PLANE_WIDTH - 140);
+  const centerY = clampNumber(Number(anchor?.centerY ?? defaultCenterY), 140, CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT - 140);
+  return {
+    centerX,
+    centerY,
+    spawnX: clampNumber(Number(anchor?.spawnX ?? centerX), 140, CANVAS_IDEATION_BUBBLE_PLANE_WIDTH - 140),
+    spawnY: clampNumber(Number(anchor?.spawnY ?? centerY + 220), 160, CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT - 120),
+  };
+}
 
 function stripKoreanKeywordSuffixes(token: string) {
   let normalized = token;
@@ -746,6 +784,7 @@ function buildIdeationKeywordBubblePlacements(
   bubbles: IdeationKeywordBubble[],
   growthById: Record<string, number> = {},
   layoutSeed = 0,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ): IdeationKeywordBubblePlacement[] {
   const maxCount = Math.max(1, ...bubbles.map((bubble) => bubble.count));
   const clusterBoxes = buildIdeationKeywordBubbleClusters(bubbles)
@@ -753,8 +792,7 @@ function buildIdeationKeywordBubblePlacements(
     .sort((left, right) => right.width * right.height - left.width * left.height);
   const placedBubbles: IdeationKeywordBubblePlacement[] = [];
   const placedBoxes: Array<{ x: number; y: number; width: number; height: number }> = [];
-  const centerX = CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2;
-  const centerY = CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2;
+  const { centerX, centerY } = resolveIdeationBubbleLayoutAnchor(layoutAnchor);
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
   clusterBoxes.forEach((box, index) => {
@@ -834,10 +872,20 @@ function getIdeationBubbleVisualSize(
   return Math.round(baseSize * (0.82 + clampNumber(activity, 0, 1) * 0.18));
 }
 
+function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
+  return !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.durable);
+}
+
 function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
+  if (isIdeationBubbleOpacityLocked(bubble)) {
+    return 1;
+  }
+
   const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
+  const importance = clampNumber(Number(bubble.importance ?? bubble.weight ?? 0.5), 0, 1);
   const emphasis = clampNumber(activity * relevance, 0, 1);
-  const minimum = bubble.offTopic || bubble.kind === "off_topic" ? 0.32 : CANVAS_IDEATION_BUBBLE_MIN_OPACITY;
+  const durableMinimum = bubble.count >= 5 || importance >= 0.68 ? 0.42 : CANVAS_IDEATION_BUBBLE_MIN_OPACITY;
+  const minimum = bubble.offTopic || bubble.kind === "off_topic" ? 0.32 : durableMinimum;
   return Number(clampNumber(minimum + emphasis * (1 - minimum), minimum, 1).toFixed(3));
 }
 
@@ -845,7 +893,10 @@ function getIdeationBubbleIncomingActivity(bubble: IdeationKeywordBubble) {
   const weight = clampNumber(Number(bubble.weight || 0.5), 0, 1);
   const importance = clampNumber(Number(bubble.importance ?? weight), 0, 1);
   const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
-  return clampNumber(0.26 + Math.max(weight, importance) * 0.52 + relevance * 0.22, 0.2, 1);
+  const serverActivity = bubble.activity == null ? null : clampNumber(Number(bubble.activity), 0, 1);
+  const computedActivity = clampNumber(0.26 + Math.max(weight, importance) * 0.52 + relevance * 0.22, 0.2, 1);
+  if (serverActivity == null) return computedActivity;
+  return clampNumber(serverActivity * 0.64 + computedActivity * 0.36, 0.08, 1);
 }
 
 function getIdeationBubbleImportanceScore(bubble: IdeationKeywordBubble, maxCount: number) {
@@ -886,10 +937,16 @@ function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[])
 
 function applyIdeationBubblePrimaryEmphasis(visuals: IdeationKeywordBubbleVisual[]) {
   const primaryIds = resolveIdeationBubblePrimaryIds(visuals);
-  return visuals.map((visual) => ({
-    ...visual,
-    emphasis: primaryIds.has(visual.id) ? "primary" as const : "default" as const,
-  }));
+  return visuals.map((visual) => {
+    const nextVisual = {
+      ...visual,
+      emphasis: primaryIds.has(visual.id) ? "primary" as const : "default" as const,
+    };
+    return {
+      ...nextVisual,
+      opacity: getIdeationBubbleVisualOpacity(nextVisual, nextVisual.activity),
+    };
+  });
 }
 
 function clampIdeationBubblePosition(x: number, y: number, size: number) {
@@ -931,12 +988,135 @@ function isIdeationBubblePositionOpen(
   ));
 }
 
+function getIdeationBubbleScaledCircle(placement: {
+  id: string;
+  x: number;
+  y: number;
+  size: number;
+  visualScale?: number;
+}) {
+  const visualSize = Math.max(1, placement.size * clampNumber(placement.visualScale ?? 1, 0.15, 1));
+  const centerX = placement.x + placement.size / 2;
+  const centerY = placement.y + placement.size / 2;
+  return {
+    id: placement.id,
+    x: centerX - visualSize / 2,
+    y: centerY - visualSize / 2,
+    size: visualSize,
+  };
+}
+
+function findIdeationBubbleSpawnTarget(
+  bubble: Pick<IdeationKeywordBubble, "id">,
+  size: number,
+  occupied: Array<{ id: string; x: number; y: number; size: number; visualScale?: number }>,
+  tick: number,
+  order: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  const visualSize = size * CANVAS_IDEATION_BUBBLE_ENTER_SCALE;
+  const { spawnX, spawnY } = resolveIdeationBubbleLayoutAnchor(layoutAnchor);
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const seedAngle = ideationBubbleSeedRatio(`${bubble.id}:spawn:${tick}`, 61) * Math.PI * 2;
+  const occupiedVisuals = occupied.map(getIdeationBubbleScaledCircle);
+
+  for (let attempt = 0; attempt < 140; attempt += 1) {
+    const radius = attempt === 0 ? 0 : 16 + Math.sqrt(attempt + order * 4) * 24;
+    const angle = seedAngle + attempt * goldenAngle + order * 0.38;
+    const visualCenterX = spawnX + Math.cos(angle) * radius;
+    const visualCenterY = spawnY + Math.sin(angle) * radius * 0.72;
+    const visualCandidate = {
+      id: bubble.id,
+      x: visualCenterX - visualSize / 2,
+      y: visualCenterY - visualSize / 2,
+      size: visualSize,
+    };
+
+    const spawnPositionOpen = occupiedVisuals.every((placement) => (
+      placement.id === visualCandidate.id ||
+      !ideationBubbleCirclesOverlap(visualCandidate, placement, CANVAS_IDEATION_BUBBLE_SPAWN_GAP)
+    ));
+
+    if (spawnPositionOpen) {
+      return clampIdeationBubblePosition(
+        visualCenterX - size / 2,
+        visualCenterY - size / 2,
+        size,
+      );
+    }
+  }
+
+  const fallbackCenterX = spawnX + ideationBubbleSeedRatio(`${bubble.id}:spawn-fallback`, 67) * 180 - 90;
+  const fallbackCenterY = spawnY + ideationBubbleSeedRatio(`${bubble.id}:spawn-fallback`, 71) * 120 - 60;
+  return clampIdeationBubblePosition(fallbackCenterX - size / 2, fallbackCenterY - size / 2, size);
+}
+
+function applyIdeationBubbleEnterState(
+  visuals: IdeationKeywordBubbleVisual[],
+  enteringIds: Set<string>,
+  tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  if (enteringIds.size === 0) {
+    return visuals.map((visual) => ({
+      ...visual,
+      entering: false,
+      visualScale: visual.visualScale ?? 1,
+    }));
+  }
+
+  const spawnOccupied: Array<{ id: string; x: number; y: number; size: number; visualScale?: number }> = visuals
+    .filter((visual) => !enteringIds.has(visual.id))
+    .map((visual) => ({
+      id: visual.id,
+      x: visual.targetX,
+      y: visual.targetY,
+      size: visual.size,
+      visualScale: visual.visualScale ?? 1,
+    }));
+  let enteringOrder = 0;
+
+  return visuals.map((visual) => {
+    if (!enteringIds.has(visual.id)) {
+      return {
+        ...visual,
+        entering: false,
+        visualScale: visual.visualScale ?? 1,
+      };
+    }
+
+    const spawn = findIdeationBubbleSpawnTarget(visual, visual.size, spawnOccupied, tick, enteringOrder, layoutAnchor);
+    enteringOrder += 1;
+    spawnOccupied.push({
+      id: visual.id,
+      x: spawn.x,
+      y: spawn.y,
+      size: visual.size,
+      visualScale: CANVAS_IDEATION_BUBBLE_ENTER_SCALE,
+    });
+
+    return {
+      ...visual,
+      targetX: spawn.x,
+      targetY: spawn.y,
+      settledTargetX: visual.targetX,
+      settledTargetY: visual.targetY,
+      visualScale: CANVAS_IDEATION_BUBBLE_ENTER_SCALE,
+      entering: true,
+      opacity: isIdeationBubbleOpacityLocked(visual)
+        ? 1
+        : Math.min(visual.opacity, CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX),
+    };
+  });
+}
+
 function findStableIdeationBubbleTarget(
   bubble: IdeationKeywordBubble,
   size: number,
   visuals: IdeationKeywordBubbleVisual[],
   occupied: Array<{ id: string; x: number; y: number; size: number }>,
   tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ) {
   const anchor = findIdeationBubbleAnchorVisual(bubble, visuals);
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
@@ -960,8 +1140,7 @@ function findStableIdeationBubbleTarget(
     }
   }
 
-  const centerX = CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2;
-  const centerY = CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2;
+  const { centerX, centerY } = resolveIdeationBubbleLayoutAnchor(layoutAnchor);
   const seedAngle = ideationBubbleSeedRatio(`${bubble.id}:${tick}`, 29) * Math.PI * 2;
   for (let attempt = 0; attempt < 180; attempt += 1) {
     const radius = Math.sqrt(attempt + 1) * 78;
@@ -993,25 +1172,88 @@ function getIdeationBubbleCenter(bubble: Pick<IdeationKeywordBubbleVisual, "targ
 function limitIdeationBubbleTargetShift(
   current: { x: number; y: number },
   target: { x: number; y: number },
+  maxDistance = CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE,
 ) {
   const dx = target.x - current.x;
   const dy = target.y - current.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
-  if (distance <= CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE || distance < 0.001) {
+  if (distance <= maxDistance || distance < 0.001) {
     return target;
   }
 
-  const ratio = CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE / distance;
+  const ratio = maxDistance / distance;
   return {
     x: current.x + dx * ratio,
     y: current.y + dy * ratio,
   };
 }
 
+function normalizeIdeationBubbleLayoutZone(bubble: Pick<IdeationKeywordBubble, "layoutZone">) {
+  const zone = String(bubble.layoutZone || "default").trim().toLowerCase();
+  return zone === "core" || zone === "peripheral" || zone === "archived" ? zone : "default";
+}
+
+function getIdeationBubbleZoneTarget(
+  bubble: Pick<IdeationKeywordBubbleVisual, "id" | "size" | "targetX" | "targetY" | "layoutZone" | "activity">,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  const zone = normalizeIdeationBubbleLayoutZone(bubble);
+  if (zone !== "core" && zone !== "peripheral") {
+    return null;
+  }
+
+  const { centerX: planeCenterX, centerY: planeCenterY } = resolveIdeationBubbleLayoutAnchor(layoutAnchor);
+  const center = getIdeationBubbleCenter(bubble);
+  const dx = center.x - planeCenterX;
+  const dy = center.y - planeCenterY;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  const seedAngle = ideationBubbleSeedRatio(`${bubble.id}:layout-zone`, 43) * Math.PI * 2;
+  const angle = zone === "core" ? seedAngle : distance > 12 ? Math.atan2(dy, dx) : seedAngle;
+  const activity = clampNumber(Number(bubble.activity ?? 0.5), 0, 1);
+  const radiusBase = zone === "peripheral"
+    ? CANVAS_IDEATION_BUBBLE_PERIPHERAL_ZONE_RADIUS
+    : 52 + (1 - activity) * CANVAS_IDEATION_BUBBLE_CORE_ZONE_RADIUS;
+  const radiusJitter = zone === "peripheral"
+    ? ideationBubbleSeedRatio(`${bubble.id}:peripheral`, 47) * 110
+    : ideationBubbleSeedRatio(`${bubble.id}:core`, 53) * (22 + (1 - activity) * 58);
+  const radius = radiusBase + radiusJitter;
+  return clampIdeationBubblePosition(
+    planeCenterX + Math.cos(angle) * radius - bubble.size / 2,
+    planeCenterY + Math.sin(angle) * radius * 0.76 - bubble.size / 2,
+    bubble.size,
+  );
+}
+
+function applyIdeationBubbleLayoutZoneRetarget(
+  visuals: IdeationKeywordBubbleVisual[],
+  tick: number,
+  immediate = false,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  return visuals.map((visual) => {
+    const target = getIdeationBubbleZoneTarget(visual, layoutAnchor);
+    if (!target) return visual;
+    const limitedTarget = immediate
+      ? target
+      : limitIdeationBubbleTargetShift(
+          { x: visual.targetX, y: visual.targetY },
+          target,
+          CANVAS_IDEATION_BUBBLE_ZONE_RETARGET_DISTANCE,
+        );
+    const clampedTarget = clampIdeationBubblePosition(limitedTarget.x, limitedTarget.y, visual.size);
+    return {
+      ...visual,
+      targetX: clampedTarget.x,
+      targetY: clampedTarget.y,
+    };
+  });
+}
+
 function applyIdeationBubbleProximityRetarget(
   visuals: IdeationKeywordBubbleVisual[],
   incomingIds: Set<string>,
   tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ) {
   const nextVisuals = visuals.map((visual) => ({ ...visual }));
   const occupied = nextVisuals.map((visual) => ({
@@ -1033,7 +1275,7 @@ function applyIdeationBubbleProximityRetarget(
     const distance = Math.sqrt(dx * dx + dy * dy);
     if (distance <= CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE) return;
 
-    const target = findStableIdeationBubbleTarget(visual, visual.size, nextVisuals, occupied, tick);
+    const target = findStableIdeationBubbleTarget(visual, visual.size, nextVisuals, occupied, tick, layoutAnchor);
     const limitedTarget = limitIdeationBubbleTargetShift(
       { x: visual.targetX, y: visual.targetY },
       target,
@@ -1043,6 +1285,69 @@ function applyIdeationBubbleProximityRetarget(
     visual.targetY = clampedTarget.y;
     occupied[index] = { id: visual.id, x: visual.targetX, y: visual.targetY, size: visual.size };
   });
+
+  return nextVisuals;
+}
+
+function applyIdeationBubbleIncrementalLayoutRelaxation(
+  visuals: IdeationKeywordBubbleVisual[],
+  tick: number,
+) {
+  if (visuals.length < 2) return visuals;
+
+  const nextVisuals = visuals.map((visual) => ({ ...visual }));
+  for (let iteration = 0; iteration < CANVAS_IDEATION_BUBBLE_RELAXATION_ITERATIONS; iteration += 1) {
+    let moved = false;
+
+    for (let leftIndex = 0; leftIndex < nextVisuals.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < nextVisuals.length; rightIndex += 1) {
+        const left = nextVisuals[leftIndex];
+        const right = nextVisuals[rightIndex];
+        const leftRadius = left.size / 2;
+        const rightRadius = right.size / 2;
+        const leftCenterX = left.targetX + leftRadius;
+        const leftCenterY = left.targetY + leftRadius;
+        const rightCenterX = right.targetX + rightRadius;
+        const rightCenterY = right.targetY + rightRadius;
+        let dx = rightCenterX - leftCenterX;
+        let dy = rightCenterY - leftCenterY;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        const minDistance = leftRadius + rightRadius + CANVAS_IDEATION_BUBBLE_RELAXATION_GAP;
+
+        if (distance >= minDistance) continue;
+        if (distance < 0.001) {
+          const angle = ideationBubbleSeedRatio(`${left.id}:${right.id}:relax`, tick + iteration) * Math.PI * 2;
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+
+        const overlap = minDistance - distance;
+        const pushX = (dx / distance) * overlap * CANVAS_IDEATION_BUBBLE_RELAXATION_STEP;
+        const pushY = (dy / distance) * overlap * CANVAS_IDEATION_BUBBLE_RELAXATION_STEP;
+        const leftMoveShare = right.size / Math.max(1, left.size + right.size);
+        const rightMoveShare = 1 - leftMoveShare;
+        const leftTarget = clampIdeationBubblePosition(
+          left.targetX - pushX * leftMoveShare,
+          left.targetY - pushY * leftMoveShare,
+          left.size,
+        );
+        const rightTarget = clampIdeationBubblePosition(
+          right.targetX + pushX * rightMoveShare,
+          right.targetY + pushY * rightMoveShare,
+          right.size,
+        );
+
+        left.targetX = leftTarget.x;
+        left.targetY = leftTarget.y;
+        right.targetX = rightTarget.x;
+        right.targetY = rightTarget.y;
+        moved = true;
+      }
+    }
+
+    if (!moved) break;
+  }
 
   return nextVisuals;
 }
@@ -1115,33 +1420,58 @@ export function buildStableIdeationBubbleVisuals(
   incomingBubbles: IdeationKeywordBubble[],
   growthById: Record<string, number>,
   tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ) {
   const incomingById = new Map(incomingBubbles.map((bubble) => [bubble.id, bubble]));
   const incomingIds = new Set(incomingById.keys());
-  const maxCount = Math.max(
-    1,
-    ...previousVisuals.map((bubble) => bubble.count),
-    ...incomingBubbles.map((bubble) => bubble.count),
-  );
+  const visiblePreviousVisuals = previousVisuals.filter((visual) => incomingIds.has(visual.id));
 
-  if (previousVisuals.length === 0 && incomingBubbles.length > 0) {
-    const initialVisuals = buildIdeationKeywordBubblePlacements(incomingBubbles, growthById, tick).map(({ bubble, x, y, size }) => {
+  if (visiblePreviousVisuals.length === 0 && incomingBubbles.length > 0) {
+    const maxInitialCount = Math.max(
+      1,
+      ...incomingBubbles.map((bubble) => bubble.count),
+    );
+    const initialVisuals = buildIdeationKeywordBubblePlacements(incomingBubbles, growthById, tick, layoutAnchor).map(({ bubble, x, y, size }) => {
       const activity = getIdeationBubbleIncomingActivity(bubble);
+      const visualSize = getIdeationBubbleVisualSize(bubble, maxInitialCount, activity, growthById[bubble.id] || 1);
+      const centerX = x + size / 2;
+      const centerY = y + size / 2;
+      const position = clampIdeationBubblePosition(centerX - visualSize / 2, centerY - visualSize / 2, visualSize);
       return {
         ...bubble,
         activity,
         opacity: getIdeationBubbleVisualOpacity(bubble, activity),
-        size,
-        targetX: x,
-        targetY: y,
+        size: visualSize,
+        targetX: position.x,
+        targetY: position.y,
+        visualScale: 1,
+        entering: false,
         firstSeenTick: tick,
         lastSeenTick: tick,
       };
     });
-    return applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(initialVisuals, tick));
+    const settledVisuals = applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(
+      applyIdeationBubbleIncrementalLayoutRelaxation(
+        applyIdeationBubbleLayoutZoneRetarget(initialVisuals, tick, true, layoutAnchor),
+        tick,
+      ),
+      tick,
+    ));
+    return applyIdeationBubbleEnterState(
+      settledVisuals,
+      tick > 1 ? new Set(incomingBubbles.map((bubble) => bubble.id)) : new Set<string>(),
+      tick,
+      layoutAnchor,
+    );
   }
 
-  const nextVisuals = previousVisuals.map((visual) => {
+  const maxCount = Math.max(
+    1,
+    ...visiblePreviousVisuals.map((bubble) => bubble.count),
+    ...incomingBubbles.map((bubble) => bubble.count),
+  );
+
+  const nextVisuals: IdeationKeywordBubbleVisual[] = visiblePreviousVisuals.map((visual) => {
     const incoming = incomingById.get(visual.id);
     const isActive = Boolean(incoming);
     const merged = incoming ? { ...visual, ...incoming } : visual;
@@ -1149,8 +1479,10 @@ export function buildStableIdeationBubbleVisuals(
       ? clampNumber(Math.max(visual.activity, 0.5) * 0.35 + getIdeationBubbleIncomingActivity(incoming || visual) * 0.65, 0.18, 1)
       : clampNumber(visual.activity * CANVAS_IDEATION_BUBBLE_DECAY_RATE, 0.08, 1);
     const size = getIdeationBubbleVisualSize(merged, maxCount, nextActivity, growthById[visual.id] || 1);
-    const centerX = visual.targetX + visual.size / 2;
-    const centerY = visual.targetY + visual.size / 2;
+    const baseTargetX = visual.entering && visual.settledTargetX != null ? visual.settledTargetX : visual.targetX;
+    const baseTargetY = visual.entering && visual.settledTargetY != null ? visual.settledTargetY : visual.targetY;
+    const centerX = baseTargetX + visual.size / 2;
+    const centerY = baseTargetY + visual.size / 2;
     const position = clampIdeationBubblePosition(centerX - size / 2, centerY - size / 2, size);
     return {
       ...merged,
@@ -1159,6 +1491,10 @@ export function buildStableIdeationBubbleVisuals(
       size,
       targetX: position.x,
       targetY: position.y,
+      settledTargetX: undefined,
+      settledTargetY: undefined,
+      visualScale: 1,
+      entering: false,
       firstSeenTick: visual.firstSeenTick,
       lastSeenTick: isActive ? tick : visual.lastSeenTick,
     };
@@ -1171,11 +1507,12 @@ export function buildStableIdeationBubbleVisuals(
     size: visual.size,
   }));
 
+  const newBubbleIds = new Set<string>();
   incomingBubbles.forEach((bubble) => {
-    if (previousVisuals.some((visual) => visual.id === bubble.id)) return;
+    if (visiblePreviousVisuals.some((visual) => visual.id === bubble.id)) return;
     const activity = getIdeationBubbleIncomingActivity(bubble);
     const size = getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
-    const target = findStableIdeationBubbleTarget(bubble, size, nextVisuals, occupied, tick);
+    const target = findStableIdeationBubbleTarget(bubble, size, nextVisuals, occupied, tick, layoutAnchor);
     const visual: IdeationKeywordBubbleVisual = {
       ...bubble,
       activity,
@@ -1183,20 +1520,62 @@ export function buildStableIdeationBubbleVisuals(
       size,
       targetX: target.x,
       targetY: target.y,
+      visualScale: 1,
+      entering: false,
       firstSeenTick: tick,
       lastSeenTick: tick,
     };
     nextVisuals.push(visual);
+    newBubbleIds.add(visual.id);
     occupied.push({ id: visual.id, x: visual.targetX, y: visual.targetY, size: visual.size });
   });
 
-  return applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(
-    applyIdeationBubbleProximityRetarget(nextVisuals, incomingIds, tick),
+  const retargetedVisuals = applyIdeationBubbleLayoutZoneRetarget(
+    applyIdeationBubbleProximityRetarget(nextVisuals, incomingIds, tick, layoutAnchor),
+    tick,
+    false,
+    layoutAnchor,
+  );
+
+  const settledVisuals = applyIdeationBubblePrimaryEmphasis(resolveIdeationBubbleVisualCollisions(
+    applyIdeationBubbleIncrementalLayoutRelaxation(retargetedVisuals, tick),
     tick,
   )).sort((left, right) => {
     const leftActive = incomingIds.has(left.id) ? 1 : 0;
     const rightActive = incomingIds.has(right.id) ? 1 : 0;
     return rightActive - leftActive || left.firstSeenTick - right.firstSeenTick;
   });
+
+  return applyIdeationBubbleEnterState(settledVisuals, newBubbleIds, tick, layoutAnchor);
+}
+
+export function getIdeationBubbleEnterSettleDelayMs() {
+  return CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS;
+}
+
+export function settleEnteringIdeationBubbleVisuals(
+  visuals: IdeationKeywordBubbleVisual[],
+  targetIds?: ReadonlySet<string>,
+) {
+  let changed = false;
+  const nextVisuals = visuals.map((visual) => {
+    if (!visual.entering || (targetIds && !targetIds.has(visual.id))) {
+      return visual;
+    }
+
+    changed = true;
+    return {
+      ...visual,
+      targetX: visual.settledTargetX ?? visual.targetX,
+      targetY: visual.settledTargetY ?? visual.targetY,
+      settledTargetX: undefined,
+      settledTargetY: undefined,
+      visualScale: 1,
+      entering: false,
+      opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
+    };
+  });
+
+  return changed ? nextVisuals : visuals;
 }
 

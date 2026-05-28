@@ -64,6 +64,7 @@ export function useCanvasHeaderModels({
     onOpenMeetingGoalEditor: incomingHandlers.onOpenMeetingGoalEditor,
     onCancelMeetingGoalEdit: incomingHandlers.onCancelMeetingGoalEdit,
     onSaveMeetingGoalEdit: incomingHandlers.onSaveMeetingGoalEdit,
+    onSaveMeetingTitle: incomingHandlers.onSaveMeetingTitle,
     onMeetingGoalEditorDraftChange: incomingHandlers.onMeetingGoalEditorDraftChange,
     onMeetingGoalContextEditorDraftChange: incomingHandlers.onMeetingGoalContextEditorDraftChange,
     onStageSelect: incomingHandlers.onStageSelect,
@@ -79,6 +80,7 @@ export function useCanvasHeaderModels({
     incomingHandlers.onRecordingToggle,
     incomingHandlers.onRefreshProblemChunkSummaries,
     incomingHandlers.onSaveMeetingGoalEdit,
+    incomingHandlers.onSaveMeetingTitle,
     incomingHandlers.onStageSelect,
     incomingHandlers.onToggleIdeationBubbleDebug,
   ]);
