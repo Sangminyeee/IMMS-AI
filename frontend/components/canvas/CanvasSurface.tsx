@@ -115,8 +115,10 @@ export type CanvasSurfaceProblemHandlers = {
   onProblemStructureDraftMethodChange: (method: ProblemStructureMethod) => void;
   onProblemStructureDraftModeChange: (mode: ConcreteProblemDefinitionMode) => void;
   onStartProblemStructure: () => void | Promise<void>;
+  onRegenerateProblemDefinition: () => void | Promise<void>;
   onProblemStructureMethodChange: (method: ProblemStructureMethod) => void;
   onProblemDefinitionModeChange: (mode: ConcreteProblemDefinitionMode) => void;
+  onProblemDefinitionPhaseSelect: (phase: ProblemDefinitionPhase) => void;
   onCloseProblemGroupingRationale: () => void;
   getProblemToolbarActionLabel: (action: ProblemCanvasToolbarActionId) => string;
   isProblemToolbarActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
@@ -267,6 +269,10 @@ export const CanvasSurface = memo(function CanvasSurface({
     isProblemToolbarActionActive,
     onProblemToolbarAction,
   } = problemHandlers;
+  const hasSummaryDocumentContent =
+    finalSummaryDocument.markdown.trim() || (finalSummaryDocument.document_blocks || []).length > 0;
+  const showProblemGenerationOverlay = problemDefinitionStagePending && problemGroupsCount === 0;
+  const showSummaryGenerationOverlay = summaryDocumentPending && !hasSummaryDocumentContent;
 
   return (
     <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
@@ -366,7 +372,7 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {problemDefinitionStagePending ? <ProblemDefinitionPreparingOverlay /> : null}
+      {showProblemGenerationOverlay ? <ProblemDefinitionPreparingOverlay /> : null}
 
       {stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen ? (
         <ProblemStructureSetupModal
@@ -389,7 +395,7 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {summaryDocumentPending ? <SummaryDocumentPendingOverlay /> : null}
+      {showSummaryGenerationOverlay ? <SummaryDocumentPendingOverlay /> : null}
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}
 

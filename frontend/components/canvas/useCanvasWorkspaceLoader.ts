@@ -3,6 +3,7 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { getCanvasPersonalNotes, getCanvasWorkspaceState } from "@/lib/api";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
@@ -26,6 +27,7 @@ import {
   type AgendaOverride,
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
@@ -111,6 +113,7 @@ type UseCanvasWorkspaceLoaderOptions<
   setCustomGroups: Dispatch<SetStateAction<CanvasCustomGroup[]>>;
   setEditingProblemGroupId: Dispatch<SetStateAction<string>>;
   setFinalSummaryDocument: Dispatch<SetStateAction<CanvasFinalSolutionSummary>>;
+  setArtifactGeneration: Dispatch<SetStateAction<CanvasArtifactGenerationMap>>;
   setIdeationBubbleGraph: Dispatch<SetStateAction<CanvasIdeationBubbleGraph>>;
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
@@ -168,6 +171,7 @@ export function useCanvasWorkspaceLoader<
   setCustomGroups,
   setEditingProblemGroupId,
   setFinalSummaryDocument,
+  setArtifactGeneration,
   setIdeationBubbleGraph,
   setImportedState,
   setImportOverrideActive,
@@ -218,6 +222,7 @@ export function useCanvasWorkspaceLoader<
     setProblemStructurePending(false);
     resetProblemStructureEditorState();
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
+    setArtifactGeneration({});
     setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
@@ -306,6 +311,7 @@ export function useCanvasWorkspaceLoader<
             ? savedLocalCanvasState?.final_solution_summary || saved.final_solution_summary || null
             : saved.final_solution_summary || null,
         );
+        const nextArtifactGeneration = normalizeCanvasArtifactGeneration(saved.artifact_generation || {});
         const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(
           shouldUseLocalCanvas
             ? savedLocalCanvasState?.node_positions || {}
@@ -327,6 +333,7 @@ export function useCanvasWorkspaceLoader<
 
         setProblemGroups(nextGroups);
         setFinalSummaryDocument(nextFinalSummary);
+        setArtifactGeneration(nextArtifactGeneration);
         setIdeationBubbleGraph(nextIdeationBubbleGraph);
         setSummaryDocumentEditMode(false);
         setSummaryEvidenceOpenGroupIds(new Set());
@@ -366,6 +373,7 @@ export function useCanvasWorkspaceLoader<
           problem_structure: buildProblemStructureStatePayload(displayProblemStructure),
           solution_topics: [],
           final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
+          artifact_generation: nextArtifactGeneration,
           node_positions: nextNodePositions,
           ideation_bubble_graph: nextIdeationBubbleGraph,
           imported_state: nextImportedState,
@@ -380,6 +388,7 @@ export function useCanvasWorkspaceLoader<
           problemGroups: nextGroups,
           problemStructure: buildProblemStructureStatePayload(displayProblemStructure),
           finalSolutionSummary: nextFinalSummary,
+          artifactGeneration: nextArtifactGeneration,
           ideationBubbleGraph: nextIdeationBubbleGraph,
           nodePositions: nextNodePositions,
           importedState: nextImportedState,
@@ -414,6 +423,7 @@ export function useCanvasWorkspaceLoader<
 
         setProblemGroups([]);
         setFinalSummaryDocument(emptyFinalSummary);
+        setArtifactGeneration({});
         setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
         setSummaryDocumentEditMode(false);
         setSummaryEvidenceOpenGroupIds(new Set());
@@ -446,6 +456,7 @@ export function useCanvasWorkspaceLoader<
           problem_structure: defaultProblemStructure,
           solution_topics: [],
           final_solution_summary: buildFinalSolutionSummaryPayload(emptyFinalSummary),
+          artifact_generation: {},
           node_positions: {},
           ideation_bubble_graph: createEmptyIdeationBubbleGraph(),
           imported_state: null,
@@ -460,6 +471,7 @@ export function useCanvasWorkspaceLoader<
           problemGroups: [],
           problemStructure: defaultProblemStructure,
           finalSolutionSummary: emptyFinalSummary,
+          artifactGeneration: {},
           ideationBubbleGraph: createEmptyIdeationBubbleGraph(),
           nodePositions: {},
           importedState: null,
@@ -501,6 +513,7 @@ export function useCanvasWorkspaceLoader<
     setCustomGroups,
     setEditingProblemGroupId,
     setFinalSummaryDocument,
+    setArtifactGeneration,
     setIdeationBubbleGraph,
     setImportedState,
     setImportOverrideActive,

@@ -1,4 +1,6 @@
 ﻿import type {
+  CanvasArtifactGenerationKey,
+  CanvasArtifactGenerationState,
   CanvasLocalState,
   CanvasFinalSolutionSummary,
   CanvasIdeaAssimilationUtterance,
@@ -318,6 +320,24 @@ export async function getCanvasWorkspaceState(meetingId: string): Promise<Canvas
   const params = new URLSearchParams({ meeting_id: meetingId });
   return requestJson<CanvasWorkspaceStateResponse>(`/api/canvas/workspace-state?${params.toString()}`, {
     cache: "no-store",
+  });
+}
+
+export async function startCanvasArtifactGeneration(payload: {
+  meeting_id: string;
+  artifact_key: CanvasArtifactGenerationKey;
+  user_id?: string;
+  force?: boolean;
+}): Promise<{
+  ok: boolean;
+  acquired: boolean;
+  generation: CanvasArtifactGenerationState;
+  workspace?: CanvasWorkspaceStateResponse;
+}> {
+  return requestJson("/api/canvas/artifact-generation/start", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
   });
 }
 

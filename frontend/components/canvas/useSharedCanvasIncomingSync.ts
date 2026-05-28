@@ -11,6 +11,7 @@ import {
   type AgendaOverride,
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
@@ -26,6 +27,7 @@ import {
   normalizeFinalSolutionSummaryPayload,
 } from "@/components/canvas/summaryDocumentHelpers";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
@@ -56,6 +58,7 @@ type SharedWorkspaceSnapshot = {
   problemGroups: ProblemGroupModel[];
   problemStructure: CanvasProblemStructureState;
   finalSolutionSummary: CanvasFinalSolutionSummary;
+  artifactGeneration: CanvasArtifactGenerationMap;
   ideationBubbleGraph: CanvasIdeationBubbleGraph;
   nodePositions: CanvasNodePositionsByStage;
   importedState: MeetingState | null;
@@ -95,6 +98,7 @@ type UseSharedCanvasIncomingSyncOptions = {
   setCanvasItems: Dispatch<SetStateAction<CanvasWorkspaceItem[]>>;
   setCustomGroups: Dispatch<SetStateAction<CanvasCustomGroup[]>>;
   setFinalSummaryDocument: Dispatch<SetStateAction<CanvasFinalSolutionSummary>>;
+  setArtifactGeneration: Dispatch<SetStateAction<CanvasArtifactGenerationMap>>;
   setIdeationBubbleGraph: Dispatch<SetStateAction<CanvasIdeationBubbleGraph>>;
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
@@ -170,6 +174,7 @@ export function useSharedCanvasIncomingSync({
   setCanvasItems,
   setCustomGroups,
   setFinalSummaryDocument,
+  setArtifactGeneration,
   setIdeationBubbleGraph,
   setImportedState,
   setImportOverrideActive,
@@ -317,6 +322,7 @@ export function useSharedCanvasIncomingSync({
       mode: problemDefinitionMode,
     });
     const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
+    const nextArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
     const incomingIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
       incomingSharedCanvasSync.ideation_bubble_graph,
     );
@@ -341,17 +347,34 @@ export function useSharedCanvasIncomingSync({
       problem_structure: localViewProblemStructurePayload,
       solution_topics: [],
       final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
+      artifact_generation: nextArtifactGeneration,
       ideation_bubble_graph: nextIdeationBubbleGraph,
       node_positions: currentNodePositionsSnapshot,
       imported_state: incomingSharedCanvasSync.imported_state || null,
     });
     applyingRemoteSharedSyncRef.current = true;
+    latestSharedWorkspaceRef.current = {
+      meetingGoal: incomingMeetingGoal,
+      meetingGoalContext: incomingMeetingGoalContext,
+      stage,
+      agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
+      canvasItems: nextIncomingCanvasItems,
+      customGroups: incomingCustomGroups,
+      problemGroups: nextProblemGroups,
+      problemStructure: localViewProblemStructurePayload,
+      finalSolutionSummary: nextFinalSummary,
+      artifactGeneration: nextArtifactGeneration,
+      ideationBubbleGraph: nextIdeationBubbleGraph,
+      nodePositions: currentNodePositionsSnapshot,
+      importedState: incomingSharedCanvasSync.imported_state || null,
+    };
 
     setProblemGroups(nextProblemGroups);
     setProblemStructureNodes(nextProblemStructure.nodes);
     setProblemStructureGroups(nextProblemStructure.groups);
     setProblemStructurePending(false);
     setFinalSummaryDocument(nextFinalSummary);
+    setArtifactGeneration(nextArtifactGeneration);
     setIdeationBubbleGraph(nextIdeationBubbleGraph);
     setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
     setSummaryDocumentDraftDirty(false);
@@ -380,6 +403,7 @@ export function useSharedCanvasIncomingSync({
       problemGroups: nextProblemGroups,
       problemStructure: localViewProblemStructurePayload,
       finalSolutionSummary: nextFinalSummary,
+      artifactGeneration: nextArtifactGeneration,
       ideationBubbleGraph: nextIdeationBubbleGraph,
       nodePositions: currentNodePositionsSnapshot,
       importedState: incomingSharedCanvasSync.imported_state || null,
@@ -413,6 +437,7 @@ export function useSharedCanvasIncomingSync({
     problemStructureMethod,
     remoteNodePreviewTargetsRef,
     setAgendaOverrides,
+    setArtifactGeneration,
     setCanvasItems,
     setCustomGroups,
     setFinalSummaryDocument,

@@ -81,6 +81,8 @@ const panelButtonClasses = {
     "grid h-[20.521px] w-[20.521px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold leading-[15.39px]",
   primary:
     "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+  secondary:
+    "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
   aiInput:
     "-ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
   aiSend:
@@ -92,6 +94,7 @@ const panelButtonTextClasses = {
   share: "moa-font-pretendard shrink-0 whitespace-nowrap text-center text-[12px] font-semibold leading-[20.008px] tracking-[-0.03px] text-[#ededed]",
   stage: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]",
   primary: "moa-font-pretendard text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white",
+  secondary: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#236cf3]",
 };
 
 export type CanvasWorkspaceParticipant = {
@@ -668,6 +671,7 @@ function CurrentStagePanel({
   const problemDefinitionPhase = problem.problemDefinitionPhase as ProblemDefinitionPhase;
   const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
+  const hasProblemStructure = problem.problemStructureNodesCount > 0;
 
   let title = stageLabel(stage, problemDefinitionPhase);
   let description = (
@@ -735,6 +739,25 @@ function CurrentStagePanel({
     onButtonClick = header.handlers.onEndMeetingClick;
   }
 
+  const regenerateProblemDefinitionButton = isProblemExplore ? (
+    <button
+      type="button"
+      onClick={() => {
+        void problemHandlers.onRegenerateProblemDefinition();
+      }}
+      disabled={header.view.busy || problem.problemDefinitionStagePending}
+      className={`mt-[10px] ${panelButtonClasses.secondary}`}
+    >
+      <span
+        className={`${panelButtonTextClasses.secondary} ${
+          header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
+        }`}
+      >
+        {problem.problemDefinitionStagePending ? "1단계 재생성 중" : "1단계 재생성"}
+      </span>
+    </button>
+  ) : null;
+
   return (
     <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
       <div className="flex items-start gap-[12px]">
@@ -754,6 +777,38 @@ function CurrentStagePanel({
           <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
         </button>
       ) : null}
+      {stage === "problem-definition" && hasProblemStructure ? (
+        <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
+          <p className="text-[11px] font-bold leading-[1.4] tracking-[-0.027px] text-[#111]">문제정의 단계</p>
+          <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
+            {([
+              ["explore", "1단계"],
+              ["structure", "2단계"],
+            ] as const).map(([phase, label]) => {
+              const active = problemDefinitionPhase === phase;
+              return (
+                <button
+                  key={phase}
+                  type="button"
+                  onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
+                  className={`h-[30px] rounded-full border text-center transition ${
+                    active
+                      ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
+                      : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
+                  }`}
+                >
+                  <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {regenerateProblemDefinitionButton}
+        </div>
+      ) : (
+        regenerateProblemDefinitionButton
+      )}
     </section>
   );
 }

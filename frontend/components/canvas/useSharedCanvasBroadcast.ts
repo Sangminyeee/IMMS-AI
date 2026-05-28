@@ -13,7 +13,9 @@ import {
   type FullWorkspacePatchPayloadOverrides,
 } from "@/components/canvas/canvasWorkspaceSerialization";
 import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDocumentHelpers";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
@@ -33,6 +35,7 @@ type UseSharedCanvasBroadcastOptions = {
   canvasItems: CanvasWorkspaceItem[];
   customGroups: CanvasCustomGroup[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  artifactGeneration: CanvasArtifactGenerationMap;
   ideationBubbleGraph: CanvasIdeationBubbleGraph;
   importedState: MeetingState | null;
   incomingCanvasStateRequestId: string;
@@ -61,6 +64,7 @@ export function useSharedCanvasBroadcast({
   canvasItems,
   customGroups,
   finalSummaryDocument,
+  artifactGeneration,
   ideationBubbleGraph,
   importedState,
   incomingCanvasStateRequestId,
@@ -95,6 +99,7 @@ export function useSharedCanvasBroadcast({
         problemGroups: overrides.problemGroups ?? problemGroups,
         problemStructure: overrides.problemStructure ?? problemStructureStatePayload,
         finalSolutionSummary: overrides.finalSolutionSummary ?? finalSummaryDocument,
+        artifactGeneration: overrides.artifactGeneration ?? artifactGeneration,
         ideationBubbleGraph: overrides.ideationBubbleGraph ?? ideationBubbleGraph,
         nodePositions: overrides.nodePositions ?? nodePositions,
         importedState:
@@ -107,6 +112,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      artifactGeneration,
       ideationBubbleGraph,
       importedState,
       meetingGoalContextDraft,
@@ -131,6 +137,7 @@ export function useSharedCanvasBroadcast({
       problem_structure: problemStructureStatePayload,
       solution_topics: [],
       final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
+      artifact_generation: normalizeCanvasArtifactGeneration(artifactGeneration),
       ideation_bubble_graph: ideationBubbleGraph,
       imported_state: importedState,
     }),
@@ -139,6 +146,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      artifactGeneration,
       ideationBubbleGraph,
       importedState,
       meetingGoalContextDraft,
@@ -171,6 +179,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: overrides?.problemStructure ?? problemStructureStatePayload,
         solution_topics: [],
         final_solution_summary: buildFinalSolutionSummaryPayload(overrides?.finalSolutionSummary ?? finalSummaryDocument),
+        artifact_generation: normalizeCanvasArtifactGeneration(overrides?.artifactGeneration ?? artifactGeneration),
         ideation_bubble_graph: overrides?.ideationBubbleGraph ?? ideationBubbleGraph,
         imported_state:
           overrides && "importedState" in overrides
@@ -201,6 +210,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: snapshot.problem_structure,
         solution_topics: snapshot.solution_topics,
         final_solution_summary: snapshot.final_solution_summary,
+        artifact_generation: snapshot.artifact_generation,
         ideation_bubble_graph: snapshot.ideation_bubble_graph,
         imported_state: snapshot.imported_state,
       });
@@ -210,6 +220,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      artifactGeneration,
       ideationBubbleGraph,
       importedState,
       lastNodePreviewFlushAtRef,
@@ -283,6 +294,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: sharedCanvasSnapshot.problem_structure,
         solution_topics: sharedCanvasSnapshot.solution_topics,
         final_solution_summary: sharedCanvasSnapshot.final_solution_summary,
+        artifact_generation: sharedCanvasSnapshot.artifact_generation,
         ideation_bubble_graph: sharedCanvasSnapshot.ideation_bubble_graph,
         imported_state: sharedCanvasSnapshot.imported_state,
       });

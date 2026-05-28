@@ -417,6 +417,9 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
             workspace.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(workspace.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            workspace.get("artifact_generation") or {}
+        ),
         "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
             workspace.get("ideation_bubble_graph")
         ),
@@ -461,6 +464,9 @@ def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[st
             shared_state.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(shared_state.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            shared_state.get("artifact_generation") or {}
+        ),
         "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
             shared_state.get("ideation_bubble_graph")
         ),
@@ -1201,6 +1207,9 @@ def _normalize_canvas_local_state(payload: Any) -> dict[str, Any]:
             payload.get("final_solution_summary")
         )
         normalized["node_positions"] = _normalize_canvas_node_positions(payload.get("node_positions") or {})
+        normalized["artifact_generation"] = _normalize_canvas_artifact_generation(
+            payload.get("artifact_generation") or {}
+        )
         normalized["imported_state"] = (
             copy.deepcopy(payload.get("imported_state"))
             if isinstance(payload.get("imported_state"), dict)
@@ -1225,6 +1234,7 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
         "solution_topics": copy.deepcopy(source.get("solution_topics") or []),
         "final_solution_summary": _normalize_canvas_final_solution_summary(source.get("final_solution_summary")),
         "node_positions": _normalize_canvas_node_positions(source.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(source.get("artifact_generation") or {}),
         "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(source.get("ideation_bubble_graph")),
         "idea_create_stack": _safe_nonnegative_int(source.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
@@ -1264,6 +1274,9 @@ def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
             workspace.get("final_solution_summary")
         ),
         "node_positions": _normalize_canvas_node_positions(workspace.get("node_positions") or {}),
+        "artifact_generation": _normalize_canvas_artifact_generation(
+            workspace.get("artifact_generation") or {}
+        ),
         "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
             workspace.get("ideation_bubble_graph")
         ),
@@ -1484,6 +1497,7 @@ def _ensure_canvas_workspace_entry(rt: "RuntimeStore", meeting_id: str) -> dict[
     workspace.setdefault("solution_topics", [])
     workspace.setdefault("final_solution_summary", _normalize_canvas_final_solution_summary({}))
     workspace.setdefault("node_positions", {})
+    workspace.setdefault("artifact_generation", {})
     workspace.setdefault("ideation_bubble_graph", _normalize_canvas_ideation_bubble_graph({}))
     workspace.setdefault("idea_create_stack", 0)
     workspace.setdefault("idea_processed_utterance_ids", [])
@@ -2520,6 +2534,18 @@ class CanvasWorkspaceProblemStructureInput(BaseModel):
     groups: list[CanvasWorkspaceProblemStructureGroupInput] = Field(default_factory=list)
 
 
+class CanvasArtifactGenerationEntryInput(BaseModel):
+    artifact_key: str = ""
+    status: str = "idle"
+    generation_id: str = ""
+    started_by: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    finished_at: str = ""
+    error: str = ""
+    version: int = 0
+
+
 class CanvasWorkspaceStateInput(BaseModel):
     meeting_id: str = ""
     meeting_goal: str = ""
@@ -2533,6 +2559,7 @@ class CanvasWorkspaceStateInput(BaseModel):
     solution_topics: list[CanvasWorkspaceSolutionTopicInput] = Field(default_factory=list)
     final_solution_summary: dict[str, Any] = Field(default_factory=dict)
     node_positions: dict[str, dict[str, CanvasNodePositionInput]] = Field(default_factory=dict)
+    artifact_generation: dict[str, CanvasArtifactGenerationEntryInput] = Field(default_factory=dict)
     ideation_bubble_graph: dict[str, Any] = Field(default_factory=dict)
     imported_state: dict[str, Any] | None = None
 
@@ -2550,8 +2577,16 @@ class CanvasWorkspacePatchInput(BaseModel):
     solution_topics: list[CanvasWorkspaceSolutionTopicInput] | None = None
     final_solution_summary: dict[str, Any] | None = None
     node_positions: dict[str, dict[str, CanvasNodePositionInput]] | None = None
+    artifact_generation: dict[str, CanvasArtifactGenerationEntryInput] | None = None
     ideation_bubble_graph: dict[str, Any] | None = None
     imported_state: dict[str, Any] | None = None
+
+
+class CanvasArtifactGenerationStartInput(BaseModel):
+    meeting_id: str = ""
+    artifact_key: str = ""
+    user_id: str = ""
+    force: bool = False
 
 
 class CanvasPersonalNotesStateInput(BaseModel):
@@ -10497,6 +10532,50 @@ def _normalize_canvas_node_positions(
     return normalized
 
 
+_CANVAS_ARTIFACT_KEYS = {
+    "problem-definition:explore",
+    "problem-definition:structure",
+    "solution:summary",
+}
+
+
+def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_value in raw.items():
+        if hasattr(raw_value, "model_dump"):
+            try:
+                raw_value = raw_value.model_dump()
+            except Exception:
+                raw_value = {}
+        if not isinstance(raw_value, dict):
+            continue
+        key = _safe_text(raw_value.get("artifact_key") or raw_key)
+        if not key or key not in _CANVAS_ARTIFACT_KEYS:
+            continue
+        status = _safe_text(raw_value.get("status"))
+        if status not in {"idle", "generating", "ready", "failed"}:
+            status = "idle"
+        try:
+            version = max(0, int(raw_value.get("version") or 0))
+        except (TypeError, ValueError):
+            version = 0
+        normalized[key] = {
+            "artifact_key": key,
+            "status": status,
+            "generation_id": _safe_text(raw_value.get("generation_id")),
+            "started_by": _safe_text(raw_value.get("started_by")),
+            "started_at": _safe_text(raw_value.get("started_at")),
+            "updated_at": _safe_text(raw_value.get("updated_at")),
+            "finished_at": _safe_text(raw_value.get("finished_at")),
+            "error": _safe_text(raw_value.get("error")),
+            "version": version,
+        }
+    return normalized
+
+
 def _summarize_canvas_node_positions_for_debug(
     payload: dict[str, dict[str, Any]] | None,
 ) -> dict[str, Any]:
@@ -13718,6 +13797,7 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
     workspace["final_solution_summary"] = _normalize_canvas_final_solution_summary(payload.final_solution_summary)
     workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions)
+    workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation)
     workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     workspace["imported_state"] = (
         copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
@@ -13742,6 +13822,52 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     )
 
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/artifact-generation/start")
+def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStartInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    artifact_key = _safe_text(payload.artifact_key)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if artifact_key not in _CANVAS_ARTIFACT_KEYS:
+        raise HTTPException(status_code=400, detail="invalid artifact_key")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+    current = generation_map.get(artifact_key) or {}
+    current_status = _safe_text(current.get("status"))
+
+    if current_status == "generating" and not payload.force:
+        generation = copy.deepcopy(current)
+        acquired = False
+    else:
+        generation = {
+            "artifact_key": artifact_key,
+            "status": "generating",
+            "generation_id": f"{artifact_key}:{uuid4().hex}",
+            "started_by": _safe_text(payload.user_id),
+            "started_at": saved_at,
+            "updated_at": saved_at,
+            "finished_at": "",
+            "error": "",
+            "version": int(current.get("version") or 0),
+        }
+        generation_map[artifact_key] = generation
+        workspace["artifact_generation"] = generation_map
+        with RT.lock:
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+        _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+        acquired = True
+
+    return {
+        "ok": True,
+        "acquired": acquired,
+        "generation": copy.deepcopy(generation),
+        "workspace": _canvas_workspace_response(workspace),
+    }
 
 
 @app.post("/api/canvas/workspace-patch")
@@ -13779,6 +13905,8 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         )
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
+    if "artifact_generation" in provided_fields:
+        workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
     if "ideation_bubble_graph" in provided_fields:
         workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     if "imported_state" in provided_fields:

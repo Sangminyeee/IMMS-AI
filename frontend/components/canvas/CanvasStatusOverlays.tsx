@@ -87,6 +87,16 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
   );
 });
 
+export const CanvasGenerationBanner = memo(function CanvasGenerationBanner({ message }: { message: string }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-[24px] z-[7] flex justify-center px-4" aria-live="polite">
+      <div className="max-w-[min(720px,calc(100%-32px))] rounded-full border border-[#b9dcff] bg-white/95 px-4 py-2 text-center text-[12px] font-semibold leading-5 text-[#236cf3] shadow-[0_8px_24px_rgba(35,108,243,0.12)] backdrop-blur">
+        {message}
+      </div>
+    </div>
+  );
+});
+
 export const CanvasStatusToast = memo(function CanvasStatusToast({ message }: { message: string }) {
   const [visible, setVisible] = useState(true);
 

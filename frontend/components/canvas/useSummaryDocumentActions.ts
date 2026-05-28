@@ -7,12 +7,16 @@ import {
   type ProblemStructureGroupViewModel,
   type ProblemStructureNodeViewModel,
 } from "@/components/canvas/problemStructureModel";
+import { SUMMARY_DOCUMENT_ARTIFACT } from "@/components/canvas/canvasArtifactGeneration";
 import {
   areSummaryDocumentBlocksEqual,
   summaryDocumentBlocksToMarkdown,
 } from "@/components/canvas/summaryDocumentHelpers";
 import { generateCanvasSummaryConclusion, generateCanvasSummaryDocument, saveCanvasWorkspacePatch } from "@/lib/api";
 import type {
+  CanvasArtifactGenerationKey,
+  CanvasArtifactGenerationMap,
+  CanvasArtifactGenerationState,
   CanvasFinalSolutionSummary,
   CanvasEditPresencePayload,
   CanvasSummaryDocumentBlock,
@@ -26,6 +30,7 @@ type CanvasStage = "ideation" | "problem-definition" | "solution";
 type SharedWorkspaceSnapshot = {
   stage: CanvasStage;
   finalSolutionSummary: CanvasFinalSolutionSummary;
+  artifactGeneration: CanvasArtifactGenerationMap;
   importedState: MeetingState | null;
 };
 
@@ -47,6 +52,7 @@ type UseSummaryDocumentActionsOptions = {
   forceBroadcastSharedCanvas: (overrides?: {
     stage?: CanvasStage;
     finalSolutionSummary?: CanvasFinalSolutionSummary;
+    artifactGeneration?: CanvasArtifactGenerationMap;
   }) => void;
   latestSharedWorkspaceRef: MutableRefObject<SharedWorkspaceSnapshot>;
   meetingId: string;
@@ -72,6 +78,20 @@ type UseSummaryDocumentActionsOptions = {
   setSummaryEvidenceOpenGroupIds: Dispatch<SetStateAction<Set<string>>>;
   setLocalEditPresenceTarget: (target: { targetType: CanvasEditPresencePayload["target_type"]; targetId: string; noteId?: string } | null) => void;
   sharedSyncEnabled: boolean;
+  startSharedArtifactGeneration: (
+    artifactKey: CanvasArtifactGenerationKey,
+    force?: boolean,
+  ) => Promise<{
+    acquired: boolean;
+    generation: CanvasArtifactGenerationState;
+    artifactGeneration: CanvasArtifactGenerationMap;
+  }>;
+  finishSharedArtifactGeneration: (
+    artifactKey: CanvasArtifactGenerationKey,
+    status: "ready" | "failed",
+    generationId?: string,
+    error?: string,
+  ) => CanvasArtifactGenerationMap;
   summaryDocumentDraftBlocks: CanvasSummaryDocumentBlock[];
   summaryDocumentDraftDirty: boolean;
   summaryDocumentDraftMarkdown: string;
@@ -106,6 +126,8 @@ export function useSummaryDocumentActions({
   setSummaryEvidenceOpenGroupIds,
   setLocalEditPresenceTarget,
   sharedSyncEnabled,
+  startSharedArtifactGeneration,
+  finishSharedArtifactGeneration,
   summaryDocumentDraftBlocks,
   summaryDocumentDraftDirty,
   summaryDocumentDraftMarkdown,
@@ -130,6 +152,10 @@ export function useSummaryDocumentActions({
 
   const handleSetSummaryDocumentEditMode = useCallback(
     (editMode: boolean) => {
+      if (editMode && summaryDocumentPending) {
+        setActivityMessage("현재 재생성 중이라 수정할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       setSummaryDocumentEditMode(editMode);
       setLocalEditPresenceTarget(editMode ? { targetType: "summary_document", targetId: "final" } : null);
       if (editMode) {
@@ -150,6 +176,8 @@ export function useSummaryDocumentActions({
       setSummaryDocumentDraftDirty,
       setSummaryDocumentDraftMarkdown,
       setSummaryDocumentEditMode,
+      summaryDocumentPending,
+      setActivityMessage,
     ],
   );
 
@@ -171,14 +199,28 @@ export function useSummaryDocumentActions({
 
   const handleSummaryDocumentMarkdownChange = useCallback(
     (value: string) => {
+      if (summaryDocumentPending) {
+        setActivityMessage("현재 재생성 중이라 문서를 수정할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       setSummaryDocumentDraftMarkdown(value);
       setSummaryDocumentDraftDirty(value !== finalSummaryDocument.markdown);
     },
-    [finalSummaryDocument.markdown, setSummaryDocumentDraftDirty, setSummaryDocumentDraftMarkdown],
+    [
+      finalSummaryDocument.markdown,
+      setActivityMessage,
+      setSummaryDocumentDraftDirty,
+      setSummaryDocumentDraftMarkdown,
+      summaryDocumentPending,
+    ],
   );
 
   const handleSummaryDocumentBlocksChange = useCallback(
     (blocks: CanvasSummaryDocumentBlock[]) => {
+      if (summaryDocumentPending) {
+        setActivityMessage("현재 재생성 중이라 문서를 수정할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       const nextMarkdown = summaryDocumentBlocksToMarkdown(blocks);
       setSummaryDocumentDraftBlocks(blocks);
       setSummaryDocumentDraftMarkdown(nextMarkdown);
@@ -190,9 +232,11 @@ export function useSummaryDocumentActions({
     [
       finalSummaryDocument.document_blocks,
       finalSummaryDocument.markdown,
+      setActivityMessage,
       setSummaryDocumentDraftBlocks,
       setSummaryDocumentDraftDirty,
       setSummaryDocumentDraftMarkdown,
+      summaryDocumentPending,
     ],
   );
 
@@ -213,6 +257,12 @@ export function useSummaryDocumentActions({
 
   const handleGenerateSummaryDocument = useCallback(
     async (options?: { force?: boolean; refreshCache?: boolean }) => {
+      if (summaryDocumentPending) {
+        setStage("solution");
+        setLeftPanelTab("detail");
+        setActivityMessage("현재 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
+        return;
+      }
       const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
       setStage("solution");
       setLeftPanelTab("detail");
@@ -234,7 +284,15 @@ export function useSummaryDocumentActions({
 
       setSummaryDocumentPending(true);
       setBusy(true);
+      let generationId = "";
       try {
+        const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
+        generationId = generationStart.generation.generation_id || "";
+        if (!generationStart.acquired) {
+          setActivityMessage("다른 참가자가 요약 문서를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
+          return;
+        }
+
         const result = await generateCanvasSummaryDocument({
           meeting_id: meetingId,
           meeting_topic: meetingTopicForAi,
@@ -281,16 +339,23 @@ export function useSummaryDocumentActions({
           finalSolutionSummary: nextFinalSummary,
           importedState: persistedSharedImportedState,
         };
+        const readyArtifactGeneration = finishSharedArtifactGeneration(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          "ready",
+          generationId,
+        );
         if (sharedSyncEnabled) {
           forceBroadcastSharedCanvas({
             stage: "solution",
             finalSolutionSummary: nextFinalSummary,
+            artifactGeneration: readyArtifactGeneration,
           });
           if (meetingId) {
             void saveCanvasWorkspacePatch({
               meeting_id: meetingId,
               stage: "solution",
               final_solution_summary: nextFinalSummary,
+              artifact_generation: readyArtifactGeneration,
               imported_state: persistedSharedImportedState,
             }).catch((error) => {
               console.error("Failed to save summary document:", error);
@@ -305,6 +370,20 @@ export function useSummaryDocumentActions({
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const failedArtifactGeneration = finishSharedArtifactGeneration(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          "failed",
+          generationId,
+          message,
+        );
+        if (meetingId) {
+          void saveCanvasWorkspacePatch({
+            meeting_id: meetingId,
+            artifact_generation: failedArtifactGeneration,
+          }).catch((saveError) => {
+            console.error("Failed to save failed summary document generation state:", saveError);
+          });
+        }
         setActivityMessage(`요약 문서 생성 실패: ${message}`);
       } finally {
         setSummaryDocumentPending(false);
@@ -338,11 +417,18 @@ export function useSummaryDocumentActions({
       setSummaryDocumentPending,
       setSummaryEvidenceOpenGroupIds,
       sharedSyncEnabled,
+      summaryDocumentPending,
+      startSharedArtifactGeneration,
+      finishSharedArtifactGeneration,
     ],
   );
 
   const handleSaveSummaryDocument = useCallback(async () => {
-    if (summaryDocumentPending || summaryDocumentSaving) {
+    if (summaryDocumentPending) {
+      setActivityMessage("현재 재생성 중이라 저장할 수 없습니다. 완료 후 다시 시도해 주세요.");
+      return;
+    }
+    if (summaryDocumentSaving) {
       setActivityMessage("요약 문서 저장 작업이 이미 진행 중입니다.");
       return;
     }
@@ -420,7 +506,11 @@ export function useSummaryDocumentActions({
   ]);
 
   const handleRegenerateSummaryDocument = useCallback(async (options?: { refreshCache?: boolean }) => {
-    if (busy || summaryDocumentPending) {
+    if (summaryDocumentPending) {
+      setActivityMessage("현재 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
+      return;
+    }
+    if (busy) {
       setActivityMessage("결론 문서 생성 작업이 이미 진행 중입니다.");
       return;
     }
@@ -438,7 +528,15 @@ export function useSummaryDocumentActions({
 
     setSummaryDocumentPending(true);
     setBusy(true);
+    let generationId = "";
     try {
+      const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
+      generationId = generationStart.generation.generation_id || "";
+      if (!generationStart.acquired) {
+        setActivityMessage("다른 참가자가 결론 문서를 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
+        return;
+      }
+
       const result = await generateCanvasSummaryConclusion({
         meeting_id: meetingId,
         meeting_topic: meetingTopicForAi,
@@ -486,16 +584,23 @@ export function useSummaryDocumentActions({
         finalSolutionSummary: nextFinalSummary,
         importedState: persistedSharedImportedState,
       };
+      const readyArtifactGeneration = finishSharedArtifactGeneration(
+        SUMMARY_DOCUMENT_ARTIFACT,
+        "ready",
+        generationId,
+      );
       if (sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
           stage: "solution",
           finalSolutionSummary: nextFinalSummary,
+          artifactGeneration: readyArtifactGeneration,
         });
         if (meetingId) {
           void saveCanvasWorkspacePatch({
             meeting_id: meetingId,
             stage: "solution",
             final_solution_summary: nextFinalSummary,
+            artifact_generation: readyArtifactGeneration,
             imported_state: persistedSharedImportedState,
           }).catch((error) => {
             console.error("Failed to save regenerated conclusion document:", error);
@@ -505,6 +610,20 @@ export function useSummaryDocumentActions({
       setActivityMessage(result.warning || (options?.refreshCache ? "요약 캐시를 새로 만들고 결론 문서를 다시 생성했습니다." : "결론 문서를 다시 생성했습니다."));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const failedArtifactGeneration = finishSharedArtifactGeneration(
+        SUMMARY_DOCUMENT_ARTIFACT,
+        "failed",
+        generationId,
+        message,
+      );
+      if (meetingId) {
+        void saveCanvasWorkspacePatch({
+          meeting_id: meetingId,
+          artifact_generation: failedArtifactGeneration,
+        }).catch((saveError) => {
+          console.error("Failed to save failed conclusion generation state:", saveError);
+        });
+      }
       setActivityMessage(`결론 문서 재생성 실패: ${message}`);
     } finally {
       setSummaryDocumentPending(false);
@@ -535,6 +654,8 @@ export function useSummaryDocumentActions({
     setSummaryDocumentEditMode,
     setSummaryDocumentPending,
     sharedSyncEnabled,
+    startSharedArtifactGeneration,
+    finishSharedArtifactGeneration,
     summaryDocumentPending,
   ]);
 

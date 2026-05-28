@@ -344,6 +344,27 @@ export interface CanvasNodePositionsByStage {
   solution?: Record<string, CanvasNodePosition>;
 }
 
+export type CanvasArtifactGenerationStatus = "idle" | "generating" | "ready" | "failed";
+
+export type CanvasArtifactGenerationKey =
+  | "problem-definition:explore"
+  | "problem-definition:structure"
+  | "solution:summary";
+
+export interface CanvasArtifactGenerationState {
+  artifact_key: CanvasArtifactGenerationKey | string;
+  status: CanvasArtifactGenerationStatus | string;
+  generation_id?: string;
+  started_by?: string;
+  started_at?: string;
+  updated_at?: string;
+  finished_at?: string;
+  error?: string;
+  version?: number;
+}
+
+export type CanvasArtifactGenerationMap = Record<string, CanvasArtifactGenerationState>;
+
 export interface CanvasWorkspaceStateResponse {
   ok: boolean;
   meeting_id: string;
@@ -365,6 +386,7 @@ export interface CanvasWorkspaceStateResponse {
   solution_topics: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   idea_create_stack?: number;
   idea_processed_utterance_ids?: string[];
@@ -393,6 +415,7 @@ export interface CanvasWorkspacePatchRequest {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
 }
@@ -417,6 +440,7 @@ export interface CanvasLocalState {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
   import_override_active?: boolean;
@@ -455,6 +479,7 @@ export interface CanvasRealtimeSyncPayload {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
 }

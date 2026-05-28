@@ -17,6 +17,7 @@ type LocalEditPresenceTarget = {
 
 type UseProblemGroupActionsOptions<TGroup extends ProblemGroupActionModel> = {
   commitProblemGroupsSnapshot: (nextGroups: TGroup[], message: string, selectedGroupId?: string) => void;
+  generationLocked?: boolean;
   problemGroupDraftConclusion: string;
   problemGroupDraftTopic: string;
   problemDefinitionPhase: string;
@@ -42,6 +43,7 @@ function problemGroupStatusLabel(status: ProblemGroupStatus) {
 
 export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
   commitProblemGroupsSnapshot,
+  generationLocked = false,
   problemGroupDraftConclusion,
   problemGroupDraftTopic,
   problemDefinitionPhase,
@@ -60,6 +62,10 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
 }: UseProblemGroupActionsOptions<TGroup>) {
   const handleQuickEditProblemGroup = useCallback(
     (group: TGroup) => {
+      if (generationLocked) {
+        setActivityMessage("현재 재생성 중이라 수정할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       setSelectedProblemGroupId(group.group_id);
       setSelectedNodeId(`problem-${group.group_id}`);
       setLocalEditPresenceTarget({ targetType: "problem_group", targetId: group.group_id });
@@ -70,6 +76,7 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
       setActivityMessage("문제정의 노드 수정 모드를 열었습니다. 저장해야 다른 참가자에게 반영됩니다.");
     },
     [
+      generationLocked,
       setActivityMessage,
       setEditingProblemGroupId,
       setLocalEditPresenceTarget,
@@ -83,6 +90,10 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
 
   const handleDeleteProblemGroup = useCallback(
     (group: TGroup) => {
+      if (generationLocked) {
+        setActivityMessage("현재 재생성 중이라 삭제할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       const childIdsByParent = new Map<string, string[]>();
       problemGroups.forEach((item) => {
         if (!item.parent_group_id) return;
@@ -108,7 +119,7 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
         nextGroups[0]?.group_id || "",
       );
     },
-    [commitProblemGroupsSnapshot, problemGroups],
+    [commitProblemGroupsSnapshot, generationLocked, problemGroups, setActivityMessage],
   );
 
   const handleCancelProblemGroupEdit = useCallback(() => {
@@ -129,6 +140,10 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
 
   const handleSaveProblemGroupEdit = useCallback(
     (groupId: string) => {
+      if (generationLocked) {
+        setActivityMessage("현재 재생성 중이라 저장할 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       const group = problemGroups.find((item) => item.group_id === groupId);
       if (!group) return;
 
@@ -162,6 +177,8 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
       problemGroupDraftConclusion,
       problemGroupDraftTopic,
       problemGroups,
+      generationLocked,
+      setActivityMessage,
       setEditingProblemGroupId,
       setLocalEditPresenceTarget,
       setProblemGroupDraftConclusion,
@@ -187,6 +204,10 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
 
   const handleSetProblemGroupStatus = useCallback(
     (status: ProblemGroupStatus) => {
+      if (generationLocked) {
+        setActivityMessage("현재 재생성 중이라 상태를 바꿀 수 없습니다. 완료 후 다시 시도해 주세요.");
+        return;
+      }
       if (problemDefinitionPhase === "structure") return;
 
       const selectedGroup =
@@ -207,7 +228,7 @@ export function useProblemGroupActions<TGroup extends ProblemGroupActionModel>({
       );
       setActivityMessage(`문제 정의 그룹 상태를 ${problemGroupStatusLabel(status)}로 변경했습니다.`);
     },
-    [problemDefinitionPhase, problemGroups, selectedProblemGroupId, setActivityMessage, setProblemGroups],
+    [generationLocked, problemDefinitionPhase, problemGroups, selectedProblemGroupId, setActivityMessage, setProblemGroups],
   );
 
   return {
