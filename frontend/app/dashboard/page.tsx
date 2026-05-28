@@ -7,6 +7,7 @@ import { DashboardMeetingsView } from "@/components/dashboard/DashboardMeetingsV
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { formatDashboardDateTime, getMeetingStatusLabel } from "@/components/dashboard/dashboardUtils";
 import type { DashboardMeeting, MeetingStatusFilter } from "@/components/dashboard/types";
+import { buildPrintableSummaryDocumentHtml } from "@/components/canvas/summaryDocumentHelpers";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCanvasWorkspaceState, saveCanvasWorkspacePatch } from "@/lib/api";
@@ -450,11 +451,17 @@ export default function DashboardPage() {
   const selectedResultRebuilding = selectedResultMeeting ? resultRebuildingMeetingId === selectedResultMeeting.id : false;
   const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
   const selectedResultCount = getFinalResultCount(selectedResultSummary);
+  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
+  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
+  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
+  const selectedResultDocumentHtml = selectedResultMarkdown
+    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
+    : "";
   const selectedResultStatusLabel = selectedResultLoading
     ? "확인 중"
     : selectedResultRebuilding
       ? "재구성 중"
-    : hasFinalResult(selectedResultSummary)
+    : selectedResultHasFinalResult
       ? "저장됨"
       : "없음";
   const selectedResultDuration = selectedResultMeeting
@@ -551,7 +558,7 @@ export default function DashboardPage() {
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
                 <div className="rounded-[18px] border border-[#e3e8f1] bg-[#fbfdff] px-4 py-4">
                   <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">최종 결과</p>
-                  <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">{selectedResultCount}</p>
+                  <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">{selectedResultDisplayCount}</p>
                 </div>
                 <div className="rounded-[18px] border border-[#e3e8f1] bg-[#fbfdff] px-4 py-4">
                   <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">문서 섹션</p>
@@ -606,7 +613,7 @@ export default function DashboardPage() {
                     </button>
                   </div>
                 </div>
-              ) : selectedResultTopics.length === 0 ? (
+              ) : !selectedResultHasFinalResult ? (
                 <div className="rounded-[26px] border border-dashed border-[#cbd7e8] bg-white px-6 py-12 text-center shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
                   <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#f3f9ff] text-2xl font-semibold text-[#067bf8]">
                     !
@@ -639,6 +646,38 @@ export default function DashboardPage() {
                       <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">회의 화면으로 이동</span>
                     </button>
                   </div>
+                </div>
+              ) : selectedResultTopics.length === 0 ? (
+                <div className="space-y-5">
+                  {selectedResultRebuildMessage ? (
+                    <div className="rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] px-5 py-4 text-[13px] font-semibold leading-[1.7] tracking-[-0.325px] text-[#067bf8]">
+                      {selectedResultRebuildMessage}
+                    </div>
+                  ) : null}
+                  <section className="overflow-hidden rounded-[26px] border border-[#e1e7f2] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#e1e7f2] bg-[#fbfdff] px-6 py-5">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                          Final Document
+                        </p>
+                        <h3 className="mt-2 text-[clamp(18px,1.8vw,24px)] font-bold leading-[1.4] tracking-[-0.6px] text-[#181818]">
+                          최종 정리 문서
+                        </h3>
+                      </div>
+                      <span className="moa-dashboard-primary-button inline-flex h-[30px] items-center rounded-full px-3">
+                        <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">
+                          저장됨
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-[min(68vh,760px)] bg-[#f7f9fc] p-3">
+                      <iframe
+                        title="저장된 최종 정리 문서"
+                        srcDoc={selectedResultDocumentHtml}
+                        className="h-full w-full rounded-[20px] border border-[#edf1f6] bg-white"
+                      />
+                    </div>
+                  </section>
                 </div>
               ) : (
                 <div className="space-y-5">

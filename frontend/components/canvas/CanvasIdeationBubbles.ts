@@ -881,6 +881,11 @@ function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
 }
 
 function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
+  const serverOpacity = Number(bubble.opacity);
+  if (Number.isFinite(serverOpacity)) {
+    return isIdeationBubbleOpacityLocked(bubble) ? 1 : Number(clampNumber(serverOpacity, 0, 1).toFixed(3));
+  }
+
   if (isIdeationBubbleOpacityLocked(bubble)) {
     return 1;
   }
@@ -913,6 +918,13 @@ function getIdeationBubbleImportanceScore(bubble: IdeationKeywordBubble, maxCoun
 }
 
 function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[]) {
+  const serverPrimaryIds = visuals
+    .filter((visual) => visual.emphasis === "primary")
+    .map((visual) => visual.id);
+  if (serverPrimaryIds.length > 0) {
+    return new Set(serverPrimaryIds);
+  }
+
   const maxCount = Math.max(1, ...visuals.map((bubble) => bubble.count));
   const rankBubbles = (left: IdeationKeywordBubble, right: IdeationKeywordBubble) =>
     getIdeationBubbleImportanceScore(right, maxCount) - getIdeationBubbleImportanceScore(left, maxCount) ||
@@ -940,6 +952,13 @@ function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[])
 }
 
 function applyIdeationBubblePrimaryEmphasis(visuals: IdeationKeywordBubbleVisual[]) {
+  if (visuals.some((visual) => visual.emphasis === "primary" || visual.emphasis === "default")) {
+    return visuals.map((visual) => ({
+      ...visual,
+      opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
+    }));
+  }
+
   const primaryIds = resolveIdeationBubblePrimaryIds(visuals);
   return visuals.map((visual) => {
     const nextVisual = {
@@ -1449,7 +1468,10 @@ function buildServerManagedIdeationBubbleVisuals(
     const activity = previous
       ? clampNumber(Math.max(previous.activity, 0.5) * 0.35 + incomingActivity * 0.65, 0.18, 1)
       : incomingActivity;
-    const size = getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
+    const serverSize = Number(bubble.layoutSize);
+    const size = Number.isFinite(serverSize) && serverSize > 0
+      ? Math.round(serverSize)
+      : getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
     const position = getServerIdeationBubblePosition(bubble, size);
     if (!previous) {
       newBubbleIds.add(bubble.id);

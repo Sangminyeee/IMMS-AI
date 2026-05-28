@@ -737,10 +737,16 @@ export interface CanvasIdeationBubbleGraphBubble {
   importance?: number;
   relevance?: number;
   activity?: number;
+  opacity?: number;
+  emphasis?: "primary" | "default" | string;
   x?: number;
   y?: number;
   size?: number;
   cluster_id?: string;
+  cluster_x?: number;
+  cluster_y?: number;
+  local_x?: number;
+  local_y?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
