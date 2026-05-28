@@ -51,6 +51,22 @@ function normalizeStringList(value: unknown, limit: number) {
     : [];
 }
 
+const SUMMARY_PLACEHOLDER_TEXTS = new Set([
+  "...",
+  "…",
+  "-",
+  "실제 회의 흐름에 근거한 항목",
+  "회의에서 실제로 정리된 방향",
+  "회의에서 실제로 남은 질문",
+  "짧은 핵심 논의",
+  "그 논의가 나온 근거",
+]);
+
+function isSummaryPlaceholderText(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return !text || SUMMARY_PLACEHOLDER_TEXTS.has(text);
+}
+
 function stableSummaryBlockId(prefix: string, seed: string) {
   let hash = 0;
   for (let index = 0; index < seed.length; index += 1) {
@@ -65,6 +81,61 @@ function createSummaryTableColumn(title: string, seed: string, type: CanvasSumma
     title,
     type,
   };
+}
+
+function normalizeSummaryTableTitle(title: string) {
+  return title === "핵심 결정 사항" || title === "핵심결정사항" ? "핵심 논의 사항" : title;
+}
+
+function compactSummaryTableCell(value: string, limit: number) {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+}
+
+function normalizeDiscussionSummaryTable(
+  blockId: string,
+  title: string,
+  columns: CanvasSummaryTableColumn[],
+  rows: CanvasSummaryTableRow[],
+): { columns: CanvasSummaryTableColumn[]; rows: CanvasSummaryTableRow[] } {
+  if (title !== "핵심 논의 사항" && blockId !== "table-discussions") {
+    return { columns, rows };
+  }
+
+  const findColumnId = (...keys: string[]) => {
+    const keySet = new Set(keys);
+    return columns.find((column) => keySet.has(column.id) || keySet.has(column.title))?.id || "";
+  };
+  const topicId = findColumnId("col-topic", "항목");
+  const discussionId = findColumnId("col-discussion", "논의 내용");
+  const evidenceId = findColumnId("col-evidence", "근거", "논의 근거");
+  const statusId = findColumnId("col-status", "상태");
+  const nextColumns: CanvasSummaryTableColumn[] = [
+    { id: "col-discussion", title: "논의 내용", type: "text" },
+    { id: "col-evidence", title: "논의 근거", type: "text" },
+    { id: "col-status", title: "상태", type: "select" },
+  ];
+  const nextRows = rows
+    .map((row, rowIndex): CanvasSummaryTableRow | null => {
+      const oldTopic = topicId ? row.cells[topicId] || "" : "";
+      const oldDiscussion = discussionId ? row.cells[discussionId] || "" : "";
+      const oldEvidence = evidenceId ? row.cells[evidenceId] || "" : "";
+      const discussion = oldTopic || oldDiscussion;
+      const evidence = oldTopic && oldDiscussion && oldDiscussion !== oldTopic ? oldDiscussion : oldEvidence;
+      if (!discussion && !evidence) return null;
+      return {
+        id: row.id || stableSummaryBlockId("row", `${blockId}:${rowIndex}`),
+        cells: {
+          "col-discussion": compactSummaryTableCell(discussion, 34),
+          "col-evidence": compactSummaryTableCell(evidence, 72),
+          "col-status": compactSummaryTableCell((statusId ? row.cells[statusId] : "") || "검토 필요", 12),
+        },
+      };
+    })
+    .filter((row): row is CanvasSummaryTableRow => Boolean(row))
+    .slice(0, 6);
+
+  return { columns: nextColumns, rows: nextRows };
 }
 
 function defaultSummaryTableColumns(seed: string): CanvasSummaryTableColumn[] {
@@ -149,6 +220,63 @@ function normalizeSummaryTableRows(rawRows: unknown, columns: CanvasSummaryTable
   return rows.length > 0 ? rows : [createBlankSummaryTableRow(columns, `${blockId}:blank`)];
 }
 
+function filterMeaningfulSummaryTableRows(rows: CanvasSummaryTableRow[], columns: CanvasSummaryTableColumn[]) {
+  const statusIds = new Set(columns.filter((column) => column.id === "col-status" || column.title === "상태").map((column) => column.id));
+  return rows.filter((row) =>
+    Object.entries(row.cells).some(([columnId, value]) => !statusIds.has(columnId) && !isSummaryPlaceholderText(value)),
+  );
+}
+
+function summaryBlockHasContent(block: CanvasSummaryDocumentBlock) {
+  if (block.type === "paragraph") return !isSummaryPlaceholderText(block.text);
+  if (block.type === "bullets") return block.items.some((item) => !isSummaryPlaceholderText(item));
+  if (block.type === "table") return filterMeaningfulSummaryTableRows(block.rows, block.columns).length > 0;
+  return !isSummaryPlaceholderText(block.text);
+}
+
+function pruneEmptySummarySections(blocks: CanvasSummaryDocumentBlock[]) {
+  const normalizedBlocks = blocks
+    .map((block): CanvasSummaryDocumentBlock | null => {
+      if (block.type === "paragraph") return isSummaryPlaceholderText(block.text) ? null : block;
+      if (block.type === "bullets") {
+        const items = block.items.filter((item) => !isSummaryPlaceholderText(item));
+        return items.length > 0 ? { ...block, items } : null;
+      }
+      if (block.type === "table") {
+        const rows = filterMeaningfulSummaryTableRows(block.rows, block.columns);
+        return rows.length > 0 ? { ...block, rows } : null;
+      }
+      return block;
+    })
+    .filter((block): block is CanvasSummaryDocumentBlock => Boolean(block));
+
+  const contentPrunedBlocks = normalizedBlocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    for (const nextBlock of normalizedBlocks.slice(index + 1)) {
+      if (nextBlock.type === "heading" && (nextBlock.level || 2) <= (block.level || 2)) {
+        break;
+      }
+      if (nextBlock.type !== "heading" && summaryBlockHasContent(nextBlock)) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  return contentPrunedBlocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    const nextBlock = contentPrunedBlocks.slice(index + 1).find((item) => item.type !== "paragraph");
+    if (nextBlock?.type === "table" && nextBlock.title?.trim() === block.text.trim()) {
+      return false;
+    }
+    const previousBlock = contentPrunedBlocks[index - 1];
+    if (previousBlock?.type === "heading" && previousBlock.text.trim() === block.text.trim()) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export function createSummaryDocumentBlock(type: CanvasSummaryDocumentBlock["type"]): CanvasSummaryDocumentBlock {
   const id = `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   if (type === "heading") return { id, type, text: "새 제목", level: 2 };
@@ -184,22 +312,28 @@ function normalizeSummaryDocumentBlock(raw: unknown, index: number): CanvasSumma
 
   if (type === "paragraph") {
     const text = typeof source.text === "string" ? source.text.trim() : "";
-    return text ? { id, type, text } : null;
+    return !isSummaryPlaceholderText(text) ? { id, type, text } : null;
   }
 
   if (type === "bullets") {
-    const items = normalizeStringList(source.items, 20);
+    const items = normalizeStringList(source.items, 20).filter((item) => !isSummaryPlaceholderText(item));
     return items.length > 0 ? { id, type, items } : null;
   }
 
   if (type === "table") {
+    const title = typeof source.title === "string" ? source.title.trim() : "";
+    const normalizedTitle = normalizeSummaryTableTitle(title);
     const columns = normalizeSummaryTableColumns(source.columns, id);
+    const rows = normalizeSummaryTableRows(source.rows, columns, id);
+    const table = normalizeDiscussionSummaryTable(id, normalizedTitle, columns, rows);
+    const meaningfulRows = filterMeaningfulSummaryTableRows(table.rows, table.columns);
+    if (meaningfulRows.length === 0) return null;
     return {
       id,
       type,
-      title: typeof source.title === "string" ? source.title.trim() : "",
-      columns,
-      rows: normalizeSummaryTableRows(source.rows, columns, id),
+      title: normalizedTitle,
+      columns: table.columns,
+      rows: meaningfulRows,
     };
   }
 
@@ -378,12 +512,12 @@ export function normalizeSummaryDocumentBlocks(
         .filter((block): block is CanvasSummaryDocumentBlock => Boolean(block))
         .slice(0, 80)
     : [];
-  if (directBlocks.length > 0) return directBlocks;
+  if (directBlocks.length > 0) return pruneEmptySummarySections(directBlocks);
 
   const structuredBlocks = buildSummaryDocumentBlocksFromStructured(structured);
-  if (structuredBlocks.length > 0) return structuredBlocks;
+  if (structuredBlocks.length > 0) return pruneEmptySummarySections(structuredBlocks);
 
-  return markdownToSummaryDocumentBlocks(markdown);
+  return pruneEmptySummarySections(markdownToSummaryDocumentBlocks(markdown));
 }
 
 function escapeMarkdownTableCell(value: string) {

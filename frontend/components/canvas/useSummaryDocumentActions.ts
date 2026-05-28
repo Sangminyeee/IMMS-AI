@@ -212,7 +212,7 @@ export function useSummaryDocumentActions({
   );
 
   const handleGenerateSummaryDocument = useCallback(
-    async (options?: { force?: boolean }) => {
+    async (options?: { force?: boolean; refreshCache?: boolean }) => {
       const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
       setStage("solution");
       setLeftPanelTab("detail");
@@ -238,6 +238,7 @@ export function useSummaryDocumentActions({
         const result = await generateCanvasSummaryDocument({
           meeting_id: meetingId,
           meeting_topic: meetingTopicForAi,
+          refresh_chunk_summaries: options?.refreshCache || undefined,
           groups: eligibleGroups.map((group) => ({
             id: group.id,
             title: group.title,
@@ -296,7 +297,12 @@ export function useSummaryDocumentActions({
             });
           }
         }
-        setActivityMessage(result.warning || `구조화 그룹 ${eligibleGroups.length}개 기준으로 요약 문서를 생성했습니다.`);
+        setActivityMessage(
+          result.warning ||
+            (options?.refreshCache
+              ? `요약 캐시를 새로 만들고 구조화 그룹 ${eligibleGroups.length}개 기준으로 문서를 생성했습니다.`
+              : `구조화 그룹 ${eligibleGroups.length}개 기준으로 요약 문서를 생성했습니다.`),
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setActivityMessage(`요약 문서 생성 실패: ${message}`);
@@ -413,7 +419,7 @@ export function useSummaryDocumentActions({
     summaryDocumentSaving,
   ]);
 
-  const handleRegenerateSummaryDocument = useCallback(async () => {
+  const handleRegenerateSummaryDocument = useCallback(async (options?: { refreshCache?: boolean }) => {
     if (busy || summaryDocumentPending) {
       setActivityMessage("결론 문서 생성 작업이 이미 진행 중입니다.");
       return;
@@ -436,6 +442,7 @@ export function useSummaryDocumentActions({
       const result = await generateCanvasSummaryConclusion({
         meeting_id: meetingId,
         meeting_topic: meetingTopicForAi,
+        refresh_chunk_summaries: options?.refreshCache || undefined,
         regenerate_nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         current_summary: finalSummaryDocument,
         groups: eligibleGroups.map((group) => ({
@@ -495,7 +502,7 @@ export function useSummaryDocumentActions({
           });
         }
       }
-      setActivityMessage(result.warning || "결론 문서를 다시 생성했습니다.");
+      setActivityMessage(result.warning || (options?.refreshCache ? "요약 캐시를 새로 만들고 결론 문서를 다시 생성했습니다." : "결론 문서를 다시 생성했습니다."));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setActivityMessage(`결론 문서 재생성 실패: ${message}`);
@@ -531,10 +538,15 @@ export function useSummaryDocumentActions({
     summaryDocumentPending,
   ]);
 
+  const handleRefreshSummaryCache = useCallback(() => {
+    return handleRegenerateSummaryDocument({ refreshCache: true });
+  }, [handleRegenerateSummaryDocument]);
+
   return {
     handleCopyFinalSolutionMarkdown,
     handleGenerateSummaryDocument,
     handleRegenerateSummaryDocument,
+    handleRefreshSummaryCache,
     handleSaveSummaryDocument,
     handleSetSummaryDocumentEditMode,
     handleSummaryDocumentBlocksChange,

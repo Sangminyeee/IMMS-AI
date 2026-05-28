@@ -153,6 +153,7 @@ export function useCanvasWorkspacePanelModels({
     onToggleSummaryEvidence: incomingSurfaceSolutionHandlers.onToggleSummaryEvidence,
     onSetSummaryDocumentEditMode: incomingSurfaceSolutionHandlers.onSetSummaryDocumentEditMode,
     onRegenerateSummaryDocument: incomingSurfaceSolutionHandlers.onRegenerateSummaryDocument,
+    onRefreshSummaryCache: incomingSurfaceSolutionHandlers.onRefreshSummaryCache,
     onCopyFinalSolutionMarkdown: incomingSurfaceSolutionHandlers.onCopyFinalSolutionMarkdown,
     onSaveSummaryDocument: incomingSurfaceSolutionHandlers.onSaveSummaryDocument,
     onSummaryDocumentBlocksChange: incomingSurfaceSolutionHandlers.onSummaryDocumentBlocksChange,
@@ -160,6 +161,7 @@ export function useCanvasWorkspacePanelModels({
   }), [
     incomingSurfaceSolutionHandlers.onCopyFinalSolutionMarkdown,
     incomingSurfaceSolutionHandlers.onRegenerateSummaryDocument,
+    incomingSurfaceSolutionHandlers.onRefreshSummaryCache,
     incomingSurfaceSolutionHandlers.onSaveSummaryDocument,
     incomingSurfaceSolutionHandlers.onSetSummaryDocumentEditMode,
     incomingSurfaceSolutionHandlers.onSummaryDocumentBlocksChange,

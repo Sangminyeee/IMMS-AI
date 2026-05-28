@@ -103,6 +103,7 @@ export type CanvasSurfaceSolutionHandlers = {
   onToggleSummaryEvidence: (groupId: string) => void;
   onSetSummaryDocumentEditMode: (editMode: boolean) => void;
   onRegenerateSummaryDocument: () => void | Promise<void>;
+  onRefreshSummaryCache: () => void | Promise<void>;
   onCopyFinalSolutionMarkdown: () => void | Promise<void>;
   onSaveSummaryDocument: () => void | Promise<void>;
   onSummaryDocumentBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -250,6 +251,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     onToggleSummaryEvidence,
     onSetSummaryDocumentEditMode,
     onRegenerateSummaryDocument,
+    onRefreshSummaryCache,
     onCopyFinalSolutionMarkdown,
     onSaveSummaryDocument,
     onSummaryDocumentBlocksChange,
@@ -331,6 +333,7 @@ export const CanvasSurface = memo(function CanvasSurface({
             onToggleEvidence={onToggleSummaryEvidence}
             onSetEditMode={onSetSummaryDocumentEditMode}
             onRegenerate={onRegenerateSummaryDocument}
+            onRefreshCache={onRefreshSummaryCache}
             onCopy={onCopyFinalSolutionMarkdown}
             onSave={onSaveSummaryDocument}
             onBlocksChange={onSummaryDocumentBlocksChange}

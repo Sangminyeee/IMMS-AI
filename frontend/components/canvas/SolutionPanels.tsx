@@ -67,6 +67,7 @@ type SolutionFinalDocumentPanelProps = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
+  onRefreshCache: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
   onSave: () => void | Promise<void>;
   onBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -440,22 +441,36 @@ function SolutionDocumentBlocksView({
   fallbackTitle: string;
   fallbackSummary: string;
 }) {
+  const visibleBlocks = useMemo(() => blocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    const nextBlock = blocks.slice(index + 1).find((item) => item.type !== "paragraph");
+    if (nextBlock?.type === "table" && nextBlock.title?.trim() === block.text.trim()) {
+      return false;
+    }
+    const previousBlock = blocks[index - 1];
+    if (previousBlock?.type === "heading" && previousBlock.text.trim() === block.text.trim()) {
+      return false;
+    }
+    return true;
+  }), [blocks]);
+
   const sectionNumberByBlockId = useMemo(() => {
     const nextMap = new Map<string, number>();
     let nextNumber = 0;
-    blocks.forEach((block) => {
+    visibleBlocks.forEach((block) => {
       if (block.type === "heading") {
         const level = block.level || 2;
         if (level === 1) return;
+      } else if (block.type !== "table" || !block.title) {
+        return;
       }
-      if (block.type === "paragraph") return;
       nextNumber += 1;
       nextMap.set(block.id, nextNumber);
     });
     return nextMap;
-  }, [blocks]);
+  }, [visibleBlocks]);
 
-  if (blocks.length === 0) {
+  if (visibleBlocks.length === 0) {
     return (
       <div className="mt-[7px]">
         <h2 className="max-w-[560px] text-[24px] font-bold leading-[1.42] tracking-[-0.6px] text-[#181818]">{fallbackTitle}</h2>
@@ -470,7 +485,7 @@ function SolutionDocumentBlocksView({
 
   return (
     <div className="mt-[7px] space-y-[30px]">
-      {blocks.map((block, index) => {
+      {visibleBlocks.map((block, index) => {
         if (block.type === "heading") {
           const level = block.level || (index === 0 ? 1 : 2);
           if (level === 1) {
@@ -508,21 +523,12 @@ function SolutionDocumentBlocksView({
         }
 
         if (block.type === "bullets") {
-          const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
           return (
-            <section key={block.id} className="space-y-[12px]">
-              <h3 className="flex items-center gap-[10px] text-[16px] font-bold leading-[1.4] tracking-[-0.04px] text-[#181818]">
-                <span className="grid h-[17px] min-w-[17px] place-items-center rounded-[3px] bg-[#8f8f8f] px-[4px] text-[11px] font-bold leading-none text-white">
-                  {sectionNumber}
-                </span>
-                추가 논의 / 열린 메모
-              </h3>
-              <ul className="space-y-[5px] pl-[27px] text-[12px] font-medium leading-[1.65] tracking-[-0.03px] text-[#767676]">
-                {block.items.map((item, itemIndex) => (
-                  <li key={`${block.id}-item-${itemIndex}`} className="list-disc">{item}</li>
-                ))}
-              </ul>
-            </section>
+            <ul key={block.id} className="space-y-[5px] pl-[27px] text-[12px] font-medium leading-[1.65] tracking-[-0.03px] text-[#767676]">
+              {block.items.map((item, itemIndex) => (
+                <li key={`${block.id}-item-${itemIndex}`} className="list-disc">{item}</li>
+              ))}
+            </ul>
           );
         }
 
@@ -540,11 +546,16 @@ function SolutionDocumentBlocksView({
               </h3>
             ) : null}
             <div className="overflow-x-auto rounded-[4px] border border-[#bfc3ca] bg-white">
-              <table className="min-w-full border-collapse text-center text-[11px] leading-[1.5] tracking-[-0.03px]">
+              <table className="w-full table-fixed border-collapse text-left text-[11px] leading-[1.5] tracking-[-0.03px]">
                 <thead>
                   <tr className="bg-[#f3f4f7] text-[#181818]">
                     {columns.map((column) => (
-                      <th key={`${block.id}-head-${column.id}`} className="border-b border-r border-[#bfc3ca] px-3 py-[9px] font-semibold last:border-r-0">
+                      <th
+                        key={`${block.id}-head-${column.id}`}
+                        className={`break-words border-b border-r border-[#bfc3ca] px-[10px] py-[9px] font-semibold last:border-r-0 ${
+                          column.title === "상태" ? "w-[72px] text-center" : ""
+                        }`}
+                      >
                         {column.title}
                       </th>
                     ))}
@@ -554,7 +565,12 @@ function SolutionDocumentBlocksView({
                   {rows.map((row, rowIndex) => (
                     <tr key={`${block.id}-row-${row.id || rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
                       {columns.map((column) => (
-                        <td key={`${block.id}-cell-${row.id || rowIndex}-${column.id}`} className="whitespace-pre-line border-r border-[#cdd0d5] px-3 py-[9px] align-top font-medium last:border-r-0">
+                        <td
+                          key={`${block.id}-cell-${row.id || rowIndex}-${column.id}`}
+                          className={`whitespace-pre-line break-words border-r border-[#cdd0d5] px-[10px] py-[9px] align-top font-medium last:border-r-0 ${
+                            column.title === "상태" ? "text-center" : ""
+                          }`}
+                        >
                           {row.cells?.[column.id] || ""}
                         </td>
                       ))}
@@ -1058,6 +1074,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   remoteEditPresenceByKey,
   onSetEditMode,
   onRegenerate,
+  onRefreshCache,
   onCopy,
   onSave,
   onBlocksChange,
@@ -1092,6 +1109,14 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
 
       <article className="relative h-[calc(100vh-166px)] min-h-[760px] overflow-y-auto rounded-[12px] border border-[#cecccc] bg-white px-[34px] pb-[48px] pt-[30px] shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
         <div className="absolute right-[18px] top-[15px] flex items-center gap-1">
+          <button
+            type="button"
+            disabled={pending || saving || eligibleGroupCount === 0}
+            onClick={() => void onRefreshCache()}
+            className="mr-1 inline-flex h-[28px] items-center rounded-full border border-[#d5e5ff] bg-white px-3 text-[#236cf3] transition hover:bg-[#eef6ff] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span className="moa-font-pretendard text-[11px] font-semibold leading-none tracking-[-0.027px]">캐시 재생성</span>
+          </button>
           <IconButton label="요약 문서 다시 생성" disabled={pending || saving || eligibleGroupCount === 0} onClick={onRegenerate}>
             <RefreshIcon />
           </IconButton>

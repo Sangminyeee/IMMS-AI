@@ -6730,8 +6730,168 @@ def _normalize_summary_document_blocks(
     structured: dict[str, Any] | None = None,
     markdown: str = "",
 ) -> list[dict[str, Any]]:
+    placeholder_texts = {
+        "...",
+        "…",
+        "-",
+        "실제 회의 흐름에 근거한 항목",
+        "회의에서 실제로 정리된 방향",
+        "회의에서 실제로 남은 질문",
+        "짧은 핵심 논의",
+        "그 논의가 나온 근거",
+    }
+
     def stable_block_id(prefix: str, seed: str) -> str:
         return f"{prefix}-{_stable_short_id(seed or prefix)}"
+
+    def is_placeholder_text(value: Any) -> bool:
+        text = _safe_text(value)
+        return not text or text in placeholder_texts
+
+    def filter_meaningful_table_rows(
+        rows: list[dict[str, Any]],
+        columns: list[dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        status_ids = {
+            _safe_text(column.get("id"))
+            for column in columns
+            if _safe_text(column.get("title")) == "상태" or _safe_text(column.get("id")) == "col-status"
+        }
+        next_rows: list[dict[str, Any]] = []
+        for row in rows:
+            cells = row.get("cells") if isinstance(row, dict) and isinstance(row.get("cells"), dict) else {}
+            has_content = any(
+                not is_placeholder_text(value)
+                for key, value in cells.items()
+                if _safe_text(key) not in status_ids
+            )
+            if has_content:
+                next_rows.append(row)
+        return next_rows
+
+    def block_has_content(block: dict[str, Any]) -> bool:
+        block_type = _safe_text(block.get("type"))
+        if block_type == "paragraph":
+            return not is_placeholder_text(block.get("text"))
+        if block_type == "bullets":
+            return any(not is_placeholder_text(item) for item in block.get("items") or [])
+        if block_type == "table":
+            rows = block.get("rows") if isinstance(block.get("rows"), list) else []
+            columns = block.get("columns") if isinstance(block.get("columns"), list) else []
+            return bool(filter_meaningful_table_rows(rows, columns))
+        return block_type == "heading" and not is_placeholder_text(block.get("text"))
+
+    def prune_empty_sections(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned: list[dict[str, Any]] = []
+        for index, block in enumerate(blocks):
+            block_type = _safe_text(block.get("type"))
+            if block_type == "table":
+                columns = block.get("columns") if isinstance(block.get("columns"), list) else []
+                rows = block.get("rows") if isinstance(block.get("rows"), list) else []
+                next_rows = filter_meaningful_table_rows(rows, columns)
+                if not next_rows:
+                    continue
+                block = {**block, "rows": next_rows}
+            elif block_type == "bullets":
+                items = [item for item in block.get("items") or [] if not is_placeholder_text(item)]
+                if not items:
+                    continue
+                block = {**block, "items": items}
+            elif block_type == "paragraph" and is_placeholder_text(block.get("text")):
+                continue
+
+            if block_type == "heading":
+                level = _safe_nonnegative_int(block.get("level"), 2) or 2
+                if level > 1:
+                    has_section_content = False
+                    for next_block in blocks[index + 1:]:
+                        next_type = _safe_text(next_block.get("type"))
+                        if next_type == "heading":
+                            next_level = _safe_nonnegative_int(next_block.get("level"), 2) or 2
+                            if next_level <= level:
+                                break
+                        if block_has_content(next_block) and next_type != "heading":
+                            has_section_content = True
+                            break
+                    if not has_section_content:
+                        continue
+            cleaned.append(block)
+
+        deduped: list[dict[str, Any]] = []
+        for index, block in enumerate(cleaned):
+            block_type = _safe_text(block.get("type"))
+            if block_type == "heading":
+                level = _safe_nonnegative_int(block.get("level"), 2) or 2
+                if level > 1:
+                    next_block = next((item for item in cleaned[index + 1:] if _safe_text(item.get("type")) != "paragraph"), None)
+                    next_title = _safe_text(next_block.get("title")) if isinstance(next_block, dict) and _safe_text(next_block.get("type")) == "table" else ""
+                    if next_title and _safe_text(block.get("text")) == next_title:
+                        continue
+                    previous = deduped[-1] if deduped else None
+                    if isinstance(previous, dict) and _safe_text(previous.get("type")) == "heading" and _safe_text(previous.get("text")) == _safe_text(block.get("text")):
+                        continue
+            deduped.append(block)
+        return deduped
+
+    def normalize_table_title(value: Any) -> str:
+        title = _safe_text(value)
+        return "핵심 논의 사항" if title in {"핵심 결정 사항", "핵심결정사항"} else title
+
+    def compact_table_cell(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", _safe_text(value)).strip()
+        return _truncate_text(text, limit)
+
+    def normalize_discussion_table(
+        block_id: str,
+        title: str,
+        columns: list[dict[str, str]],
+        rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+        if title != "핵심 논의 사항" and block_id != "table-discussions":
+            return columns, rows
+
+        def column_id_by_title(*titles: str) -> str:
+            title_set = {_safe_text(title) for title in titles if _safe_text(title)}
+            for column in columns:
+                column_id = _safe_text(column.get("id"))
+                column_title = _safe_text(column.get("title"))
+                if column_id in title_set or column_title in title_set:
+                    return column_id
+            return ""
+
+        topic_id = column_id_by_title("col-topic", "항목")
+        discussion_id = column_id_by_title("col-discussion", "논의 내용")
+        evidence_id = column_id_by_title("col-evidence", "근거", "논의 근거")
+        status_id = column_id_by_title("col-status", "상태")
+        next_columns = [
+            {"id": "col-discussion", "title": "논의 내용", "type": "text"},
+            {"id": "col-evidence", "title": "논의 근거", "type": "text"},
+            {"id": "col-status", "title": "상태", "type": "select"},
+        ]
+        next_rows: list[dict[str, Any]] = []
+        for row_index, row in enumerate(rows):
+            cells = row.get("cells") if isinstance(row, dict) and isinstance(row.get("cells"), dict) else {}
+            old_topic = _safe_text(cells.get(topic_id)) if topic_id else ""
+            old_discussion = _safe_text(cells.get(discussion_id)) if discussion_id else ""
+            old_evidence = _safe_text(cells.get(evidence_id)) if evidence_id else ""
+            discussion = old_topic or old_discussion
+            evidence = old_discussion if old_topic and old_discussion and old_discussion != old_topic else old_evidence
+            status = _safe_text(cells.get(status_id)) if status_id else ""
+            if not discussion and not evidence:
+                continue
+            next_rows.append(
+                {
+                    "id": _safe_text(row.get("id") if isinstance(row, dict) else "", f"row-{row_index + 1}"),
+                    "cells": {
+                        "col-discussion": compact_table_cell(discussion, 34),
+                        "col-evidence": compact_table_cell(evidence, 72),
+                        "col-status": compact_table_cell(status or "검토 필요", 12),
+                    },
+                }
+            )
+            if len(next_rows) >= 6:
+                break
+        return next_columns, next_rows
 
     def normalize_block(raw: Any, index: int) -> dict[str, Any] | None:
         if not isinstance(raw, dict):
@@ -6749,16 +6909,22 @@ def _normalize_summary_document_blocks(
             text = _safe_text(raw.get("text"))
             return {"id": block_id, "type": "paragraph", "text": text} if text else None
         if block_type == "bullets":
-            items = [_safe_text(item) for item in raw.get("items") or [] if _safe_text(item)][:20]
+            items = [_safe_text(item) for item in raw.get("items") or [] if not is_placeholder_text(item)][:20]
             return {"id": block_id, "type": "bullets", "items": items} if items else None
         if block_type == "table":
             columns = _normalize_summary_table_columns(raw.get("columns"), block_id)
+            title = normalize_table_title(raw.get("title"))
+            rows = _normalize_summary_table_rows(raw.get("rows"), columns, block_id)
+            columns, rows = normalize_discussion_table(block_id, title, columns, rows)
+            rows = filter_meaningful_table_rows(rows, columns)
+            if not rows:
+                return None
             return {
                 "id": block_id or stable_block_id("table", str(index)),
                 "type": "table",
-                "title": _safe_text(raw.get("title")),
+                "title": title,
                 "columns": columns,
-                "rows": _normalize_summary_table_rows(raw.get("rows"), columns, block_id),
+                "rows": rows,
             }
         return None
 
@@ -6768,13 +6934,13 @@ def _normalize_summary_document_blocks(
         if block
     ] if isinstance(raw_blocks, list) else []
     if direct_blocks:
-        return direct_blocks[:80]
+        return prune_empty_sections(direct_blocks)[:80]
 
     structured_blocks = _build_summary_document_blocks(structured or {})
     if structured_blocks:
-        return structured_blocks
+        return prune_empty_sections(structured_blocks)
 
-    return _summary_markdown_to_document_blocks(markdown)
+    return prune_empty_sections(_summary_markdown_to_document_blocks(markdown))
 
 
 def _build_summary_document_blocks(structured: dict[str, Any]) -> list[dict[str, Any]]:
@@ -7362,13 +7528,32 @@ def _build_summary_conclusion_prompt(
     groups: list[dict[str, Any]],
     sections: list[dict[str, Any]],
     current_structured: dict[str, Any],
+    context: dict[str, Any],
 ) -> str:
     conclusion = current_structured.get("conclusion") if isinstance(current_structured.get("conclusion"), dict) else {}
+    overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
+    chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
+    rows = context.get("rows") if isinstance(context.get("rows"), list) else []
     input_payload = {
         "meeting_topic": _safe_text(payload.meeting_topic),
         "source_policy": {
-            "note": "좌측 요약/흐름 문서는 이미 생성되어 있다. 이번 출력은 오른쪽 결론 편집 문서만 다시 만드는 용도다.",
-            "do_not_repeat": "논의 흐름 전체를 길게 반복하지 말고, 결론/결정/근거/후속 조치만 문서화한다.",
+            "note": "이번 출력은 오른쪽 결론 편집 문서만 다시 만드는 용도다.",
+            "primary_source": "전체 STT 전사 내용을 압축한 overview_summaries와 chunk_summaries를 우선 근거로 삼는다.",
+            "secondary_source": "current_summary.flow_sections와 structure_groups는 정리 방향과 구조를 이해하기 위한 참고자료다.",
+            "do_not_repeat": "좌측 정리 카드의 narrative를 그대로 반복하지 말고, 전체 전사 맥락에서 핵심 논의/근거/정리된 방향/보류 사항/후속 조치만 문서화한다.",
+        },
+        "transcript_context": {
+            "context_policy": {
+                "total_utterance_count": int(context.get("total_utterance_count") or len(rows)),
+                "included_raw_utterance_count": int(context.get("included_utterance_count") or len(rows)),
+                "total_chunk_summary_count": int(context.get("chunk_summary_count") or len(chunk_summaries)),
+                "included_chunk_summary_count": int(context.get("included_chunk_summary_count") or len(chunk_summaries)),
+                "overview_summary_count": len(overview_summaries),
+                "note": "overview_summaries는 긴 회의 전체 흐름을 압축한 개요, chunk_summaries는 구간별 요약, raw_utterances_for_nuance_only는 표현 뉘앙스 확인용 선별 원문이다.",
+            },
+            "overview_summaries": overview_summaries,
+            "chunk_summaries": chunk_summaries,
+            "raw_utterances_for_nuance_only": _problem_taxonomy_prompt_rows(rows[:36], 320),
         },
         "current_summary": {
             "meeting_overview": _safe_text(current_structured.get("meeting_overview")),
@@ -7424,36 +7609,76 @@ def _build_summary_conclusion_prompt(
         ],
     }
     return (
-        "너는 회의 종료 후 공유할 결론 문서를 작성하는 AI 문서 편집자다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 회의가 끝난 뒤 참가자들이 공유하고 수정할 수 있는 Notion 스타일의 최종 결론 문서를 만드는 AI 퍼실리테이터다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
         "- 오른쪽 결론 카드에 들어갈 최종 문서만 작성한다.\n"
-        "- 회의 흐름 전체를 다시 설명하지 말고, 최종적으로 무엇이 정리되었는지, 왜 그렇게 정리되었는지, 남은 실행/확인 항목은 무엇인지가 바로 읽히게 한다.\n"
-        "- 제목과 결론 문장은 서로 달라야 한다. 제목은 결론의 이름이고, summary는 실제 결론 내용을 1~2문장으로 압축한 것이다.\n"
-        "- '요약을 제시했다', '결론임을 명확히 했다' 같은 메타 설명을 금지한다. 실제 회의 내용의 결론을 써라.\n"
-        "- 새로운 사실, 결정, 담당자, 수치, 원인을 발명하지 않는다. 불명확하면 '추가 확인 필요'라고 적는다.\n"
-        "- 표가 읽기 쉬운 경우에는 Notion 문서처럼 표 블록을 사용한다. 표 컬럼은 회의 내용에 맞게 직접 설계한다.\n\n"
+        "- 결론은 좌측 정리 결과만 보고 쓰지 말고, 전체 STT 전사 압축 맥락을 우선 근거로 작성한다.\n"
+        "- 좌측 정리 카드의 회의 흐름을 그대로 반복하지 않는다.\n"
+        "- 회의에서 실제로 논의된 핵심 사항, 정리된 방향, 합의된 판단, 남은 쟁점, 후속 실행 항목을 중심으로 문서를 구성한다.\n"
+        "- 확정된 결정이 적은 회의라도 '결정 사항'을 억지로 만들지 말고, 핵심 논의 사항과 보류/검토 상태를 중심으로 정리한다.\n"
+        "- 후속 실행 항목이 있더라도 핵심 논의 사항, 논의 흐름, 주요 쟁점과 관점, 정리된 방향, 남은 질문 중 전사에서 근거가 있는 섹션은 생략하지 않는다.\n"
+        "- 후속 실행 항목은 문서의 보조 섹션이며, 회의 내용 요약 섹션을 대체하면 안 된다.\n"
+        "- 결과는 사용자가 블록 단위로 수정할 수 있어야 하므로 document_blocks를 가장 중요한 출력으로 작성한다.\n"
+        "- 표가 더 읽기 쉬운 정보는 반드시 table 블록으로 만든다.\n"
+        "- 확정되지 않은 내용은 확정처럼 쓰지 말고 '검토 필요', '추가 확인 필요', '미정'으로 표시한다.\n"
+        "- 입력에 없는 사실, 담당자, 일정, 수치, 결정은 만들지 않는다.\n"
+        "- 화자명, timestamp, 긴 원문 인용은 넣지 않는다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
         "{\n"
-        '  "markdown": "# 결론 제목\\n\\n핵심 결론 1~2문장\\n\\n### 결정 사항\\n...",\n'
         '  "document_blocks": [\n'
-        '    {"id":"heading-conclusion","type":"heading","text":"결론 제목","level":1},\n'
-        '    {"id":"paragraph-summary","type":"paragraph","text":"실제 결론 내용 1~2문장"},\n'
-        '    {"id":"table-decisions","type":"table","title":"회의 내용에 맞는 표 제목","columns":[{"id":"col-issue","title":"쟁점","type":"text"},{"id":"col-conclusion","title":"정리된 결론","type":"text"},{"id":"col-next","title":"후속 조치","type":"text"}],"rows":[{"id":"row-1","cells":{"col-issue":"...","col-conclusion":"...","col-next":"..."}}]}\n'
+        '    {"id":"heading-conclusion","type":"heading","level":1,"text":"최종 결론 제목"},\n'
+        '    {"id":"paragraph-summary","type":"paragraph","text":"회의 결론을 1~2문장으로 압축한 문단"},\n'
+        '    {"id":"table-discussions","type":"table","title":"핵심 논의 사항","columns":[{"id":"col-discussion","title":"논의 내용","type":"text"},{"id":"col-evidence","title":"논의 근거","type":"text"},{"id":"col-status","title":"상태","type":"select"}],"rows":[{"id":"row-1","cells":{"col-discussion":"짧은 핵심 논의","col-evidence":"그 논의가 나온 근거","col-status":"검토 필요"}}]},\n'
+        '    {"id":"heading-flow","type":"heading","level":2,"text":"논의 흐름"},\n'
+        '    {"id":"bullets-flow","type":"bullets","items":["실제 회의 흐름에 근거한 항목"]},\n'
+        '    {"id":"table-issues","type":"table","title":"주요 쟁점과 관점","columns":[{"id":"col-issue","title":"쟁점","type":"text"},{"id":"col-perspectives","title":"관점","type":"text"},{"id":"col-direction","title":"정리 방향","type":"text"}],"rows":[{"id":"row-1","cells":{"col-issue":"...","col-perspectives":"...","col-direction":"..."}}]},\n'
+        '    {"id":"heading-direction","type":"heading","level":2,"text":"정리된 방향"},\n'
+        '    {"id":"bullets-direction","type":"bullets","items":["회의에서 실제로 정리된 방향"]},\n'
+        '    {"id":"heading-open-questions","type":"heading","level":2,"text":"남은 질문"},\n'
+        '    {"id":"bullets-open-questions","type":"bullets","items":["회의에서 실제로 남은 질문"]}\n'
         "  ],\n"
-        '  "conclusion": {"title":"결론 제목","summary":"실제 결론 내용 1~2문장","groups":[{"group_id":"...","title":"정리 항목","status":"final","status_label":"확정","bullets":["결론 bullet"]}]}\n'
+        '  "conclusion": {"title":"결론 제목","summary":"결론 요약 1~2문장","groups":[{"group_id":"...","title":"정리 항목 제목","status":"final","status_label":"확정","bullets":["실제 결론 bullet"]}]}\n'
         "}\n\n"
-        "[규칙]\n"
-        "- document_blocks는 heading, paragraph, bullets, table만 사용한다.\n"
-        "- table 블록은 0~3개만 사용한다. 표가 필요 없으면 paragraph와 bullets만 써도 된다.\n"
-        "- table columns는 id/title/type 객체 배열이고 rows는 id/cells 객체 배열이다.\n"
-        "- column id는 col-issue처럼 영문 소문자/하이픈으로 만들고, row cells의 key는 반드시 column id와 일치시킨다.\n"
-        "- 표 컬럼은 2~6개로 제한한다. 회의 성격에 맞춰 결정 사항, 근거, 담당, 우선순위, 리스크, 후속 조치 등을 선택한다.\n"
-        "- 각 row에는 빈 셀을 남기지 않는다. 모르면 '추가 확인 필요'라고 적는다.\n"
-        "- conclusion.groups는 2단계 구조화 그룹을 요약한 결론 데이터다. 입력 그룹 중 결론으로 묶을 가치가 있는 항목을 빠짐없이 반영한다.\n"
-        "- 확정되지 않은 내용은 status='review' 또는 'draft'로 두고, status_label은 한국어로 적는다.\n"
-        "- 문장은 짧고 직접적으로 쓴다. 명사구 나열만 하지 말고 읽히는 문서로 만든다.\n"
+        "[블록 규칙]\n"
+        "- document_blocks는 반드시 2개 이상 만든다.\n"
+        "- 첫 블록은 반드시 heading level 1이다.\n"
+        "- 두 번째 블록은 반드시 paragraph이며, 전체 결론을 1~2문장으로 요약한다.\n"
+        "- heading, paragraph, bullets, table 타입만 사용한다.\n"
+        "- table은 1~3개까지 만들 수 있다.\n"
+        "- table이 필요 없는 회의라면 만들지 않아도 되지만, 핵심 논의 사항/쟁점 비교/후속 실행/우선순위/추가 확인 사항이 있으면 table을 사용한다.\n"
+        "- 첫 번째 표 제목은 '핵심 결정 사항'이 아니라 '핵심 논의 사항'을 우선 사용한다.\n"
+        "- 핵심 논의 사항 표에는 '항목' 컬럼을 만들지 않는다. '논의 내용', '논의 근거', '상태' 3개 컬럼만 사용한다.\n"
+        "- 핵심 논의 사항의 '논의 내용'은 기존 항목처럼 짧은 핵심 주제나 판단을 쓴다. 34자 이내로 쓴다.\n"
+        "- 핵심 논의 사항의 '논의 근거'는 해당 논의가 나온 이유나 회의 내 근거를 72자 이내의 한 문장으로 쓴다.\n"
+        "- document_blocks는 가능한 경우 다음 순서를 따른다: 제목, 전체 요약, 핵심 논의 사항, 논의 흐름, 주요 쟁점과 관점, 정리된 방향, 남은 질문, 후속 실행 항목.\n"
+        "- 각 섹션은 전사 근거가 있을 때만 만든다. 근거가 없는 섹션은 생략하되, 후속 실행 항목이 있다는 이유로 다른 근거 있는 섹션을 생략하지 않는다.\n"
+        "- 내용이 없는 섹션 heading만 만들지 않는다. 예시 placeholder 문구를 실제 출력에 넣지 않는다.\n"
+        "- '실제 회의 흐름에 근거한 항목', '회의에서 실제로 남은 질문', '회의에서 실제로 정리된 방향' 같은 안내 문구를 그대로 쓰지 않는다.\n"
+        "- table 블록에 title이 있으면 같은 제목의 heading 블록을 바로 앞에 만들지 않는다. 예: '주요 쟁점과 관점' heading과 같은 title의 table을 동시에 만들지 않는다.\n"
+        "- 후속 실행 항목 표가 필요하면 문서 마지막 쪽에 둔다. 실제 할 일, 담당, 목적, 상태가 명확하지 않으면 만들지 않는다.\n"
+        "- 후속 실행 항목이 없으면 빈 table이나 '추가 확인 필요'만 반복되는 table을 만들지 않는다.\n"
+        "- table columns는 객체 배열로 만든다. 각 column은 id, title, type을 가진다.\n"
+        "- column id는 같은 table 안에서 중복되면 안 된다.\n"
+        "- row id는 같은 table 안에서 중복되면 안 된다.\n"
+        "- row.cells의 key는 반드시 columns의 id와 일치해야 한다.\n"
+        "- table의 빈 셀은 만들지 않는다. 모르면 '추가 확인 필요'라고 쓴다.\n"
+        "- select 타입 셀에는 '확정', '검토 필요', '추가 확인 필요', '대기', '완료', '미정' 중 가장 적절한 값을 쓴다.\n"
+        "- columns는 회의 성격에 맞게 직접 정하되 3~6개로 제한한다.\n"
+        "- rows는 표마다 1~6개로 제한한다. 핵심 논의 사항 표는 가장 중요한 3~5개만 남긴다.\n"
+        "- 모든 table 셀은 화면에서 읽기 쉽게 짧게 쓴다. 한 셀에 여러 문장을 넣지 않는다.\n\n"
+        "[결론 작성 규칙]\n"
+        "- transcript_context의 overview_summaries와 chunk_summaries를 가장 우선 근거로 삼는다.\n"
+        "- 전체 전사 맥락에서 회의가 어떤 순서로 흘렀는지, 어떤 쟁점이 생겼는지, 어떤 방향으로 정리됐는지 먼저 정리한 뒤 후속 실행 항목을 분리한다.\n"
+        "- flow_sections의 settlement는 보조 근거로 사용하되, narrative를 그대로 반복하지 않는다.\n"
+        "- settlement가 없으면 key_points와 open_questions, transcript_context를 함께 보고 결론/후속 확인 사항을 분리한다.\n"
+        "- open_questions는 확정 결론이 아니라 후속 확인 사항으로 분리한다.\n"
+        "- '논의가 있었다', '요약을 제시했다', '중요성이 언급됐다' 같은 메타 문장은 쓰지 않는다.\n"
+        "- 좋은 문장: '방문지는 흥미만이 아니라 이동 부담과 학습 효과를 함께 비교해야 한다는 방향으로 정리됐다.'\n"
+        "- 나쁜 문장: '방문지 선택 기준에 대한 논의가 있었다.'\n"
+        "- 각 bullet은 실제 논의 내용, 판단, 근거, 결정, 보류 사항 중 하나를 담아야 한다.\n"
+        "- conclusion.groups의 status는 final, review, draft 중 하나를 쓴다. 확정되지 않은 내용은 review 또는 draft로 둔다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
@@ -12786,7 +13011,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     source_signature = _summary_document_source_signature(groups)
     signature = _canvas_llm_signature(
         {
-            "version": 4,
+            "version": 6,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "source_signature": source_signature,
             "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
@@ -12912,18 +13137,32 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     source_signature = _summary_document_source_signature(groups)
     current_summary = payload.current_summary if isinstance(payload.current_summary, dict) else {}
     current_structured_raw = current_summary.get("structured") if isinstance(current_summary.get("structured"), dict) else {}
+    signature_rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
+    utterance_signature = _canvas_llm_signature(
+        [
+            {
+                "id": row.get("id"),
+                "speaker": row.get("speaker"),
+                "text": row.get("text"),
+                "timestamp": row.get("timestamp"),
+            }
+            for row in signature_rows
+        ]
+    )
     signature = _canvas_llm_signature(
         {
-            "version": 1,
+            "version": 7,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "source_signature": source_signature,
+            "utterance_signature": utterance_signature,
             "current_structured": current_structured_raw,
+            "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
             "regenerate_nonce": _safe_text(payload.regenerate_nonce),
         }
     )
 
     def _compute() -> dict[str, Any]:
-        rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
+        rows = signature_rows
         sections = _summary_document_sections(groups, rows)
         fallback_structured = _build_summary_document_structured(payload.meeting_topic, groups, sections)
         base_structured = _normalize_summary_structured_document(current_structured_raw, fallback_structured)
@@ -12955,15 +13194,43 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
             }
 
         client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        transcript_context: dict[str, Any] = {
+            "rows": rows,
+            "chunk_summaries": [],
+            "overview_summaries": [],
+            "total_utterance_count": len(rows),
+            "included_utterance_count": len(rows),
+            "included_chunk_summary_count": 0,
+            "overview_summary_count": 0,
+        }
+        if llm_ready:
+            try:
+                taxonomy_payload = ProblemTaxonomyGenerateInput(
+                    meeting_id=normalized_meeting_id,
+                    meeting_topic=_safe_text(payload.meeting_topic),
+                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                    max_groups=6,
+                )
+                transcript_context, context_warning = _build_problem_taxonomy_context(
+                    RT,
+                    taxonomy_payload,
+                    client,
+                    llm_ready,
+                )
+                if context_warning:
+                    warning = context_warning
+            except Exception as exc:
+                warning = f"결론 문서용 전체 전사 context 생성 실패: {exc}"
+
         if llm_ready and client is not None:
             try:
                 parsed = _call_llm_json(
                     RT,
                     client,
-                    prompt=_build_summary_conclusion_prompt(payload, groups, sections, base_structured),
+                    prompt=_build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context),
                     stage="canvas_summary_conclusion",
                     temperature=0.16,
-                    max_tokens=2600,
+                    max_tokens=5200,
                 )
                 if isinstance(parsed, dict):
                     parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
