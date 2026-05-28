@@ -117,7 +117,12 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
   ]);
 
   const runProblemStructureGrouping = useCallback(
-    async (options?: { nodes?: ProblemStructureNodeViewModel[]; method?: ProblemStructureMethod }) => {
+    async (options?: {
+      nodes?: ProblemStructureNodeViewModel[];
+      method?: ProblemStructureMethod;
+      force?: boolean;
+      includeExistingGroups?: boolean;
+    }) => {
       const structureNodes =
         options?.nodes && options.nodes.length > 0
           ? options.nodes
@@ -137,7 +142,10 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
       setActivityMessage(`${problemStructureMethodLabel(method)} 기준으로 AI가 노드를 묶고 있습니다.`);
 
       try {
-        const generationStart = await startSharedArtifactGeneration(PROBLEM_DEFINITION_STEP2_ARTIFACT, false);
+        const generationStart = await startSharedArtifactGeneration(
+          PROBLEM_DEFINITION_STEP2_ARTIFACT,
+          Boolean(options?.force),
+        );
         generationId = generationStart.generation.generation_id || "";
         if (!generationStart.acquired) {
           setActivityMessage("다른 참가자가 정의 2단계를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
@@ -155,12 +163,15 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
             status: node.status,
             depth: node.depth,
           })),
-          existing_groups: problemStructureGroups.map((group) => ({
-            id: group.id,
-            title: group.title,
-            node_ids: group.nodeIds,
-            rationale: group.rationale,
-          })),
+          existing_groups:
+            options?.includeExistingGroups === false
+              ? []
+              : problemStructureGroups.map((group) => ({
+                  id: group.id,
+                  title: group.title,
+                  node_ids: group.nodeIds,
+                  rationale: group.rationale,
+                })),
           max_groups: Math.min(8, Math.max(1, Math.ceil(structureNodes.length / 2))),
         });
         if (problemStructureRequestSeqRef.current !== requestSeq) {
@@ -225,8 +236,8 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
       setActivityMessage("구조화할 문제정의 노드가 아직 없습니다.");
       return;
     }
-    const nextMode = problemStructureDraftMode || "manual";
-    if (problemStructureNodes.length > 0 || problemStructureGroups.length > 0) {
+    const nextMode = problemStructureDraftMode || "ai";
+    if (problemStructureGroups.length > 0) {
       setProblemDefinitionPhase("structure");
       setProblemStructureSetupOpen(false);
       setSelectedNodeId("");
@@ -237,7 +248,7 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     }
     setProblemStructureMethod(problemStructureDraftMethod);
     setProblemDefinitionMode(nextMode);
-    const nextNodes = syncProblemStructureNodesFromDefinition();
+    const nextNodes = problemStructureNodes.length > 0 ? problemStructureNodes : syncProblemStructureNodesFromDefinition();
     setProblemDefinitionPhase("structure");
     setProblemStructureSetupOpen(false);
     setSelectedNodeId("");
@@ -250,12 +261,13 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
       await runProblemStructureGrouping({
         nodes: nextNodes,
         method: problemStructureDraftMethod,
+        includeExistingGroups: false,
       });
     }
   }, [
     problemGroups.length,
     problemStructureGroups.length,
-    problemStructureNodes.length,
+    problemStructureNodes,
     problemStructureDraftMethod,
     problemStructureDraftMode,
     runProblemStructureGrouping,
@@ -264,6 +276,40 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
     setProblemDefinitionPhase,
     setProblemGroupingRationaleOpenGroupId,
     setProblemStructureMethod,
+    setProblemStructureSetupOpen,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    syncProblemStructureNodesFromDefinition,
+  ]);
+
+  const handleRegenerateProblemStructure = useCallback(async () => {
+    if (problemGroups.length === 0) {
+      setActivityMessage("AI가 묶을 문제정의 노드가 아직 없습니다.");
+      return;
+    }
+    setProblemDefinitionPhase("structure");
+    setProblemStructureSetupOpen(false);
+    setSelectedNodeId("");
+    setSelectedProblemGroupId("");
+    setProblemGroupingRationaleOpenGroupId("");
+    setProblemDefinitionMode("ai");
+    const nextNodes = problemStructureNodes.length > 0 ? problemStructureNodes : syncProblemStructureNodesFromDefinition();
+    setActivityMessage("문제정의 2단계를 AI가 다시 묶고 있습니다. 완료되면 자동으로 반영됩니다.");
+    await runProblemStructureGrouping({
+      nodes: nextNodes,
+      method: problemStructureMethod,
+      force: true,
+      includeExistingGroups: false,
+    });
+  }, [
+    problemGroups.length,
+    problemStructureMethod,
+    problemStructureNodes,
+    runProblemStructureGrouping,
+    setActivityMessage,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
+    setProblemGroupingRationaleOpenGroupId,
     setProblemStructureSetupOpen,
     setSelectedNodeId,
     setSelectedProblemGroupId,
@@ -288,6 +334,7 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
   return {
     handleBackToProblemDefinitionExplore,
     handleOpenProblemStructureSetup,
+    handleRegenerateProblemStructure,
     handleStartProblemStructure,
     runProblemStructureGrouping,
     syncProblemStructureNodesFromDefinition,

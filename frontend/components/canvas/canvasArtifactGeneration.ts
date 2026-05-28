@@ -14,6 +14,7 @@ export const CANVAS_ARTIFACT_KEYS: CanvasArtifactGenerationKey[] = [
   PROBLEM_DEFINITION_STEP2_ARTIFACT,
   SUMMARY_DOCUMENT_ARTIFACT,
 ];
+const ARTIFACT_GENERATION_STALE_MS = 5 * 60 * 1000;
 
 export function normalizeCanvasArtifactGeneration(
   raw?: CanvasArtifactGenerationMap | null,
@@ -53,7 +54,36 @@ export function isCanvasArtifactGenerating(
   generation: CanvasArtifactGenerationMap,
   artifactKey: CanvasArtifactGenerationKey,
 ) {
-  return normalizeArtifactGenerationStatus(generation[artifactKey]?.status) === "generating";
+  const entry = generation[artifactKey];
+  return normalizeArtifactGenerationStatus(entry?.status) === "generating" && !isCanvasArtifactGenerationStale(entry);
+}
+
+function parseArtifactGenerationTime(value?: string): number | null {
+  const text = (value || "").trim();
+  if (!text) return null;
+
+  if (text.includes("T")) {
+    const time = Date.parse(text);
+    return Number.isFinite(time) ? time : null;
+  }
+
+  const match = /^(\d{1,2}):(\d{2}):(\d{2})$/.exec(text);
+  if (!match) return null;
+  const [, rawHours, rawMinutes, rawSeconds] = match;
+  const now = new Date();
+  const parsed = new Date(now);
+  parsed.setHours(Number(rawHours), Number(rawMinutes), Number(rawSeconds), 0);
+  if (parsed.getTime() - now.getTime() > 60 * 1000) {
+    parsed.setDate(parsed.getDate() - 1);
+  }
+  return parsed.getTime();
+}
+
+export function isCanvasArtifactGenerationStale(entry?: CanvasArtifactGenerationState | null) {
+  if (!entry || normalizeArtifactGenerationStatus(entry.status) !== "generating") return false;
+  const startedOrUpdatedAt = parseArtifactGenerationTime(entry.updated_at || entry.started_at);
+  if (startedOrUpdatedAt === null) return true;
+  return Date.now() - startedOrUpdatedAt >= ARTIFACT_GENERATION_STALE_MS;
 }
 
 export function setCanvasArtifactGenerationState(

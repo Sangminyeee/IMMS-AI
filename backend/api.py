@@ -10537,6 +10537,40 @@ _CANVAS_ARTIFACT_KEYS = {
     "problem-definition:structure",
     "solution:summary",
 }
+_CANVAS_ARTIFACT_GENERATION_STALE_SECONDS = 5 * 60
+
+
+def _parse_canvas_artifact_generation_time(raw: Any) -> float | None:
+    text = _safe_text(raw)
+    if not text:
+        return None
+    if "T" in text:
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except ValueError:
+            return None
+    try:
+        parsed_time = time.strptime(text, "%H:%M:%S")
+    except ValueError:
+        return None
+    return float(parsed_time.tm_hour * 3600 + parsed_time.tm_min * 60 + parsed_time.tm_sec)
+
+
+def _is_canvas_artifact_generation_stale(entry: dict[str, Any], now_text: str) -> bool:
+    if _safe_text(entry.get("status")) != "generating":
+        return False
+    started_or_updated_at = _safe_text(entry.get("updated_at")) or _safe_text(entry.get("started_at"))
+    started_seconds = _parse_canvas_artifact_generation_time(started_or_updated_at)
+    now_seconds = _parse_canvas_artifact_generation_time(now_text)
+    if started_seconds is None or now_seconds is None:
+        return True
+    age_seconds = now_seconds - started_seconds
+    if age_seconds < 0:
+        age_seconds += 24 * 60 * 60
+    return age_seconds >= _CANVAS_ARTIFACT_GENERATION_STALE_SECONDS
 
 
 def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]:
@@ -13839,8 +13873,12 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
     generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
     current = generation_map.get(artifact_key) or {}
     current_status = _safe_text(current.get("status"))
+    current_is_stale = _is_canvas_artifact_generation_stale(current, saved_at)
+    current_started_by = _safe_text(current.get("started_by"))
+    requested_by = _safe_text(payload.user_id)
+    current_started_by_requester = bool(requested_by) and current_started_by == requested_by
 
-    if current_status == "generating" and not payload.force:
+    if current_status == "generating" and not payload.force and not current_is_stale and not current_started_by_requester:
         generation = copy.deepcopy(current)
         acquired = False
     else:

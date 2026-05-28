@@ -257,8 +257,25 @@ export function hydrateProblemStructureState(
   };
 }
 
-export function getSummaryEligibleStructureGroups(groups: ProblemStructureGroupViewModel[]) {
-  return groups;
+export function getSummaryEligibleStructureGroups(
+  groups: ProblemStructureGroupViewModel[],
+  nodes: ProblemStructureNodeViewModel[] = [],
+): ProblemStructureGroupViewModel[] {
+  if (nodes.length === 0) {
+    return groups.filter((group) => group.status === "final");
+  }
+
+  const finalNodeIds = new Set(nodes.filter((node) => node.status === "final").map((node) => node.id));
+  return groups
+    .map((group) => {
+      const finalNodeIdsInGroup = group.nodeIds.filter((nodeId) => finalNodeIds.has(nodeId));
+      return {
+        ...group,
+        nodeIds: finalNodeIdsInGroup,
+        status: "final" as const,
+      };
+    })
+    .filter((group) => group.nodeIds.length > 0);
 }
 
 export function buildSummaryDocumentSourceSignature(
@@ -267,7 +284,7 @@ export function buildSummaryDocumentSourceSignature(
 ) {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   return JSON.stringify(
-    getSummaryEligibleStructureGroups(groups).map((group) => ({
+    getSummaryEligibleStructureGroups(groups, nodes).map((group) => ({
       id: group.id,
       title: group.title,
       status: group.status,

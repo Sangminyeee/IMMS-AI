@@ -849,6 +849,24 @@ function CurrentStagePanel({
       </span>
     </button>
   ) : null;
+  const regenerateProblemStructureButton = isProblemStructure ? (
+    <button
+      type="button"
+      onClick={() => {
+        void problemHandlers.onRegenerateProblemStructure();
+      }}
+      disabled={header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0}
+      className="inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
+    >
+      <span
+        className={`moa-font-pretendard whitespace-nowrap text-[11px] font-semibold leading-[1.4] tracking-[-0.027px] text-[#236cf3] ${
+          header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0 ? "text-[#9ca3af]" : ""
+        }`}
+      >
+        {problem.problemStructurePending ? "AI 묶는 중" : "AI 자동묶음"}
+      </span>
+    </button>
+  ) : null;
 
   return (
     <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
@@ -871,7 +889,10 @@ function CurrentStagePanel({
       ) : null}
       {stage === "problem-definition" && hasProblemStructure ? (
         <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
-          <p className="text-[11px] font-bold leading-[1.4] tracking-[-0.027px] text-[#111]">문제정의 단계</p>
+          <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
+            <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
+            {regenerateProblemStructureButton}
+          </div>
           <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
             {([
               ["explore", "1단계"],

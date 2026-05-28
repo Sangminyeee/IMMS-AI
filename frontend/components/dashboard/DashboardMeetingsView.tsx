@@ -33,6 +33,11 @@ const statusFilters: Array<{ label: string; value: MeetingStatusFilter }> = [
 ];
 
 const UPCOMING_CARD_SCROLL_STEP = 427;
+const UPCOMING_DRAG_IGNORE_SELECTOR = "button,a,input,textarea,select,[role='button']";
+
+function isUpcomingInteractiveTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest(UPCOMING_DRAG_IGNORE_SELECTOR));
+}
 
 export function DashboardMeetingsView({
   loading,
@@ -92,6 +97,7 @@ export function DashboardMeetingsView({
   const handleUpcomingPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const scrollElement = upcomingScrollRef.current;
     if (!scrollElement || scrollElement.scrollWidth <= scrollElement.clientWidth) return;
+    if (isUpcomingInteractiveTarget(event.target)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
 
     const dragState = upcomingDragRef.current;
@@ -317,6 +323,7 @@ function UpcomingMeetingCard({
       <button
         type="button"
         onClick={() => onJoinMeeting(meeting.id)}
+        onPointerDown={(event) => event.stopPropagation()}
         className={classNames(
           "absolute left-[264.04px] top-[133.24px] inline-flex h-[33.213px] w-[98.256px] items-center justify-center rounded-[54.896px] transition",
           featured || tone === "active"

@@ -257,22 +257,27 @@ export function useSummaryDocumentActions({
 
   const handleGenerateSummaryDocument = useCallback(
     async (options?: { force?: boolean; refreshCache?: boolean }) => {
+      const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups, problemStructureNodes);
+      if (eligibleGroups.length === 0) {
+        setStage("solution");
+        setLeftPanelTab("detail");
+        setSelectedProblemGroupId("");
+        setSelectedNodeId("");
+        setSummaryDocumentPending(false);
+        setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.");
+        return;
+      }
+
       if (summaryDocumentPending) {
         setStage("solution");
         setLeftPanelTab("detail");
         setActivityMessage("현재 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
         return;
       }
-      const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
       setStage("solution");
       setLeftPanelTab("detail");
       setSelectedProblemGroupId("");
       setSelectedNodeId("");
-
-      if (eligibleGroups.length === 0) {
-        setActivityMessage("요약 문서에 포함할 2단계 구조화 그룹이 없습니다.");
-        return;
-      }
 
       const hasExistingSummaryDocument =
         (finalSummaryDocument.markdown.trim() || (finalSummaryDocument.document_blocks || []).length > 0) &&
@@ -289,7 +294,7 @@ export function useSummaryDocumentActions({
         const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
         generationId = generationStart.generation.generation_id || "";
         if (!generationStart.acquired) {
-          setActivityMessage("다른 참가자가 요약 문서를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
+          setActivityMessage("요약 및 정리 문서 생성 요청이 이미 진행 중입니다. 완료되면 자동으로 반영됩니다.");
           return;
         }
 
@@ -506,6 +511,17 @@ export function useSummaryDocumentActions({
   ]);
 
   const handleRegenerateSummaryDocument = useCallback(async (options?: { refreshCache?: boolean }) => {
+    const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups, problemStructureNodes);
+    if (eligibleGroups.length === 0) {
+      setStage("solution");
+      setLeftPanelTab("detail");
+      setSelectedProblemGroupId("");
+      setSelectedNodeId("");
+      setSummaryDocumentPending(false);
+      setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 결론 문서를 다시 생성할 수 있습니다.");
+      return;
+    }
+
     if (summaryDocumentPending) {
       setActivityMessage("현재 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
       return;
@@ -515,16 +531,10 @@ export function useSummaryDocumentActions({
       return;
     }
 
-    const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
     setStage("solution");
     setLeftPanelTab("detail");
     setSelectedProblemGroupId("");
     setSelectedNodeId("");
-
-    if (eligibleGroups.length === 0) {
-      setActivityMessage("결론 문서에 포함할 2단계 구조화 그룹이 없습니다.");
-      return;
-    }
 
     setSummaryDocumentPending(true);
     setBusy(true);
@@ -533,7 +543,7 @@ export function useSummaryDocumentActions({
       const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
       generationId = generationStart.generation.generation_id || "";
       if (!generationStart.acquired) {
-        setActivityMessage("다른 참가자가 결론 문서를 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
+        setActivityMessage("결론 문서 재생성 요청이 이미 진행 중입니다. 완료되면 자동으로 반영됩니다.");
         return;
       }
 

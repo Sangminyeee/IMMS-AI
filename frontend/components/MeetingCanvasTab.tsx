@@ -116,6 +116,7 @@ import {
   PROBLEM_DEFINITION_STEP1_ARTIFACT,
   PROBLEM_DEFINITION_STEP2_ARTIFACT,
   SUMMARY_DOCUMENT_ARTIFACT,
+  isCanvasArtifactGenerationStale,
   isCanvasArtifactGenerating,
   normalizeCanvasArtifactGeneration,
   setCanvasArtifactGenerationState,
@@ -738,6 +739,7 @@ export default function MeetingCanvasTab({
     handleSaveProblemStructureNodeEdit,
     handleStartProblemStructureGroupEdit,
     handleStartProblemStructureNodeEdit,
+    handleUpdateProblemStructureNodeStatus,
     problemStructureDrag,
     problemStructureGroupDraftTitle,
     problemStructureNodeDraftTitle,
@@ -745,6 +747,7 @@ export default function MeetingCanvasTab({
     setProblemStructureGroupDraftTitle,
     setProblemStructureNodeDraftTitle,
   } = useProblemStructureEditor({
+    fallbackProblemGroups: problemGroups,
     problemStructureGroups,
     problemStructureNodes,
     setActivityMessage,
@@ -2181,6 +2184,12 @@ export default function MeetingCanvasTab({
     artifactGeneration,
     PROBLEM_DEFINITION_STEP2_ARTIFACT,
   );
+  const summaryArtifactGeneration = artifactGeneration[SUMMARY_DOCUMENT_ARTIFACT];
+  const currentArtifactGenerationUser = (userEmail || userId || "").trim();
+  const summaryArtifactGenerationStartedBy = (summaryArtifactGeneration?.started_by || "").trim();
+  const summaryArtifactGenerationStartedByCurrentUser =
+    Boolean(currentArtifactGenerationUser) && summaryArtifactGenerationStartedBy === currentArtifactGenerationUser;
+  const summaryArtifactGenerationStale = isCanvasArtifactGenerationStale(summaryArtifactGeneration);
   const sharedSummaryGenerating = isCanvasArtifactGenerating(
     artifactGeneration,
     SUMMARY_DOCUMENT_ARTIFACT,
@@ -2274,6 +2283,7 @@ export default function MeetingCanvasTab({
   const {
     handleBackToProblemDefinitionExplore,
     handleOpenProblemStructureSetup,
+    handleRegenerateProblemStructure,
     handleStartProblemStructure,
     runProblemStructureGrouping,
   } = useProblemStructureGeneration({
@@ -2339,6 +2349,7 @@ export default function MeetingCanvasTab({
           onSaveProblemStructureNodeEdit: handleSaveProblemStructureNodeEdit,
           onStartProblemStructureGroupEdit: handleStartProblemStructureGroupEdit,
           onStartProblemStructureNodeEdit: handleStartProblemStructureNodeEdit,
+          onUpdateProblemStructureNodeStatus: handleUpdateProblemStructureNodeStatus,
           problemStructureDrag,
           problemStructureGroupDraftTitle,
           problemStructureGroups,
@@ -2423,6 +2434,7 @@ export default function MeetingCanvasTab({
     handleSaveProblemStructureNodeEdit,
     handleStartProblemStructureGroupEdit,
     handleStartProblemStructureNodeEdit,
+    handleUpdateProblemStructureNodeStatus,
     handleQuickEditProblemGroup,
     handleSaveProblemGroupEdit,
     handleShowProblemGroupingRationale,
@@ -2510,8 +2522,8 @@ export default function MeetingCanvasTab({
     [summaryDocumentSections],
   );
   const summaryEligibleStructureGroups = useMemo(
-    () => getSummaryEligibleStructureGroups(problemStructureGroups),
-    [problemStructureGroups],
+    () => getSummaryEligibleStructureGroups(problemStructureGroups, problemStructureNodes),
+    [problemStructureGroups, problemStructureNodes],
   );
   useEffect(() => {
     if (stage !== "problem-definition" || !selectedProblemGroup) {
@@ -2639,12 +2651,22 @@ export default function MeetingCanvasTab({
       }
 
       if (nextStage === "solution") {
-        if (sharedSummaryGenerating) {
+        if (summaryEligibleStructureGroups.length === 0) {
+          setSummaryDocumentPending(false);
           setStage("solution");
           setSelectedProblemGroupId("");
           setSelectedNodeId("");
           setLeftPanelTab("detail");
-          setActivityMessage("다른 참가자가 요약 문서를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
+          setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.");
+          return;
+        }
+
+        if (sharedSummaryGenerating && !summaryArtifactGenerationStartedByCurrentUser && !summaryArtifactGenerationStale) {
+          setStage("solution");
+          setSelectedProblemGroupId("");
+          setSelectedNodeId("");
+          setLeftPanelTab("detail");
+          setActivityMessage("요약 및 정리 문서 생성 요청이 이미 진행 중입니다. 완료되면 자동으로 반영됩니다.");
           return;
         }
 
@@ -2716,6 +2738,9 @@ export default function MeetingCanvasTab({
       handleGenerateSummaryDocument,
       sharedProblemDefinitionGenerating,
       sharedSummaryGenerating,
+      summaryArtifactGenerationStartedByCurrentUser,
+      summaryArtifactGenerationStale,
+      summaryEligibleStructureGroups.length,
       summaryDocumentPending,
       stage,
     ],
@@ -2765,7 +2790,7 @@ export default function MeetingCanvasTab({
   const problemToolbarActionLabel = useCallback((action: ProblemCanvasToolbarAction) => {
     if (action === "structure-start") return "구조화 시작";
     if (action === "structure-back") return "정의 1단계";
-    if (action === "structure-ai-group") return effectiveProblemStructurePending ? "AI 묶는 중" : "AI 묶기";
+    if (action === "structure-ai-group") return effectiveProblemStructurePending ? "AI 묶는 중" : "AI 자동묶음";
     return "그룹 추가";
   }, [effectiveProblemStructurePending]);
 
@@ -3019,7 +3044,7 @@ export default function MeetingCanvasTab({
     }
 
     if (action === "structure-ai-group") {
-      void runProblemStructureGrouping();
+      void handleRegenerateProblemStructure();
       return;
     }
 
@@ -3030,7 +3055,7 @@ export default function MeetingCanvasTab({
     handleAddProblemStructureGroup,
     handleBackToProblemDefinitionExplore,
     handleOpenProblemStructureSetup,
-    runProblemStructureGrouping,
+    handleRegenerateProblemStructure,
   ]);
   const handleCloseProblemStructureSetup = useCallback(() => {
     setProblemStructureSetupOpen(false);
@@ -3048,8 +3073,8 @@ export default function MeetingCanvasTab({
     setActivityMessage("직접 구성 모드로 표시했습니다.");
   }, [runProblemStructureGrouping, setActivityMessage, setProblemDefinitionMode]);
   const handleProblemDefinitionPhaseSelect = useCallback((phase: ProblemDefinitionPhase) => {
-    if (phase === "structure" && problemStructureNodes.length === 0) {
-      setActivityMessage("아직 생성된 정의 2단계 구조화가 없습니다.");
+    if (phase === "structure" && problemStructureGroups.length === 0) {
+      void handleStartProblemStructure();
       return;
     }
     setProblemDefinitionPhase(phase);
@@ -3065,12 +3090,13 @@ export default function MeetingCanvasTab({
     setActivityMessage("문제정의 1단계로 이동했습니다.");
   }, [
     problemGroups,
-    problemStructureNodes.length,
+    problemStructureGroups.length,
     selectedProblemGroupId,
     setActivityMessage,
     setProblemDefinitionPhase,
     setSelectedNodeId,
     setSelectedProblemGroupId,
+    handleStartProblemStructure,
   ]);
   const handleCloseProblemGroupingRationale = useCallback(() => {
     setProblemGroupingRationaleOpenGroupId("");
@@ -3265,6 +3291,7 @@ export default function MeetingCanvasTab({
       onProblemStructureDraftMethodChange: setProblemStructureDraftMethod,
       onProblemStructureDraftModeChange: setProblemStructureDraftMode,
       onStartProblemStructure: handleStartProblemStructure,
+      onRegenerateProblemStructure: handleRegenerateProblemStructure,
       onRegenerateProblemDefinition: handleRegenerateProblemDefinition,
       onProblemStructureMethodChange: handleProblemStructureMethodChange,
       onProblemDefinitionModeChange: handleProblemDefinitionModeChange,

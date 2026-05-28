@@ -115,6 +115,7 @@ export type CanvasSurfaceProblemHandlers = {
   onProblemStructureDraftMethodChange: (method: ProblemStructureMethod) => void;
   onProblemStructureDraftModeChange: (mode: ConcreteProblemDefinitionMode) => void;
   onStartProblemStructure: () => void | Promise<void>;
+  onRegenerateProblemStructure: () => void | Promise<void>;
   onRegenerateProblemDefinition: () => void | Promise<void>;
   onProblemStructureMethodChange: (method: ProblemStructureMethod) => void;
   onProblemDefinitionModeChange: (mode: ConcreteProblemDefinitionMode) => void;
@@ -269,10 +270,10 @@ export const CanvasSurface = memo(function CanvasSurface({
     isProblemToolbarActionActive,
     onProblemToolbarAction,
   } = problemHandlers;
-  const hasSummaryDocumentContent =
-    finalSummaryDocument.markdown.trim() || (finalSummaryDocument.document_blocks || []).length > 0;
+  const hasFinalProblemStructureGroups = summaryEligibleStructureGroups.length > 0;
+  const showMissingFinalProblemStructureOverlay = stage === "solution" && !hasFinalProblemStructureGroups;
   const showProblemGenerationOverlay = problemDefinitionStagePending && problemGroupsCount === 0;
-  const showSummaryGenerationOverlay = summaryDocumentPending && !hasSummaryDocumentContent;
+  const showSummaryGenerationOverlay = summaryDocumentPending && hasFinalProblemStructureGroups;
 
   return (
     <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
@@ -318,7 +319,7 @@ export const CanvasSurface = memo(function CanvasSurface({
               />
             ) : null}
           </ReactFlow>
-        ) : (
+        ) : hasFinalProblemStructureGroups ? (
           <SolutionCanvasView
             meetingTitle={meetingTitle}
             meetingGoal={meetingGoal}
@@ -346,6 +347,8 @@ export const CanvasSurface = memo(function CanvasSurface({
             onMarkdownChange={onSummaryDocumentMarkdownChange}
             renderPreview={renderSummaryMarkdownPreview}
           />
+        ) : (
+          <div className="h-full min-h-0 bg-[#f8f8f8]" />
         )}
       </div>
 
@@ -358,15 +361,14 @@ export const CanvasSurface = memo(function CanvasSurface({
       ) : null}
 
       {stage === "solution" &&
-      !finalSummaryDocument.markdown.trim() &&
-      !(finalSummaryDocument.document_blocks || []).length &&
-      !summaryDocumentPending ? (
+      (showMissingFinalProblemStructureOverlay ||
+        (!finalSummaryDocument.markdown.trim() && !(finalSummaryDocument.document_blocks || []).length && !summaryDocumentPending)) ? (
         <CanvasStageEmptyOverlay
           eyebrow="Summary Stage"
           message={
-            summaryEligibleStructureGroups.length > 0
+            !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
-              : "2단계 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
+              : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
           }
           tone="summary"
         />
