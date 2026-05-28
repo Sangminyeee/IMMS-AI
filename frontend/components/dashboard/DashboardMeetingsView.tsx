@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent, type WheelEvent } from "react";
 import { classNames } from "@/lib/classNames";
 import { BellIcon, PlusIcon, SearchIcon } from "./DashboardIcons";
 import {
@@ -32,6 +32,8 @@ const statusFilters: Array<{ label: string; value: MeetingStatusFilter }> = [
   { label: "진행중", value: "active" },
 ];
 
+const UPCOMING_CARD_SCROLL_STEP = 427;
+
 export function DashboardMeetingsView({
   loading,
   meetings,
@@ -43,6 +45,16 @@ export function DashboardMeetingsView({
   searchQuery,
   statusFilter,
 }: DashboardMeetingsViewProps) {
+  const upcomingScrollRef = useRef<HTMLDivElement | null>(null);
+  const upcomingDragRef = useRef({
+    active: false,
+    pointerId: -1,
+    startScrollLeft: 0,
+    startX: 0,
+    suppressClick: false,
+  });
+  const suppressClickTimerRef = useRef<number | null>(null);
+
   const upcomingMeetings = useMemo(
     () => meetings.filter((meeting) => !isCompletedMeeting(meeting.status)).slice(0, 8),
     [meetings],
@@ -56,9 +68,101 @@ export function DashboardMeetingsView({
       return meeting.title.toLowerCase().includes(normalizedQuery);
     });
   }, [meetings, searchQuery, statusFilter]);
+  const meetingRowCount = loading ? 5 : Math.max(filteredMeetings.length, 1);
+  const contentMinHeight = 702 + meetingRowCount * 49.5 + 48;
+  const resetUpcomingDrag = () => {
+    const scrollElement = upcomingScrollRef.current;
+    const dragState = upcomingDragRef.current;
+    if (scrollElement && dragState.active && dragState.pointerId >= 0) {
+      try {
+        scrollElement.releasePointerCapture(dragState.pointerId);
+      } catch {
+        // Pointer capture may already be released by the browser.
+      }
+    }
+
+    if (scrollElement) {
+      delete scrollElement.dataset.dragging;
+    }
+
+    dragState.active = false;
+    dragState.pointerId = -1;
+  };
+
+  const handleUpcomingPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    const scrollElement = upcomingScrollRef.current;
+    if (!scrollElement || scrollElement.scrollWidth <= scrollElement.clientWidth) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    const dragState = upcomingDragRef.current;
+    dragState.active = true;
+    dragState.pointerId = event.pointerId;
+    dragState.startX = event.clientX;
+    dragState.startScrollLeft = scrollElement.scrollLeft;
+    dragState.suppressClick = false;
+
+    scrollElement.dataset.dragging = "true";
+    scrollElement.setPointerCapture(event.pointerId);
+  };
+
+  const handleUpcomingPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const scrollElement = upcomingScrollRef.current;
+    const dragState = upcomingDragRef.current;
+    if (!scrollElement || !dragState.active || dragState.pointerId !== event.pointerId) return;
+
+    const distance = event.clientX - dragState.startX;
+    if (Math.abs(distance) > 6) {
+      dragState.suppressClick = true;
+      event.preventDefault();
+    }
+
+    scrollElement.scrollLeft = dragState.startScrollLeft - distance;
+  };
+
+  const handleUpcomingPointerEnd = () => {
+    resetUpcomingDrag();
+
+    if (suppressClickTimerRef.current) {
+      window.clearTimeout(suppressClickTimerRef.current);
+    }
+    suppressClickTimerRef.current = window.setTimeout(() => {
+      upcomingDragRef.current.suppressClick = false;
+    }, 180);
+  };
+
+  const handleUpcomingClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    if (!upcomingDragRef.current.suppressClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+    upcomingDragRef.current.suppressClick = false;
+  };
+
+  const handleUpcomingWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const scrollElement = event.currentTarget;
+    if (scrollElement.scrollWidth <= scrollElement.clientWidth) return;
+    if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+
+    const nextScrollLeft = scrollElement.scrollLeft + event.deltaY;
+    const canScrollLeft = event.deltaY < 0 && scrollElement.scrollLeft > 0;
+    const canScrollRight =
+      event.deltaY > 0 && scrollElement.scrollLeft < scrollElement.scrollWidth - scrollElement.clientWidth;
+
+    if (!canScrollLeft && !canScrollRight) return;
+
+    event.preventDefault();
+    scrollElement.scrollLeft = nextScrollLeft;
+  };
+
+  const handleUpcomingKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    event.preventDefault();
+    event.currentTarget.scrollBy({ behavior: "smooth", left: direction * UPCOMING_CARD_SCROLL_STEP });
+  };
 
   return (
-    <div className="moa-dashboard-type relative h-full overflow-hidden bg-[var(--moa-surface)]">
+    <div className="imms-overlay-scroll moa-dashboard-type relative h-full overflow-y-auto overflow-x-hidden bg-[var(--moa-surface)]">
+      <div aria-hidden="true" style={{ height: contentMinHeight }} />
       <section
         className="absolute left-[19px] right-0 top-[19px] h-[550px] overflow-hidden rounded-tl-[31.853px] bg-[linear-gradient(104deg,#fcfcfc_1%,#f0f0f2_87%)] bg-[length:100%_100%] bg-no-repeat"
         style={{ backgroundImage: "url('/figma-assets/dashboard-hero-blue.png')" }}
@@ -88,26 +192,40 @@ export function DashboardMeetingsView({
           <BellIcon className="ml-[10.31px] mt-[1.97px] h-[23.043px] w-[23.043px] shrink-0 text-white" />
         </div>
 
-        <div className="absolute left-[99.37px] top-[311.8px] flex gap-[35.92px]">
-          {loading ? (
-            <UpcomingSkeleton />
-          ) : upcomingMeetings.length === 0 ? (
-            <div className="flex h-[191.119px] w-[391.048px] items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
-              <p className="text-[14px] font-semibold text-[var(--moa-disabled-text)]">예정된 회의가 없습니다.</p>
-            </div>
-          ) : (
-            upcomingMeetings.map((meeting, index) => (
-              <UpcomingMeetingCard
-                key={meeting.id}
-                featured={index === 0}
-                meeting={meeting}
-                onJoinMeeting={onJoinMeeting}
-              />
-            ))
-          )}
+        <div
+          ref={upcomingScrollRef}
+          aria-label="예정된 회의 목록"
+          className="moa-upcoming-scroll absolute left-[99.37px] right-0 top-[311.8px] cursor-grab touch-pan-x overflow-x-auto overflow-y-hidden overscroll-x-contain pb-[18px] pr-[160px] scroll-smooth snap-x snap-mandatory data-[dragging=true]:cursor-grabbing"
+          role="region"
+          tabIndex={0}
+          onClickCapture={handleUpcomingClickCapture}
+          onKeyDown={handleUpcomingKeyDown}
+          onPointerCancel={handleUpcomingPointerEnd}
+          onPointerDown={handleUpcomingPointerDown}
+          onPointerMove={handleUpcomingPointerMove}
+          onPointerUp={handleUpcomingPointerEnd}
+          onWheel={handleUpcomingWheel}
+        >
+          <div className="flex w-max gap-[35.92px]">
+            {loading ? (
+              <UpcomingSkeleton />
+            ) : upcomingMeetings.length === 0 ? (
+              <div className="flex h-[191.119px] w-[391.048px] shrink-0 snap-start items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
+                <p className="text-[14px] font-semibold text-[var(--moa-disabled-text)]">예정된 회의가 없습니다.</p>
+              </div>
+            ) : (
+              upcomingMeetings.map((meeting, index) => (
+                <UpcomingMeetingCard
+                  key={meeting.id}
+                  featured={index === 0}
+                  meeting={meeting}
+                  onJoinMeeting={onJoinMeeting}
+                />
+              ))
+            )}
+          </div>
         </div>
 
-        <div className="pointer-events-none absolute right-0 top-[311.12px] h-[191.797px] w-[107.081px] bg-gradient-to-r from-white/0 to-white backdrop-blur-[1.355px]" />
       </section>
 
       <h2 className="moa-dt-section-title absolute left-[118.37px] top-[599.18px] whitespace-nowrap">
@@ -146,7 +264,7 @@ export function DashboardMeetingsView({
         <SearchIcon className="ml-[5.422px] h-[10.844px] w-[10.844px] shrink-0 text-[var(--moa-text)]" />
       </label>
 
-      <div className="imms-overlay-scroll absolute bottom-0 left-[118.37px] right-[107.08px] top-[701.52px] space-y-[6.1px] overflow-y-auto pb-4 pr-1">
+      <div className="absolute left-[118.37px] right-[107.08px] top-[701.52px] space-y-[6.1px] pb-[48px] pr-1">
         {loading ? (
           <MeetingRowsSkeleton />
         ) : filteredMeetings.length === 0 ? (
@@ -184,7 +302,7 @@ function UpcomingMeetingCard({
   return (
     <article
       className={classNames(
-        "relative h-[191.119px] w-[391.048px] shrink-0 overflow-hidden rounded-[19.654px] bg-white",
+        "relative h-[191.119px] w-[391.048px] shrink-0 snap-start overflow-hidden rounded-[19.654px] bg-white",
         featured
           ? "border-[0.949px] border-[rgba(19,127,188,0.5)] shadow-[21.01px_92.849px_26.431px_rgba(138,204,255,0),13.555px_59.64px_24.398px_rgba(138,204,255,0.01),7.455px_33.209px_20.332px_rgba(138,204,255,0.05),3.389px_14.91px_14.91px_rgba(138,204,255,0.09),0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]"
           : "border-[0.678px] border-[#b5b5b5] shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1),0_1.355px_2.711px_-1.355px_rgba(23,23,23,0.06)]",
@@ -279,7 +397,7 @@ function UpcomingSkeleton() {
       {Array.from({ length: 3 }).map((_, index) => (
         <div
           key={index}
-          className="h-[191.119px] w-[391.048px] shrink-0 animate-pulse rounded-[19.654px] bg-white/90 shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1)]"
+          className="h-[191.119px] w-[391.048px] shrink-0 snap-start animate-pulse rounded-[19.654px] bg-white/90 shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1)]"
         />
       ))}
     </>

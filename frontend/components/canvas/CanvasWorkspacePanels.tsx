@@ -589,7 +589,7 @@ function LeftMeetingPanel({
   noteHandlers: CanvasRightDrawerNoteHandlers;
 }) {
   return (
-    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white">
+    <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-20 after:w-px after:bg-[#cecccc]">
       <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
         <Link
           href="/dashboard"
