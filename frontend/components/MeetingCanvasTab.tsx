@@ -38,6 +38,8 @@ import {
   CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS,
   CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH,
   buildStableIdeationBubbleVisuals,
+  getIdeationBubbleEnterSettleDelayMs,
+  settleEnteringIdeationBubbleVisuals,
   type IdeationKeywordBubbleVisual,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
@@ -81,9 +83,11 @@ import { useCanvasSelectionGuards } from "@/components/canvas/useCanvasSelection
 import {
   buildMeetingStateSignature,
   buildWorkspaceProblemGroupsPayload,
+  createEmptyIdeationBubbleGraph,
   createWorkspaceFieldSignatures,
   normalizeCanvasItemStatus,
   normalizeCanvasNodePositionsForComputedIdeation,
+  normalizeIdeationBubbleGraphForWorkspace,
   normalizeIdeationSuggestionStatus,
   normalizeRefinedUtterances,
   summarizeNodePositionsForDebug,
@@ -110,6 +114,7 @@ import type {
   CanvasCustomGroup,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasNodePreviewPayload,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
@@ -688,6 +693,9 @@ export default function MeetingCanvasTab({
   const [finalSummaryDocument, setFinalSummaryDocument] = useState<CanvasFinalSolutionSummary>(() =>
     createEmptyFinalSolutionSummary(),
   );
+  const [ideationBubbleGraph, setIdeationBubbleGraph] = useState<CanvasIdeationBubbleGraph>(() =>
+    createEmptyIdeationBubbleGraph(),
+  );
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
   const [summaryDocumentDraftBlocks, setSummaryDocumentDraftBlocks] = useState<CanvasSummaryDocumentBlock[]>([]);
   const [summaryDocumentDraftMarkdown, setSummaryDocumentDraftMarkdown] = useState("");
@@ -894,6 +902,7 @@ export default function MeetingCanvasTab({
     problemGroups: ProblemGroupViewModel[];
     problemStructure: CanvasProblemStructureState;
     finalSolutionSummary: CanvasFinalSolutionSummary;
+    ideationBubbleGraph: CanvasIdeationBubbleGraph;
     nodePositions: CanvasNodePositionsByStage;
     importedState: MeetingState | null;
   }>({
@@ -906,6 +915,7 @@ export default function MeetingCanvasTab({
     problemGroups: [],
     problemStructure: createDefaultProblemStructureState(),
     finalSolutionSummary: createEmptyFinalSolutionSummary(),
+    ideationBubbleGraph: createEmptyIdeationBubbleGraph(),
     nodePositions: {},
     importedState: null,
   });
@@ -1027,6 +1037,9 @@ export default function MeetingCanvasTab({
   const activeMeetingGoalContext = meetingGoalContextDraft.trim();
   const ideationKeywordMeetingTopic = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim();
   const meetingTopicForAi = ideationKeywordMeetingTopic || "회의 주제";
+  const handleIdeationBubbleGraphChange = useCallback((nextGraph: CanvasIdeationBubbleGraph) => {
+    setIdeationBubbleGraph(normalizeIdeationBubbleGraphForWorkspace(nextGraph));
+  }, []);
   const {
     keywordBubbles: ideationKeywordBubbles,
     statusMessage: ideationKeywordStatusMessage,
@@ -1036,6 +1049,8 @@ export default function MeetingCanvasTab({
     meetingTopic: ideationKeywordMeetingTopic,
     meetingGoal: activeMeetingGoal,
     meetingGoalContext: activeMeetingGoalContext,
+    bubbleGraph: ideationBubbleGraph,
+    onBubbleGraphChange: handleIdeationBubbleGraphChange,
     stage,
   });
   useEffect(() => {
@@ -1044,22 +1059,33 @@ export default function MeetingCanvasTab({
     setIdeationBubbleDebugGrowthById({});
   }, [ideationBubbleUpdateTickRef, meetingId]);
   useEffect(() => {
-    if (ideationKeywordBubbles.length === 0) return;
     const tick = ideationBubbleUpdateTickRef.current + 1;
     ideationBubbleUpdateTickRef.current = tick;
-    setIdeationBubbleVisuals((current) =>
-      buildStableIdeationBubbleVisuals(
+    setIdeationBubbleVisuals((current) => {
+      if (ideationKeywordBubbles.length === 0) return current.length === 0 ? current : [];
+      return buildStableIdeationBubbleVisuals(
         current,
         ideationKeywordBubbles,
         ideationBubbleDebugGrowthById,
         tick,
-      ),
-    );
+      );
+    });
   }, [
     ideationBubbleDebugGrowthById,
     ideationBubbleUpdateTickRef,
     ideationKeywordBubbles,
   ]);
+  useEffect(() => {
+    if (!ideationBubbleVisuals.some((bubble) => bubble.entering)) {
+      return undefined;
+    }
+
+    const settleTimer = window.setTimeout(() => {
+      setIdeationBubbleVisuals((current) => settleEnteringIdeationBubbleVisuals(current));
+    }, getIdeationBubbleEnterSettleDelayMs());
+
+    return () => window.clearTimeout(settleTimer);
+  }, [ideationBubbleVisuals]);
   const ideationBubbleVisualIdSignature = useMemo(
     () => ideationBubbleVisuals.map((bubble) => bubble.id).join("|"),
     [ideationBubbleVisuals],
@@ -1279,6 +1305,7 @@ export default function MeetingCanvasTab({
       problemGroups: [],
       problemStructure: createDefaultProblemStructureState(),
       finalSolutionSummary: createEmptyFinalSolutionSummary(),
+      ideationBubbleGraph: createEmptyIdeationBubbleGraph(),
       nodePositions: {},
       importedState: null,
     };
@@ -1293,6 +1320,7 @@ export default function MeetingCanvasTab({
     onMeetingGoalContextChange("");
     setEditingPersonalNoteId("");
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
+    setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
     setSelectedProblemSourceNodeId("");
@@ -1350,6 +1378,7 @@ export default function MeetingCanvasTab({
       problemGroups,
       problemStructure: problemStructureStatePayload,
       finalSolutionSummary: finalSummaryDocument,
+      ideationBubbleGraph,
       nodePositions: normalizeCanvasNodePositionsForComputedIdeation(nodePositions),
       importedState: persistedSharedImportedState,
     };
@@ -1360,6 +1389,7 @@ export default function MeetingCanvasTab({
     customGroups,
     meetingGoalContextDraft,
     meetingGoalDraft,
+    ideationBubbleGraph,
     nodePositions,
     persistedSharedImportedState,
     problemGroups,
@@ -1440,6 +1470,7 @@ export default function MeetingCanvasTab({
     setCustomGroups,
     setEditingProblemGroupId,
     setFinalSummaryDocument,
+    setIdeationBubbleGraph,
     setImportedState,
     setImportOverrideActive,
     setLoadingProblemGroupIds,
@@ -1553,6 +1584,7 @@ export default function MeetingCanvasTab({
     canvasItems,
     customGroups,
     finalSummaryDocument,
+    ideationBubbleGraph,
     importedState: persistedSharedImportedState,
     incomingCanvasStateRequestId,
     lastNodePreviewFlushAtRef,
@@ -1583,6 +1615,7 @@ export default function MeetingCanvasTab({
     conclusionBatchBusy,
     customGroups,
     finalSummaryDocument,
+    ideationBubbleGraph,
     importOverrideActive,
     lastWorkspaceFieldSignaturesRef,
     latestSharedSyncEnabledRef,
@@ -1949,6 +1982,7 @@ export default function MeetingCanvasTab({
     setCanvasItems,
     setCustomGroups,
     setFinalSummaryDocument,
+    setIdeationBubbleGraph,
     setImportedState,
     setImportOverrideActive,
     setMeetingGoalDrafts,

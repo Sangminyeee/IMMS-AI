@@ -16,6 +16,7 @@ import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDoc
 import type {
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
   CanvasProblemStructureState,
@@ -32,6 +33,7 @@ type UseSharedCanvasBroadcastOptions = {
   canvasItems: CanvasWorkspaceItem[];
   customGroups: CanvasCustomGroup[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   importedState: MeetingState | null;
   incomingCanvasStateRequestId: string;
   lastNodePreviewFlushAtRef: MutableRefObject<number>;
@@ -59,6 +61,7 @@ export function useSharedCanvasBroadcast({
   canvasItems,
   customGroups,
   finalSummaryDocument,
+  ideationBubbleGraph,
   importedState,
   incomingCanvasStateRequestId,
   lastNodePreviewFlushAtRef,
@@ -92,6 +95,7 @@ export function useSharedCanvasBroadcast({
         problemGroups: overrides.problemGroups ?? problemGroups,
         problemStructure: overrides.problemStructure ?? problemStructureStatePayload,
         finalSolutionSummary: overrides.finalSolutionSummary ?? finalSummaryDocument,
+        ideationBubbleGraph: overrides.ideationBubbleGraph ?? ideationBubbleGraph,
         nodePositions: overrides.nodePositions ?? nodePositions,
         importedState:
           "importedState" in overrides
@@ -103,6 +107,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      ideationBubbleGraph,
       importedState,
       meetingGoalContextDraft,
       meetingGoalDraft,
@@ -126,6 +131,7 @@ export function useSharedCanvasBroadcast({
       problem_structure: problemStructureStatePayload,
       solution_topics: [],
       final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
+      ideation_bubble_graph: ideationBubbleGraph,
       imported_state: importedState,
     }),
     [
@@ -133,6 +139,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      ideationBubbleGraph,
       importedState,
       meetingGoalContextDraft,
       meetingGoalDraft,
@@ -164,6 +171,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: overrides?.problemStructure ?? problemStructureStatePayload,
         solution_topics: [],
         final_solution_summary: buildFinalSolutionSummaryPayload(overrides?.finalSolutionSummary ?? finalSummaryDocument),
+        ideation_bubble_graph: overrides?.ideationBubbleGraph ?? ideationBubbleGraph,
         imported_state:
           overrides && "importedState" in overrides
             ? (overrides.importedState ?? null)
@@ -193,6 +201,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: snapshot.problem_structure,
         solution_topics: snapshot.solution_topics,
         final_solution_summary: snapshot.final_solution_summary,
+        ideation_bubble_graph: snapshot.ideation_bubble_graph,
         imported_state: snapshot.imported_state,
       });
     },
@@ -201,6 +210,7 @@ export function useSharedCanvasBroadcast({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      ideationBubbleGraph,
       importedState,
       lastNodePreviewFlushAtRef,
       lastSharedSyncSignatureRef,
@@ -273,6 +283,7 @@ export function useSharedCanvasBroadcast({
         problem_structure: sharedCanvasSnapshot.problem_structure,
         solution_topics: sharedCanvasSnapshot.solution_topics,
         final_solution_summary: sharedCanvasSnapshot.final_solution_summary,
+        ideation_bubble_graph: sharedCanvasSnapshot.ideation_bubble_graph,
         imported_state: sharedCanvasSnapshot.imported_state,
       });
     }, 140);

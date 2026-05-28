@@ -365,6 +365,7 @@ export interface CanvasWorkspaceStateResponse {
   solution_topics: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   idea_create_stack?: number;
   idea_processed_utterance_ids?: string[];
   problem_processed_utterance_ids?: string[];
@@ -392,6 +393,7 @@ export interface CanvasWorkspacePatchRequest {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
 }
 
@@ -415,6 +417,7 @@ export interface CanvasLocalState {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
   import_override_active?: boolean;
 }
@@ -452,6 +455,7 @@ export interface CanvasRealtimeSyncPayload {
   solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
   node_positions?: CanvasNodePositionsByStage;
+  ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
 }
 
@@ -675,6 +679,50 @@ export interface CanvasIdeationKeywordResponse {
     off_topic_reason?: string;
     anchor?: string;
   }>;
+}
+
+export type CanvasIdeationBubbleDisplayState = "active" | "dimmed" | "archived";
+export type CanvasIdeationBubbleLayoutZone = "core" | "default" | "peripheral" | "archived";
+
+export interface CanvasIdeationBubbleGraphBubble {
+  id: string;
+  label: string;
+  aliases?: string[];
+  kind?: "entity" | "topic" | "relation" | "action" | "off_topic" | string;
+  count: number;
+  importance?: number;
+  relevance?: number;
+  activity?: number;
+  display_state?: CanvasIdeationBubbleDisplayState | string;
+  layout_zone?: CanvasIdeationBubbleLayoutZone | string;
+  missing_cycles?: number;
+  anchor_id?: string;
+  related_ids?: string[];
+  evidence_utterance_ids?: string[];
+  first_seen_at?: string;
+  last_seen_at?: string;
+  last_seen_cycle?: number;
+  off_topic?: boolean;
+  off_topic_reason?: string;
+  archive_reason?: string;
+}
+
+export interface CanvasIdeationBubbleGraph {
+  version: number;
+  update_cycle: number;
+  bubbles: CanvasIdeationBubbleGraphBubble[];
+  processed_utterance_ids: string[];
+  updated_at?: string;
+}
+
+export interface CanvasIdeationBubbleGraphUpdateResponse {
+  ok: boolean;
+  used_llm: boolean;
+  warning?: string;
+  generated_at: string;
+  source_signature: string;
+  bubble_graph: CanvasIdeationBubbleGraph;
+  workspace?: CanvasWorkspaceStateResponse;
 }
 export interface CanvasSolutionTopicResponse {
   group_id: string;

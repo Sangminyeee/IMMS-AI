@@ -1,6 +1,10 @@
 import { Position } from "@xyflow/react";
 import { makeIdeationKeywordBubbleNodeLabel } from "@/components/canvas/CanvasNodeLabels";
-import { CANVAS_IDEATION_BUBBLE_TRANSITION, type IdeationKeywordBubbleVisual } from "@/components/canvas/CanvasIdeationBubbles";
+import {
+  CANVAS_IDEATION_BUBBLE_LABEL_TRANSITION,
+  CANVAS_IDEATION_BUBBLE_TRANSITION,
+  type IdeationKeywordBubbleVisual,
+} from "@/components/canvas/CanvasIdeationBubbles";
 import {
   buildNodeContentSignature,
   type CanvasGraphBlueprint,
@@ -45,13 +49,26 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
               debugGrowth,
               bubble.activity,
               bubble.opacity,
+              bubble.visualScale,
+              bubble.entering,
               bubble.emphasis,
               bubble.kind,
               bubble.offTopic,
               bubble.offTopicReason,
               ...bubble.related,
             ]),
-            label: makeIdeationKeywordBubbleNodeLabel(bubble, bubble.size),
+            label: (
+              <div
+                className="h-full w-full origin-center"
+                style={{
+                  opacity: bubble.entering ? 0.88 : 1,
+                  transform: `scale(${bubble.visualScale ?? 1})`,
+                  transition: CANVAS_IDEATION_BUBBLE_LABEL_TRANSITION,
+                }}
+              >
+                {makeIdeationKeywordBubbleNodeLabel(bubble, bubble.size)}
+              </div>
+            ),
           },
         };
       })
@@ -87,6 +104,8 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
         bubble.count,
         bubble.activity,
         bubble.opacity,
+        bubble.visualScale,
+        bubble.entering,
         bubble.emphasis,
         bubble.targetX,
         bubble.targetY,

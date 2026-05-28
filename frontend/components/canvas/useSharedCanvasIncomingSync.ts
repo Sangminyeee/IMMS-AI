@@ -6,6 +6,7 @@ import {
   buildSharedCanvasSignature,
   buildWorkspaceFieldSignatures,
   normalizeCanvasNodePositionsForComputedIdeation,
+  normalizeIdeationBubbleGraphForWorkspace,
   serializeCustomGroups,
   type AgendaOverride,
   type WorkspaceFieldSignatures,
@@ -27,6 +28,7 @@ import {
 import type {
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
   CanvasProblemStructureState,
@@ -54,6 +56,7 @@ type SharedWorkspaceSnapshot = {
   problemGroups: ProblemGroupModel[];
   problemStructure: CanvasProblemStructureState;
   finalSolutionSummary: CanvasFinalSolutionSummary;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   nodePositions: CanvasNodePositionsByStage;
   importedState: MeetingState | null;
 };
@@ -92,6 +95,7 @@ type UseSharedCanvasIncomingSyncOptions = {
   setCanvasItems: Dispatch<SetStateAction<CanvasWorkspaceItem[]>>;
   setCustomGroups: Dispatch<SetStateAction<CanvasCustomGroup[]>>;
   setFinalSummaryDocument: Dispatch<SetStateAction<CanvasFinalSolutionSummary>>;
+  setIdeationBubbleGraph: Dispatch<SetStateAction<CanvasIdeationBubbleGraph>>;
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
   setMeetingGoalDrafts: (goal: string, context: string) => void;
@@ -119,6 +123,15 @@ function getNodePositionUpdateKey(stage: CanvasStage, nodeId: string) {
 function getSyncUpdatedAtMs(updatedAt: string | undefined) {
   const parsed = updatedAt ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function shouldApplyIncomingIdeationBubbleGraph(
+  incoming: CanvasIdeationBubbleGraph,
+  current: CanvasIdeationBubbleGraph,
+) {
+  if ((incoming.update_cycle || 0) > (current.update_cycle || 0)) return true;
+  if ((incoming.update_cycle || 0) < (current.update_cycle || 0)) return false;
+  return getSyncUpdatedAtMs(incoming.updated_at) > getSyncUpdatedAtMs(current.updated_at);
 }
 
 function positionsEqual(
@@ -157,6 +170,7 @@ export function useSharedCanvasIncomingSync({
   setCanvasItems,
   setCustomGroups,
   setFinalSummaryDocument,
+  setIdeationBubbleGraph,
   setImportedState,
   setImportOverrideActive,
   setMeetingGoalDrafts,
@@ -303,6 +317,18 @@ export function useSharedCanvasIncomingSync({
       mode: problemDefinitionMode,
     });
     const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
+    const incomingIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+      incomingSharedCanvasSync.ideation_bubble_graph,
+    );
+    const currentIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+      latestSharedWorkspaceRef.current.ideationBubbleGraph,
+    );
+    const nextIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
+      incomingIdeationBubbleGraph,
+      currentIdeationBubbleGraph,
+    )
+      ? incomingIdeationBubbleGraph
+      : currentIdeationBubbleGraph;
 
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
       meeting_goal: incomingMeetingGoal,
@@ -315,6 +341,7 @@ export function useSharedCanvasIncomingSync({
       problem_structure: localViewProblemStructurePayload,
       solution_topics: [],
       final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
+      ideation_bubble_graph: nextIdeationBubbleGraph,
       node_positions: currentNodePositionsSnapshot,
       imported_state: incomingSharedCanvasSync.imported_state || null,
     });
@@ -325,6 +352,7 @@ export function useSharedCanvasIncomingSync({
     setProblemStructureGroups(nextProblemStructure.groups);
     setProblemStructurePending(false);
     setFinalSummaryDocument(nextFinalSummary);
+    setIdeationBubbleGraph(nextIdeationBubbleGraph);
     setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
     setSummaryDocumentDraftDirty(false);
     setSummaryDocumentEditMode(false);
@@ -352,6 +380,7 @@ export function useSharedCanvasIncomingSync({
       problemGroups: nextProblemGroups,
       problemStructure: localViewProblemStructurePayload,
       finalSolutionSummary: nextFinalSummary,
+      ideationBubbleGraph: nextIdeationBubbleGraph,
       nodePositions: currentNodePositionsSnapshot,
       importedState: incomingSharedCanvasSync.imported_state || null,
     });
@@ -387,6 +416,7 @@ export function useSharedCanvasIncomingSync({
     setCanvasItems,
     setCustomGroups,
     setFinalSummaryDocument,
+    setIdeationBubbleGraph,
     setImportedState,
     setImportOverrideActive,
     setMeetingGoalDrafts,

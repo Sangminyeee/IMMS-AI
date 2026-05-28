@@ -2,6 +2,7 @@
   CanvasLocalState,
   CanvasFinalSolutionSummary,
   CanvasIdeaAssimilationUtterance,
+  CanvasIdeationBubbleGraphUpdateResponse,
   CanvasIdeationKeywordResponse,
   CanvasPersonalNotesStateResponse,
   CanvasWorkspacePatchRequest,
@@ -238,6 +239,27 @@ export async function extractCanvasIdeationKeywords(payload: {
   max_keywords?: number;
 }): Promise<CanvasIdeationKeywordResponse> {
   return requestJson<CanvasIdeationKeywordResponse>("/api/canvas/ideation-keywords", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCanvasIdeationBubbleGraph(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  meeting_goal?: string;
+  meeting_goal_context?: string;
+  utterances: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  context_cache?: string;
+  max_keywords?: number;
+}): Promise<CanvasIdeationBubbleGraphUpdateResponse> {
+  return requestJson<CanvasIdeationBubbleGraphUpdateResponse>("/api/canvas/ideation-bubble-graph/update", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),

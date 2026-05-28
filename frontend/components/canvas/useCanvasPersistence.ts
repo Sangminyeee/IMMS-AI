@@ -23,6 +23,7 @@ import {
 import type {
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasLocalState,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
@@ -61,6 +62,7 @@ type SharedWorkspaceSnapshot = {
   problemGroups: ProblemGroupModel[];
   problemStructure: CanvasProblemStructureState;
   finalSolutionSummary: CanvasFinalSolutionSummary;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   nodePositions: CanvasNodePositionsByStage;
   importedState: MeetingState | null;
 };
@@ -79,6 +81,7 @@ type UseCanvasPersistenceOptions = {
     problemGroups: ProblemGroupModel[];
     problemStructure?: CanvasProblemStructureState;
     finalSolutionSummary?: CanvasFinalSolutionSummary;
+    ideationBubbleGraph?: CanvasIdeationBubbleGraph;
     nodePositions: CanvasNodePositionsByStage;
     importedState: MeetingState | null;
   }, "meetingId">>) => CanvasWorkspacePatchRequest;
@@ -87,6 +90,7 @@ type UseCanvasPersistenceOptions = {
   conclusionBatchBusy: boolean;
   customGroups: CanvasCustomGroup[];
   finalSummaryDocument: CanvasFinalSolutionSummary;
+  ideationBubbleGraph: CanvasIdeationBubbleGraph;
   importOverrideActive: boolean;
   lastWorkspaceFieldSignaturesRef: MutableRefObject<WorkspaceFieldSignatures>;
   latestSharedSyncEnabledRef: MutableRefObject<boolean>;
@@ -118,6 +122,7 @@ export function useCanvasPersistence({
   conclusionBatchBusy,
   customGroups,
   finalSummaryDocument,
+  ideationBubbleGraph,
   importOverrideActive,
   lastWorkspaceFieldSignaturesRef,
   latestSharedSyncEnabledRef,
@@ -170,6 +175,7 @@ export function useCanvasPersistence({
       problemGroups,
       problemStructure: problemStructureStatePayload,
       finalSolutionSummary: finalSummaryDocument,
+      ideationBubbleGraph,
       nodePositions,
       importedState: persistedSharedImportedState,
     });
@@ -218,6 +224,10 @@ export function useCanvasPersistence({
       patch.final_solution_summary = buildFinalSolutionSummaryPayload(finalSummaryDocument);
       hasChanges = true;
     }
+    if (sharedSyncEnabled && nextSignatures.ideation_bubble_graph !== previousSignatures.ideation_bubble_graph) {
+      patch.ideation_bubble_graph = ideationBubbleGraph;
+      hasChanges = true;
+    }
     if (sharedSyncEnabled && nextSignatures.imported_state !== previousSignatures.imported_state) {
       patch.imported_state = persistedSharedImportedState;
       hasChanges = true;
@@ -264,6 +274,7 @@ export function useCanvasPersistence({
     conclusionBatchBusy,
     customGroups,
     finalSummaryDocument,
+    ideationBubbleGraph,
     lastWorkspaceFieldSignaturesRef,
     meetingGoalContextDraft,
     meetingGoalDraft,
@@ -306,6 +317,7 @@ export function useCanvasPersistence({
             solution_topics: [],
             final_solution_summary: buildFinalSolutionSummaryPayload(finalSummaryDocument),
             node_positions: normalizeCanvasNodePositionsForComputedIdeation(nodePositions),
+            ideation_bubble_graph: ideationBubbleGraph,
             imported_state: persistedSharedImportedState,
             import_override_active: importOverrideActive,
           },
@@ -314,6 +326,7 @@ export function useCanvasPersistence({
       canvasItems,
       customGroups,
       finalSummaryDocument,
+      ideationBubbleGraph,
       importOverrideActive,
       meetingGoalContextDraft,
       meetingGoalDraft,
