@@ -44,6 +44,7 @@ interface Agenda {
 }
 
 type CalibrationState = "idle" | "running" | "done";
+const IDEATION_BUBBLE_FINALIZATION_WINDOW_MS = 30_000;
 
 interface CalibrationAccumulator {
   chunks: number;
@@ -222,6 +223,7 @@ function HomeContent() {
   const meetingId = searchParams.get("meeting_id");
 
   const [meetingTitle, setMeetingTitle] = useState("회의 워크스페이스");
+  const [meetingStatus, setMeetingStatus] = useState("");
   const [meetingGoal, setMeetingGoal] = useState("");
   const [meetingGoalContext, setMeetingGoalContext] = useState("");
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -229,6 +231,7 @@ function HomeContent() {
   const [analysisState, setAnalysisState] = useState<MeetingState | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
+  const [ideationBubbleFinalizing, setIdeationBubbleFinalizing] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingMeeting, setLoadingMeeting] = useState(true);
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
@@ -258,6 +261,7 @@ function HomeContent() {
   const speechDetectionProfileRef = useRef<SpeechDetectionProfile | null>(null);
   const liveSpeechClearTimerRef = useRef<number | null>(null);
   const transcriptPersistenceStatusTimerRef = useRef<number | null>(null);
+  const ideationBubbleFinalizationTimerRef = useRef<number | null>(null);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
 
@@ -280,6 +284,31 @@ function HomeContent() {
   useEffect(() => {
     isRecordingRef.current = isRecording;
   }, [isRecording]);
+
+  const clearIdeationBubbleFinalization = useCallback(() => {
+    if (ideationBubbleFinalizationTimerRef.current !== null) {
+      window.clearTimeout(ideationBubbleFinalizationTimerRef.current);
+      ideationBubbleFinalizationTimerRef.current = null;
+    }
+    setIdeationBubbleFinalizing(false);
+  }, []);
+
+  const startIdeationBubbleFinalization = useCallback(() => {
+    if (ideationBubbleFinalizationTimerRef.current !== null) {
+      window.clearTimeout(ideationBubbleFinalizationTimerRef.current);
+    }
+    setIdeationBubbleFinalizing(true);
+    ideationBubbleFinalizationTimerRef.current = window.setTimeout(() => {
+      setIdeationBubbleFinalizing(false);
+      ideationBubbleFinalizationTimerRef.current = null;
+    }, IDEATION_BUBBLE_FINALIZATION_WINDOW_MS);
+  }, []);
+
+  useEffect(() => {
+    if (canvasStageContext.stage !== "ideation") {
+      clearIdeationBubbleFinalization();
+    }
+  }, [canvasStageContext.stage, clearIdeationBubbleFinalization]);
 
   const showLiveSpeechPreview = useCallback((speaker: string, text: string, timestamp: string) => {
     const trimmedText = text.trim();
@@ -326,6 +355,9 @@ function HomeContent() {
       if (transcriptPersistenceStatusTimerRef.current !== null) {
         window.clearTimeout(transcriptPersistenceStatusTimerRef.current);
       }
+      if (ideationBubbleFinalizationTimerRef.current !== null) {
+        window.clearTimeout(ideationBubbleFinalizationTimerRef.current);
+      }
       audioRecorderRef.current?.cleanup();
     };
   }, []);
@@ -352,6 +384,8 @@ function HomeContent() {
     setIncomingCanvasSync(null);
     setMeetingGoal("");
     setMeetingGoalContext("");
+    setMeetingStatus("");
+    clearIdeationBubbleFinalization();
     setIncomingCanvasStateRequestId("");
 
     const loadMeeting = async () => {
@@ -362,7 +396,7 @@ function HomeContent() {
           { data: transcriptData, error: transcriptError },
           workspaceState,
         ] = await Promise.all([
-          supabase.from("meetings").select("title").eq("id", meetingId).single(),
+          supabase.from("meetings").select("title,status").eq("id", meetingId).single(),
           loadTranscriptRows(meetingId),
           getCanvasWorkspaceState(meetingId).catch(() => null),
         ]);
@@ -371,6 +405,7 @@ function HomeContent() {
         if (transcriptError) throw transcriptError;
 
         const nextMeetingTitle = meetingData?.title || "회의 워크스페이스";
+        const nextMeetingStatus = typeof meetingData?.status === "string" ? meetingData.status : "";
         const nextTranscripts = dedupeTranscripts(
           (transcriptData || []).map((row) => ({
             id: String(row.id),
@@ -386,6 +421,7 @@ function HomeContent() {
         );
 
         setMeetingTitle(nextMeetingTitle);
+        setMeetingStatus(nextMeetingStatus);
         setMeetingGoal(workspaceState?.meeting_goal || "");
         setMeetingGoalContext(workspaceState?.meeting_goal_context || "");
         setTranscripts(nextTranscripts);
@@ -404,7 +440,7 @@ function HomeContent() {
     };
 
     void loadMeeting();
-  }, [applyMeetingStateToUi, user, meetingId]);
+  }, [applyMeetingStateToUi, clearIdeationBubbleFinalization, user, meetingId]);
 
   useEffect(() => {
     if (!user || !meetingId) return;
@@ -895,6 +931,12 @@ function HomeContent() {
     if (!user) return;
 
     if (isRecording) {
+      const stoppedInIdeation = canvasStageContextRef.current.stage === "ideation";
+      if (stoppedInIdeation) {
+        startIdeationBubbleFinalization();
+      } else {
+        clearIdeationBubbleFinalization();
+      }
       const recorder = audioRecorderRef.current;
       audioRecorderRef.current = null;
       await recorder?.stopAndCleanup();
@@ -904,6 +946,7 @@ function HomeContent() {
       return;
     }
 
+    clearIdeationBubbleFinalization();
     if (!audioRecorderRef.current) {
       const recorder = new AudioRecorder();
       const initialized = await recorder.initialize();
@@ -962,6 +1005,13 @@ function HomeContent() {
       }
       if (wsClientRef.current?.isConnected()) {
         const canvasContext = canvasStageContextRef.current;
+        if (canvasContext.stage === "solution") {
+          console.info("[STT] 요약 단계에서는 전사 요청을 보내지 않습니다.", {
+            chunkIndex: metrics.chunkIndex,
+            durationMs: metrics.durationMs,
+          });
+          return;
+        }
         console.info("[STT] 음성 감지 - 전사 요청 전송", {
           rms: metrics.rms,
           peak: metrics.peak,
@@ -1055,6 +1105,23 @@ function HomeContent() {
       meeting_goal_context: context,
     });
   }, []);
+  const handleMeetingTitleSave = useCallback(async (title: string) => {
+    if (!meetingId) throw new Error("missing meeting id");
+    const nextTitle = title.trim();
+    if (!nextTitle) throw new Error("empty meeting title");
+
+    const previousTitle = meetingTitle;
+    setMeetingTitle(nextTitle);
+    const { error } = await supabase
+      .from("meetings")
+      .update({ title: nextTitle })
+      .eq("id", meetingId);
+
+    if (error) {
+      setMeetingTitle(previousTitle);
+      throw error;
+    }
+  }, [meetingId, meetingTitle]);
 
   if (authLoading || !user || !meetingId || loadingMeeting) {
     return (
@@ -1076,12 +1143,19 @@ function HomeContent() {
         meetingTitle={meetingTitle}
         meetingGoal={meetingGoal}
         meetingGoalContext={meetingGoalContext}
+        onMeetingTitleSave={handleMeetingTitleSave}
         onMeetingGoalChange={setMeetingGoal}
         onMeetingGoalContextChange={setMeetingGoalContext}
         onMeetingGoalSync={broadcastMeetingGoalSync}
         transcripts={canvasTranscripts}
         agendas={canvasAgendas}
         analysisState={analysisState}
+        meetingStatus={meetingStatus}
+        ideationBubbleUpdatesEnabled={
+          meetingStatus !== "completed" &&
+          canvasStageContext.stage === "ideation" &&
+          (isRecording || ideationBubbleFinalizing)
+        }
         incomingSharedCanvasSync={incomingCanvasSync}
         onSharedCanvasSync={broadcastCanvasSync}
         incomingNodePreview={incomingCanvasNodePreview}

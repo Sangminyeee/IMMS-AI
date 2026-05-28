@@ -275,7 +275,6 @@ function StageSteps({
 function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   const { view, meetingGoal, handlers } = header;
   const {
-    meetingTitle,
     isRecording,
     recordingStartedAtMs,
   } = view;
@@ -323,7 +322,7 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
         className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
       >
         <span className="moa-font-pretendard truncate text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636]">
-          {meetingGoalDraft.trim() || meetingTitle || "회의 목표 입력란"}
+          {meetingGoalDraft.trim() || "회의 목표 입력"}
         </span>
       </button>
       <div className="mt-[9px] inline-flex h-[32px] w-[110px] items-center justify-center gap-[8px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)]">
@@ -588,6 +587,47 @@ function LeftMeetingPanel({
   composerHandlers: CanvasRightDrawerComposerHandlers;
   noteHandlers: CanvasRightDrawerNoteHandlers;
 }) {
+  const currentMeetingTitle = header.view.meetingTitle || "회의 제목";
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(currentMeetingTitle);
+  const [titleSaving, setTitleSaving] = useState(false);
+
+  useEffect(() => {
+    if (!titleEditing || !titleInputRef.current) return;
+    titleInputRef.current.focus();
+    titleInputRef.current.select();
+  }, [titleEditing]);
+
+  const handleStartTitleEdit = () => {
+    setTitleDraft(currentMeetingTitle);
+    setTitleEditing(true);
+  };
+
+  const handleCancelTitleEdit = () => {
+    setTitleDraft(currentMeetingTitle);
+    setTitleEditing(false);
+  };
+
+  const handleSaveTitleEdit = async () => {
+    if (titleSaving) return;
+    const nextTitle = titleDraft.trim();
+    if (nextTitle === currentMeetingTitle.trim()) {
+      setTitleDraft(currentMeetingTitle);
+      setTitleEditing(false);
+      return;
+    }
+
+    setTitleSaving(true);
+    const saved = await header.handlers.onSaveMeetingTitle(nextTitle);
+    setTitleSaving(false);
+    if (saved) {
+      setTitleEditing(false);
+    } else {
+      titleInputRef.current?.focus();
+    }
+  };
+
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-20 after:w-px after:bg-[#cecccc]">
       <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
@@ -599,9 +639,61 @@ function LeftMeetingPanel({
           <MoaLogo size="figma" className="moa-dt-logo" />
         </Link>
         <div className="mt-[var(--canvas-left-title-gap)]">
-          <div className="flex items-center gap-[9px]">
-            <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{header.view.meetingTitle || "회의 제목"}</h2>
-            <PencilIcon className="h-[12px] w-[12px] shrink-0 text-[#737982]" />
+          <div className="flex min-w-0 items-center gap-[7px]">
+            {titleEditing ? (
+              <div className="flex min-w-0 flex-1 items-center gap-[4px]">
+                <input
+                  ref={titleInputRef}
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      handleCancelTitleEdit();
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleSaveTitleEdit();
+                    }
+                  }}
+                  disabled={titleSaving}
+                  aria-label="회의 제목"
+                  className="min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveTitleEdit()}
+                  disabled={titleSaving}
+                  aria-label="회의 제목 저장"
+                  title="저장"
+                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+                >
+                  <CheckIcon className="h-[13px] w-[13px]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelTitleEdit}
+                  disabled={titleSaving}
+                  aria-label="회의 제목 수정 취소"
+                  title="취소"
+                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <XIcon className="h-[12px] w-[12px]" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{currentMeetingTitle}</h2>
+                <button
+                  type="button"
+                  onClick={handleStartTitleEdit}
+                  aria-label="회의 제목 수정"
+                  title="수정"
+                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full text-[#737982] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
+                >
+                  <PencilIcon className="h-[12px] w-[12px]" />
+                </button>
+              </>
+            )}
           </div>
           <p className="mt-[var(--canvas-left-keyword-gap)] max-w-[var(--canvas-left-content)] truncate text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[rgba(77,77,77,0.9)]">
             {keywordSummary || "키워드가 추출되면 이곳에 표시됩니다"}

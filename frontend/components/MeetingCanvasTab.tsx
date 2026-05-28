@@ -43,6 +43,7 @@ import {
   buildStableIdeationBubbleVisuals,
   getIdeationBubbleEnterSettleDelayMs,
   settleEnteringIdeationBubbleVisuals,
+  type IdeationBubbleLayoutAnchor,
   type IdeationKeywordBubbleVisual,
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
@@ -293,12 +294,15 @@ type MeetingCanvasTabProps = {
   meetingTitle: string;
   meetingGoal: string;
   meetingGoalContext: string;
+  onMeetingTitleSave?: (title: string) => void | Promise<void>;
   onMeetingGoalChange: (goal: string) => void;
   onMeetingGoalContextChange: (context: string) => void;
   onMeetingGoalSync?: (goal: string, context?: string) => void;
   transcripts: MeetingTranscript[];
   agendas: MeetingAgenda[];
   analysisState: MeetingState | null;
+  meetingStatus?: string;
+  ideationBubbleUpdatesEnabled?: boolean;
   incomingSharedCanvasSync: CanvasRealtimeSyncPayload | null;
   onSharedCanvasSync: (payload: CanvasRealtimeSyncPayload) => void;
   incomingNodePreview: CanvasNodePreviewPayload | null;
@@ -650,12 +654,15 @@ export default function MeetingCanvasTab({
   meetingTitle,
   meetingGoal,
   meetingGoalContext,
+  onMeetingTitleSave,
   onMeetingGoalChange,
   onMeetingGoalContextChange,
   onMeetingGoalSync,
   transcripts,
   agendas,
   analysisState,
+  meetingStatus = "",
+  ideationBubbleUpdatesEnabled = false,
   incomingSharedCanvasSync,
   onSharedCanvasSync,
   incomingNodePreview,
@@ -758,6 +765,8 @@ export default function MeetingCanvasTab({
   const [summaryDocumentDraftDirty, setSummaryDocumentDraftDirty] = useState(false);
   const [summaryEvidenceOpenGroupIds, setSummaryEvidenceOpenGroupIds] = useState<Set<string>>(() => new Set());
   const [ideationBubbleVisuals, setIdeationBubbleVisuals] = useState<IdeationKeywordBubbleVisual[]>([]);
+  const ideationBubbleLayoutAnchorRef = useRef<IdeationBubbleLayoutAnchor | null>(null);
+  const autoSolutionRecordingStopRequestedRef = useRef(false);
   const [ideationBubbleDebugEnabled, setIdeationBubbleDebugEnabled] = useState(false);
   const [ideationBubbleDebugGrowthById, setIdeationBubbleDebugGrowthById] = useState<Record<string, number>>({});
   const [ideationBubbleLayoutRevision, setIdeationBubbleLayoutRevision] = useState(0);
@@ -1094,8 +1103,9 @@ export default function MeetingCanvasTab({
   );
   const activeMeetingGoal = meetingGoalDraft.trim();
   const activeMeetingGoalContext = meetingGoalContextDraft.trim();
-  const ideationKeywordMeetingTopic = activeMeetingGoal || meetingTitle.trim() || (effectiveState?.meeting_goal || "").trim();
-  const meetingTopicForAi = ideationKeywordMeetingTopic || "회의 주제";
+  const analysisMeetingGoal = activeMeetingGoal || (effectiveState?.meeting_goal || "").trim();
+  const ideationKeywordMeetingTopic = analysisMeetingGoal || "회의 주제";
+  const meetingTopicForAi = analysisMeetingGoal || meetingTitle.trim() || "회의 주제";
   const handleIdeationBubbleGraphChange = useCallback((nextGraph: CanvasIdeationBubbleGraph) => {
     setIdeationBubbleGraph(normalizeIdeationBubbleGraphForWorkspace(nextGraph));
   }, []);
@@ -1111,10 +1121,12 @@ export default function MeetingCanvasTab({
     bubbleGraph: ideationBubbleGraph,
     onBubbleGraphChange: handleIdeationBubbleGraphChange,
     stage,
+    updatesEnabled: meetingStatus !== "completed" && ideationBubbleUpdatesEnabled,
   });
   useEffect(() => {
     ideationBubbleUpdateTickRef.current = 0;
     setIdeationBubbleVisuals([]);
+    ideationBubbleLayoutAnchorRef.current = null;
     setIdeationBubbleDebugGrowthById({});
   }, [ideationBubbleUpdateTickRef, meetingId]);
   useEffect(() => {
@@ -1127,6 +1139,7 @@ export default function MeetingCanvasTab({
         ideationKeywordBubbles,
         ideationBubbleDebugGrowthById,
         tick,
+        ideationBubbleLayoutAnchorRef.current,
       );
     });
   }, [
@@ -1338,6 +1351,16 @@ export default function MeetingCanvasTab({
     selectedProblemGroupId,
     stage,
   ]);
+
+  useEffect(() => {
+    if (stage !== "solution") {
+      autoSolutionRecordingStopRequestedRef.current = false;
+      return;
+    }
+    if (!isRecording || !onStopRecording || autoSolutionRecordingStopRequestedRef.current) return;
+    autoSolutionRecordingStopRequestedRef.current = true;
+    void onStopRecording();
+  }, [isRecording, onStopRecording, stage]);
 
   useEffect(() => {
     autoProblemDefinitionRef.current = false;
@@ -2950,14 +2973,22 @@ export default function MeetingCanvasTab({
           ),
         ),
       );
-      void instance.setViewport(
-        {
-          x: Math.round(bounds.width / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2) * zoom),
-          y: Math.round(bounds.height / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2) * zoom),
-          zoom,
-        },
-        { duration: 0 },
-      );
+      const viewport = {
+        x: Math.round(bounds.width / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2) * zoom),
+        y: Math.round(bounds.height / 2 - (CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT / 2) * zoom),
+        zoom,
+      };
+      const centerX = (bounds.width / 2 - viewport.x) / zoom;
+      const centerY = (bounds.height / 2 - viewport.y) / zoom;
+      const visibleWorldHeight = bounds.height / zoom;
+      const spawnOffsetY = Math.min(280, Math.max(180, visibleWorldHeight * 0.24));
+      ideationBubbleLayoutAnchorRef.current = {
+        centerX: Math.round(centerX),
+        centerY: Math.round(centerY),
+        spawnX: Math.round(centerX),
+        spawnY: Math.round(centerY + spawnOffsetY),
+      };
+      void instance.setViewport(viewport, { duration: 0 });
     });
   }, [canvasSurfaceRef, meetingId, stage]);
 
@@ -3065,6 +3096,30 @@ export default function MeetingCanvasTab({
     );
     return copied;
   }, [meetingId, setActivityMessage]);
+  const handleSaveMeetingTitle = useCallback(async (title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setActivityMessage("회의 제목을 입력해 주세요.");
+      return false;
+    }
+    if (nextTitle === meetingTitle.trim()) {
+      return true;
+    }
+    if (!onMeetingTitleSave) {
+      setActivityMessage("회의 제목 저장 기능을 사용할 수 없습니다.");
+      return false;
+    }
+
+    try {
+      await onMeetingTitleSave(nextTitle);
+      setActivityMessage("회의 제목을 수정했습니다.");
+      return true;
+    } catch (error) {
+      console.error("Failed to save meeting title:", error);
+      setActivityMessage("회의 제목 저장에 실패했습니다.");
+      return false;
+    }
+  }, [meetingTitle, onMeetingTitleSave, setActivityMessage]);
   const handleRightDrawerResizeStart = useMemo(
     () => startPanelResize("right"),
     [startPanelResize],
@@ -3078,6 +3133,7 @@ export default function MeetingCanvasTab({
     onRefreshProblemChunkSummaries: handleRefreshProblemChunkSummaries,
     onDebugRegenerateProblemDefinition: handleDebugRegenerateProblemDefinition,
     onSaveMeetingGoalEdit: handleSaveMeetingGoalEdit,
+    onSaveMeetingTitle: handleSaveMeetingTitle,
     onStageSelect: handleStageSelect,
     onOpenMeetingGoalEditor: handleOpenMeetingGoalEditor,
     onCancelMeetingGoalEdit: handleCancelMeetingGoalEdit,

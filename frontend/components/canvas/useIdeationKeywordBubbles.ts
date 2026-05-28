@@ -178,6 +178,7 @@ export function useIdeationKeywordBubbles({
   bubbleGraph,
   onBubbleGraphChange,
   stage,
+  updatesEnabled = true,
 }: {
   transcripts: IdeationTranscript[];
   meetingId: string;
@@ -187,9 +188,11 @@ export function useIdeationKeywordBubbles({
   bubbleGraph?: CanvasIdeationBubbleGraph;
   onBubbleGraphChange?: (graph: CanvasIdeationBubbleGraph) => void;
   stage: CanvasStage;
+  updatesEnabled?: boolean;
 }) {
   const [statusMessage, setStatusMessage] = useState("");
   const processedIdsRef = useRef<Set<string>>(new Set());
+  const graphProcessedIdsRef = useRef<string[]>([]);
   const requestSeqRef = useRef(0);
   const requestInFlightRef = useRef(false);
   const pendingWindowStartedAtRef = useRef(0);
@@ -213,18 +216,20 @@ export function useIdeationKeywordBubbles({
   );
 
   useEffect(() => {
-    processedIdsRef.current = new Set(normalizedBubbleGraph.processed_utterance_ids);
+    graphProcessedIdsRef.current = normalizedBubbleGraph.processed_utterance_ids;
+    processedIdsRef.current = new Set(graphProcessedIdsRef.current);
   }, [graphProcessedSignature, normalizedBubbleGraph.processed_utterance_ids]);
 
   useEffect(() => {
-    processedIdsRef.current = new Set();
+    processedIdsRef.current = new Set(graphProcessedIdsRef.current);
     requestInFlightRef.current = false;
     pendingWindowStartedAtRef.current = 0;
     deferStateUpdate(() => setStatusMessage(""));
   }, [meetingId]);
 
   useEffect(() => {
-    if (stage !== "ideation") {
+    if (stage !== "ideation" || !updatesEnabled) {
+      processedIdsRef.current = new Set(normalizedBubbleGraph.processed_utterance_ids);
       pendingWindowStartedAtRef.current = 0;
       deferStateUpdate(() => setStatusMessage(""));
       return undefined;
@@ -372,6 +377,7 @@ export function useIdeationKeywordBubbles({
     normalizedBubbleGraph,
     onBubbleGraphChange,
     stage,
+    updatesEnabled,
   ]);
 
   return {

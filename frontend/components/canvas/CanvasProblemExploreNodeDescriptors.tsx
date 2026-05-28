@@ -1,5 +1,5 @@
 import { Position } from "@xyflow/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
 import {
   buildNodeContentSignature,
@@ -45,13 +45,24 @@ type RemoteEditPresence = {
   updated_at?: string;
 };
 
+type ProblemExploreBoardRow<TGroup extends ProblemExploreGroupNodeModel> = {
+  visualDepth: number;
+  items: Array<{
+    group: TGroup;
+    visualDepth: number;
+  }>;
+};
+
 type ProblemExploreBoardGroup<TGroup extends ProblemExploreGroupNodeModel> = {
   root: TGroup;
   descendants: Array<{
     group: TGroup;
     visualDepth: number;
   }>;
+  rows: ProblemExploreBoardRow<TGroup>[];
   height: number;
+  columnCount: number;
+  width: number;
 };
 
 type ProblemExploreEventHandlers<TGroup extends ProblemExploreGroupNodeModel> = {
@@ -81,6 +92,10 @@ const PROBLEM_EXPLORE_CARD_GAP_Y = 47;
 const PROBLEM_EXPLORE_BOARD_PADDING_Y = 23;
 const PROBLEM_EXPLORE_BOARD_BOTTOM_PADDING = 24;
 const PROBLEM_EXPLORE_BOARD_CARD_COLUMNS = 2;
+const PROBLEM_EXPLORE_BOARD_MAX_CARD_COLUMNS = 4;
+const PROBLEM_EXPLORE_BOARD_PAGE_SIZE = 4;
+const PROBLEM_EXPLORE_BOARD_GRID_PAD_LEFT = 24;
+const PROBLEM_EXPLORE_BOARD_GRID_PAD_RIGHT = 20;
 
 function makeProblemExploreEditPresenceKey(groupId: string) {
   return `problem_group:${groupId}:`;
@@ -105,6 +120,29 @@ function buildProblemExploreChildrenByParent<TGroup extends ProblemExploreGroupN
     childGroupsByParentId.set(parentId, children);
   });
   return childGroupsByParentId;
+}
+
+function resolveProblemExploreBoardColumnCount<TGroup extends ProblemExploreGroupNodeModel>(
+  rows: ProblemExploreBoardRow<TGroup>[],
+) {
+  const maxRowCount = Math.max(0, ...rows.map((row) => row.items.length));
+  if (maxRowCount <= 0) return PROBLEM_EXPLORE_BOARD_CARD_COLUMNS;
+  return Math.min(
+    PROBLEM_EXPLORE_BOARD_MAX_CARD_COLUMNS,
+    Math.max(PROBLEM_EXPLORE_BOARD_CARD_COLUMNS, Math.min(maxRowCount, PROBLEM_EXPLORE_BOARD_PAGE_SIZE)),
+  );
+}
+
+function resolveProblemExploreBoardWidth(columnCount: number) {
+  const cardsWidth = columnCount * PROBLEM_EXPLORE_CARD_WIDTH;
+  const gapsWidth = Math.max(0, columnCount - 1) * PROBLEM_EXPLORE_CARD_GAP_X;
+  const contentWidth =
+    PROBLEM_EXPLORE_BOARD_LEFT_WIDTH +
+    PROBLEM_EXPLORE_BOARD_GRID_PAD_LEFT +
+    cardsWidth +
+    gapsWidth +
+    PROBLEM_EXPLORE_BOARD_GRID_PAD_RIGHT;
+  return Math.max(PROBLEM_EXPLORE_BOARD_WIDTH, contentWidth);
 }
 
 function buildProblemExploreRootGroups<TGroup extends ProblemExploreGroupNodeModel>(problemGroups: TGroup[]) {
@@ -149,17 +187,30 @@ function collectProblemExploreDescendants<TGroup extends ProblemExploreGroupNode
   return result;
 }
 
-function estimateProblemExploreBoardHeight<TGroup extends ProblemExploreGroupNodeModel>(
+function buildProblemExploreRows<TGroup extends ProblemExploreGroupNodeModel>(
   descendants: Array<{ group: TGroup; visualDepth: number }>,
+) {
+  const rowsByDepth = new Map<number, ProblemExploreBoardRow<TGroup>>();
+  descendants.forEach((item) => {
+    const row = rowsByDepth.get(item.visualDepth) || { visualDepth: item.visualDepth, items: [] };
+    row.items.push(item);
+    rowsByDepth.set(item.visualDepth, row);
+  });
+  return Array.from(rowsByDepth.values()).sort((left, right) => left.visualDepth - right.visualDepth);
+}
+
+function estimateProblemExploreBoardHeight<TGroup extends ProblemExploreGroupNodeModel>(
+  rows: ProblemExploreBoardRow<TGroup>[],
   editingProblemGroupId: string,
 ) {
-  const rowCount = Math.max(1, Math.ceil(descendants.length / PROBLEM_EXPLORE_BOARD_CARD_COLUMNS));
+  const rowCount = Math.max(1, rows.length);
   const rowHeights = Array.from({ length: rowCount }, () => PROBLEM_EXPLORE_CARD_HEIGHT);
-  descendants.forEach((item, index) => {
-    const rowIndex = Math.floor(index / PROBLEM_EXPLORE_BOARD_CARD_COLUMNS);
+  rows.forEach((row, rowIndex) => {
     rowHeights[rowIndex] = Math.max(
       rowHeights[rowIndex] || PROBLEM_EXPLORE_CARD_HEIGHT,
-      editingProblemGroupId === item.group.group_id ? PROBLEM_EXPLORE_EDIT_CARD_HEIGHT : PROBLEM_EXPLORE_CARD_HEIGHT,
+      row.items.some((item) => editingProblemGroupId === item.group.group_id)
+        ? PROBLEM_EXPLORE_EDIT_CARD_HEIGHT
+        : PROBLEM_EXPLORE_CARD_HEIGHT,
     );
   });
   const contentHeight =
@@ -178,10 +229,15 @@ function buildProblemExploreBoards<TGroup extends ProblemExploreGroupNodeModel>(
   const rootGroups = buildProblemExploreRootGroups(problemGroups);
   return rootGroups.map((root): ProblemExploreBoardGroup<TGroup> => {
     const descendants = collectProblemExploreDescendants(root, childGroupsByParentId);
+    const rows = buildProblemExploreRows(descendants);
+    const columnCount = resolveProblemExploreBoardColumnCount(rows);
     return {
       root,
       descendants,
-      height: estimateProblemExploreBoardHeight(descendants, editingProblemGroupId),
+      rows,
+      height: estimateProblemExploreBoardHeight(rows, editingProblemGroupId),
+      columnCount,
+      width: resolveProblemExploreBoardWidth(columnCount),
     };
   });
 }
@@ -223,6 +279,22 @@ function XIcon({ className = "" }: { className?: string }) {
   return (
     <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
       <path d="m7 7 10 10M17 7 7 17" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
+      <path d="m15 6-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
+      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -513,17 +585,31 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
   remoteEditPresenceByKey: Record<string, RemoteEditPresence | null | undefined>;
   handlers: ProblemExploreEventHandlers<TGroup>;
 }) {
-  const { root, descendants, height } = board;
+  const { root, descendants, rows, height, columnCount, width } = board;
   const rootEditing = editingProblemGroupId === root.group_id;
   const rootSelected = activeGroupId === root.group_id;
   const rootLoading = loadingProblemGroupIds.includes(root.group_id);
   const rootDetailText = problemExploreDetailText(root, rootLoading);
   const rootDropHandlers = problemExploreDropHandlers(root, handlers);
   const rootRemoteEditing = Boolean(remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(root.group_id)]);
+  const [requestedPageIndex, setRequestedPageIndex] = useState(0);
+  const totalPages = Math.max(
+    1,
+    ...rows.map((row) => Math.ceil(row.items.length / PROBLEM_EXPLORE_BOARD_PAGE_SIZE)),
+  );
+  const pageIndex = Math.min(requestedPageIndex, totalPages - 1);
+  const pageStartIndex = pageIndex * PROBLEM_EXPLORE_BOARD_PAGE_SIZE;
+  const visibleRows = rows
+    .map((row) => ({
+      ...row,
+      items: row.items.slice(pageStartIndex, pageStartIndex + PROBLEM_EXPLORE_BOARD_PAGE_SIZE),
+    }))
+    .filter((row) => row.items.length > 0);
+
   return (
     <div
       className="nopan grid overflow-hidden rounded-[8px] border border-[#cecccc] bg-white text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_4px_rgba(0,0,0,0.06)]"
-      style={{ width: PROBLEM_EXPLORE_BOARD_WIDTH, height, gridTemplateColumns: `${PROBLEM_EXPLORE_BOARD_LEFT_WIDTH}px 1fr` }}
+      style={{ width, height, gridTemplateColumns: `${PROBLEM_EXPLORE_BOARD_LEFT_WIDTH}px 1fr` }}
     >
       <aside
         data-problem-group-drop-id={root.group_id}
@@ -634,39 +720,81 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
       >
         {descendants.length > 0 ? (
           <div
-            className="grid"
+            className="flex flex-col"
             style={{
-              gridTemplateColumns: `repeat(${PROBLEM_EXPLORE_BOARD_CARD_COLUMNS}, ${PROBLEM_EXPLORE_CARD_WIDTH}px)`,
-              columnGap: PROBLEM_EXPLORE_CARD_GAP_X,
-              rowGap: PROBLEM_EXPLORE_CARD_GAP_Y,
-              padding: `${PROBLEM_EXPLORE_BOARD_PADDING_Y}px 20px ${PROBLEM_EXPLORE_BOARD_BOTTOM_PADDING}px 24px`,
+              gap: PROBLEM_EXPLORE_CARD_GAP_Y,
+              padding: `${PROBLEM_EXPLORE_BOARD_PADDING_Y}px ${PROBLEM_EXPLORE_BOARD_GRID_PAD_RIGHT}px ${PROBLEM_EXPLORE_BOARD_BOTTOM_PADDING}px ${PROBLEM_EXPLORE_BOARD_GRID_PAD_LEFT}px`,
             }}
           >
-            {descendants.map(({ group, visualDepth }) => {
-              const editing = editingProblemGroupId === group.group_id;
-              return (
-                <ProblemExploreCard
-                  key={group.group_id}
-                  group={group}
-                  visualDepth={visualDepth}
-                  selected={activeGroupId === group.group_id}
-                  loading={loadingProblemGroupIds.includes(group.group_id)}
-                  dropTarget={dropProblemGroupId === group.group_id}
-                  childLoading={problemChildGenerationPendingId === group.group_id}
-                  editing={editing}
-                  remoteEditing={Boolean(remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(group.group_id)])}
-                  draftTopic={editing ? problemGroupDraftTopic : ""}
-                  draftConclusion={editing ? problemGroupDraftConclusion : ""}
-                  handlers={handlers}
-                />
-              );
-            })}
+            {visibleRows.map((row) => (
+              <div
+                key={row.visualDepth}
+                className="grid"
+                style={{
+                  gridTemplateColumns: `repeat(${columnCount}, ${PROBLEM_EXPLORE_CARD_WIDTH}px)`,
+                  columnGap: PROBLEM_EXPLORE_CARD_GAP_X,
+                }}
+              >
+                {row.items.map(({ group, visualDepth }) => {
+                  const editing = editingProblemGroupId === group.group_id;
+                  return (
+                    <ProblemExploreCard
+                      key={group.group_id}
+                      group={group}
+                      visualDepth={visualDepth}
+                      selected={activeGroupId === group.group_id}
+                      loading={loadingProblemGroupIds.includes(group.group_id)}
+                      dropTarget={dropProblemGroupId === group.group_id}
+                      childLoading={problemChildGenerationPendingId === group.group_id}
+                      editing={editing}
+                      remoteEditing={Boolean(remoteEditPresenceByKey[makeProblemExploreEditPresenceKey(group.group_id)])}
+                      draftTopic={editing ? problemGroupDraftTopic : ""}
+                      draftConclusion={editing ? problemGroupDraftConclusion : ""}
+                      handlers={handlers}
+                    />
+                  );
+                })}
+              </div>
+            ))}
           </div>
         ) : (
           <div className="flex h-full items-center justify-center px-8 text-center text-[12px] font-medium leading-6 text-[#90a1b9]">
             세부 후보가 아직 없습니다. 왼쪽의 세부 내용 추가를 눌러 후보를 생성하세요.
           </div>
         )}
+        {totalPages > 1 ? (
+          <div className="absolute bottom-[20px] right-[20px] flex items-center gap-[6px] rounded-full border border-[#d8e6f5] bg-white/95 px-[8px] py-[5px] shadow-[0_4px_14px_rgba(35,108,243,0.08)]">
+            <button
+              type="button"
+              aria-label="이전 세부 페이지"
+              disabled={pageIndex === 0}
+              onClick={(event) => {
+                event.stopPropagation();
+                setRequestedPageIndex((currentPage) => Math.max(0, currentPage - 1));
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
+            >
+              <ChevronLeftIcon className="h-[13px] w-[13px]" />
+            </button>
+            <span className="min-w-[30px] text-center text-[10px] font-bold leading-none tracking-[-0.025px] text-[#505050]">
+              {pageIndex + 1}/{totalPages}
+            </span>
+            <button
+              type="button"
+              aria-label="다음 세부 페이지"
+              disabled={pageIndex >= totalPages - 1}
+              onClick={(event) => {
+                event.stopPropagation();
+                setRequestedPageIndex((currentPage) => Math.min(totalPages - 1, currentPage + 1));
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
+            >
+              <ChevronRightIcon className="h-[13px] w-[13px]" />
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -750,7 +878,7 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
       sourcePosition: Position.Bottom,
       targetPosition: Position.Top,
       className: "!border-0 !bg-transparent !p-0 !shadow-none",
-      style: { width: PROBLEM_EXPLORE_BOARD_WIDTH, height: board.height, padding: 0 },
+      style: { width: board.width, height: board.height, padding: 0 },
       draggable: false,
       selectable: false,
       data: {
@@ -764,6 +892,8 @@ export function buildProblemExploreCanvasBlueprint<TGroup extends ProblemExplore
           board.root.insight_lens || "",
           board.root.conclusion || "",
           board.height,
+          board.width,
+          board.columnCount,
           activeGroupId,
           dropProblemGroupId,
           problemChildGenerationPendingId,
