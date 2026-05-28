@@ -70,7 +70,7 @@ const panelButtonClasses = {
   save:
     "ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-[34.535px] bg-[#eff0f6] px-[6.907px] py-[6.907px] transition hover:bg-[#e3e5ee]",
   share:
-    "flex h-[32.4px] w-[66.9px] items-center gap-[8.1px] rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition hover:bg-[#3f3f43]",
+    "flex h-[32.4px] items-center justify-center gap-[8.1px] overflow-hidden rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition-[width,background-color] hover:bg-[#3f3f43]",
   stageBase:
     "flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
   stageActive:
@@ -83,15 +83,13 @@ const panelButtonClasses = {
     "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
   aiInput:
     "-ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
-  aiIcon:
-    "grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-[123px] text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]",
   aiSend:
     "ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-[575.735px] border-[0.666px] border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
 };
 
 const panelButtonTextClasses = {
   save: "moa-font-pretendard text-center text-[10px] font-semibold leading-[1.4] tracking-[-0.025px] text-[#505050]",
-  share: "moa-font-pretendard text-center text-[12px] font-semibold leading-[20.008px] tracking-[-0.03px] text-[#ededed]",
+  share: "moa-font-pretendard shrink-0 whitespace-nowrap text-center text-[12px] font-semibold leading-[20.008px] tracking-[-0.03px] text-[#ededed]",
   stage: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]",
   primary: "moa-font-pretendard text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white",
 };
@@ -161,14 +159,6 @@ function SendIcon({ className = "" }: { className?: string }) {
   return (
     <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
       <path d="M5 12h13M13 7l5 5-5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PaperclipIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="m8.8 12.8 5.8-5.8a3 3 0 1 1 4.2 4.2l-7.1 7.1a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -783,7 +773,7 @@ function RightAiPanel({
   problemHandlers: CanvasSurfaceProblemHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
-  onShareMeetingLink: () => void;
+  onShareMeetingLink: () => Promise<boolean>;
 }) {
   const {
     open: quickAskOpen,
@@ -797,6 +787,27 @@ function RightAiPanel({
   const recentMessages = quickAskMessages.slice(-4);
   const quickAskHasMessages = quickAskMessages.length > 0;
   const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
+  const [shareCopied, setShareCopied] = useState(false);
+  const shareCopiedResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (shareCopiedResetTimerRef.current !== null) {
+      window.clearTimeout(shareCopiedResetTimerRef.current);
+    }
+  }, []);
+
+  const handleShareClick = async () => {
+    const copied = await onShareMeetingLink();
+    if (!copied) return;
+    setShareCopied(true);
+    if (shareCopiedResetTimerRef.current !== null) {
+      window.clearTimeout(shareCopiedResetTimerRef.current);
+    }
+    shareCopiedResetTimerRef.current = window.setTimeout(() => {
+      setShareCopied(false);
+      shareCopiedResetTimerRef.current = null;
+    }, 1600);
+  };
 
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
@@ -821,9 +832,16 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button type="button" className={panelButtonClasses.share} aria-label="회의 공유" onClick={onShareMeetingLink}>
-          <ShareIcon className="h-[13px] w-[13px]" />
-          <span className={panelButtonTextClasses.share}>공유</span>
+        <button
+          type="button"
+          className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
+          aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
+          onClick={() => void handleShareClick()}
+        >
+          <ShareIcon className="h-[13px] w-[13px] shrink-0" />
+          <span className={panelButtonTextClasses.share} aria-live="polite">
+            {shareCopied ? "복사완료" : "공유"}
+          </span>
         </button>
       </header>
 
@@ -889,9 +907,6 @@ function RightAiPanel({
 
         <div className="relative z-10 mt-auto shrink-0 pt-[24px] text-center">
           <form onSubmit={quickAskHandlers.onSubmit} className={panelButtonClasses.aiInput}>
-            <button type="button" className={panelButtonClasses.aiIcon} aria-label="파일 첨부">
-              <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
-            </button>
             <input
               value={quickAskDraft}
               onChange={(event) => quickAskHandlers.onDraftChange(event.target.value)}
@@ -901,9 +916,6 @@ function RightAiPanel({
               placeholder="무엇이든 물어보세요"
               className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
             />
-            <button type="button" className={panelButtonClasses.aiIcon} aria-label="음성 질문">
-              <MicIcon className="h-[20.36px] w-[20.36px]" />
-            </button>
             <button
               type="submit"
               disabled={!quickAskDraft.trim()}
@@ -941,7 +953,7 @@ export type CanvasWorkspacePanelsProps = {
   rightDrawerNoteHandlers: CanvasRightDrawerNoteHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
-  onShareMeetingLink: () => void;
+  onShareMeetingLink: () => Promise<boolean>;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({

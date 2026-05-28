@@ -2880,7 +2880,7 @@ export default function MeetingCanvasTab({
     const shareUrl = buildMeetingShareUrl(meetingId);
     if (!shareUrl) {
       setActivityMessage("복사할 회의 링크가 없습니다.");
-      return;
+      return false;
     }
 
     const copied = await copyTextToClipboard(shareUrl);
@@ -2889,6 +2889,7 @@ export default function MeetingCanvasTab({
         ? "회의 링크를 복사했습니다."
         : "브라우저 권한 문제로 회의 링크 복사에 실패했습니다.",
     );
+    return copied;
   }, [meetingId, setActivityMessage]);
   const handleRightDrawerResizeStart = useMemo(
     () => startPanelResize("right"),
