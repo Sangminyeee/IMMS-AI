@@ -1,0 +1,432 @@
+"use client";
+
+import type {
+  CSSProperties,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  RefObject,
+} from "react";
+
+type CanvasStage = "ideation" | "problem-definition" | "solution";
+
+export type CanvasRightDrawerPersonalNote = {
+  id: string;
+  projectId: string;
+  agendaId: string;
+  linkedCanvasItemId?: string;
+  linkedCanvasItemTitle?: string;
+  kind: "note" | "comment" | "topic";
+  title: string;
+  body: string;
+};
+
+function KeyboardDoubleArrowLeftIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M18.41 5.41 11.83 12l6.58 6.59L17 20l-8-8 8-8 1.41 1.41Zm-6 0L5.83 12l6.58 6.59L11 20l-8-8 8-8 1.41 1.41Z" />
+    </svg>
+  );
+}
+
+function RightDrawerPanel({
+  className,
+  bodyClassName,
+  bodyStyle,
+  children,
+}: {
+  className: string;
+  bodyClassName: string;
+  bodyStyle?: CSSProperties;
+  children: ReactNode;
+}) {
+  return (
+    <aside className={className}>
+      <div className={bodyClassName} style={bodyStyle}>
+        {children}
+      </div>
+    </aside>
+  );
+}
+
+function RightDrawerSectionHeader({
+  eyebrow,
+  title,
+  titleClassName = "mt-1 text-lg font-semibold leading-tight text-black",
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  titleClassName?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-black/50">{eyebrow}</p>
+        <h3 className={titleClassName}>{title}</h3>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function RightDrawerNotesPanel({
+  collapsed,
+  noteCount,
+  onToggleCollapsed,
+  children,
+}: {
+  collapsed: boolean;
+  noteCount: number;
+  onToggleCollapsed: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-b border-black/10 pb-[clamp(1rem,2vh,1.5rem)]">
+      <RightDrawerSectionHeader
+        eyebrow="Personal note"
+        title="개인 노트"
+        titleClassName="mt-1 text-xl font-semibold leading-tight text-black"
+        action={
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="shrink-0 rounded-full border border-black/10 bg-[#eff0f6] px-3 py-1 text-sm font-semibold text-[#4d4d4d] transition hover:bg-[#e3e5ee]"
+          >
+            {collapsed ? "열기" : `${noteCount}개 · 접기`}
+          </button>
+        }
+      />
+      {collapsed ? null : children}
+    </section>
+  );
+}
+
+function PersonalNoteComposer({
+  composerTitle,
+  composerBody,
+  composerBodyRef,
+  onTitleChange,
+  onBodyChange,
+  onSave,
+}: {
+  composerTitle: string;
+  composerBody: string;
+  composerBodyRef: RefObject<HTMLTextAreaElement | null>;
+  onTitleChange: (value: string) => void;
+  onBodyChange: (value: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="mt-4 space-y-3">
+      <input value={composerTitle} onChange={(event) => onTitleChange(event.target.value)} placeholder="메모 제목" className="w-full rounded-xl border border-black/10 bg-white px-3 py-2.5 text-base text-[#4d4d4d] focus:border-black/30 focus:outline-none" />
+      <textarea ref={composerBodyRef} value={composerBody} onChange={(event) => onBodyChange(event.target.value)} placeholder="메모 내용" className="min-h-[118px] w-full rounded-2xl border border-black/10 bg-white px-4 py-3.5 text-base leading-7 text-[#4d4d4d] focus:border-black/30 focus:outline-none" />
+      <button type="button" onClick={onSave} className="ml-auto block rounded-full bg-[#eff0f6] px-5 py-2 text-sm font-medium text-[#4d4d4d] hover:bg-[#e3e5ee]">
+        개인 메모 저장
+      </button>
+    </div>
+  );
+}
+
+function PersonalNoteList({
+  notes,
+  stage,
+  editingPersonalNoteId,
+  draggingPersonalNoteId,
+  personalNoteDraftTitle,
+  personalNoteDraftBody,
+  onDragStartNote,
+  onDragEndNote,
+  onDraftTitleChange,
+  onDraftBodyChange,
+  onCancelEdit,
+  onSaveEdit,
+  onStartEdit,
+  onDelete,
+}: {
+  notes: CanvasRightDrawerPersonalNote[];
+  stage: CanvasStage;
+  editingPersonalNoteId: string;
+  draggingPersonalNoteId: string;
+  personalNoteDraftTitle: string;
+  personalNoteDraftBody: string;
+  onDragStartNote: (noteId: string) => void;
+  onDragEndNote: () => void;
+  onDraftTitleChange: (value: string) => void;
+  onDraftBodyChange: (value: string) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (noteId: string) => void;
+  onStartEdit: (note: CanvasRightDrawerPersonalNote) => void;
+  onDelete: (noteId: string) => void;
+}) {
+  return (
+    <section className="pt-[clamp(1rem,2vh,1.5rem)]">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold text-black">내 메모 목록</h3>
+        <span className="rounded-full border border-black/10 bg-[#eff0f6] px-3 py-1 text-sm font-medium text-[#4d4d4d]">
+          {notes.length}
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {notes.length === 0 ? (
+          <p className="text-base leading-7 text-slate-500">이 프로젝트에 저장한 개인 메모가 없습니다.</p>
+        ) : (
+          notes.map((note) => {
+            const isEditing = editingPersonalNoteId === note.id;
+
+            return (
+              <article
+                key={note.id}
+                draggable={stage === "problem-definition" && !isEditing}
+                onDragStart={(event) => {
+                  if (stage !== "problem-definition" || isEditing) return;
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("application/x-imms-note-id", note.id);
+                  event.dataTransfer.setData("text/plain", note.id);
+                  onDragStartNote(note.id);
+                }}
+                onDragEnd={onDragEndNote}
+                className={`rounded-xl border border-black/10 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${draggingPersonalNoteId === note.id ? "opacity-60" : ""}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    {isEditing ? (
+                      <input
+                        value={personalNoteDraftTitle}
+                        onChange={(event) => onDraftTitleChange(event.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base font-semibold text-slate-900"
+                      />
+                    ) : (
+                      <h4 className="text-base font-semibold text-slate-900">{note.title}</h4>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    {isEditing ? (
+                      <>
+                        <button type="button" onClick={onCancelEdit} className="text-sm font-medium text-slate-500 hover:text-slate-700">
+                          취소
+                        </button>
+                        <button type="button" onClick={() => onSaveEdit(note.id)} className="text-sm font-medium text-slate-700 hover:text-slate-900">
+                          저장
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => onStartEdit(note)} className="text-sm font-medium text-slate-400 hover:text-slate-600">
+                          수정
+                        </button>
+                        <button type="button" onClick={() => onDelete(note.id)} className="text-sm font-medium text-slate-400 hover:text-slate-600">
+                          삭제
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {isEditing ? (
+                  <textarea
+                    value={personalNoteDraftBody}
+                    onChange={(event) => onDraftBodyChange(event.target.value)}
+                    className="mt-3 min-h-[140px] w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-base leading-7 text-slate-700"
+                  />
+                ) : (
+                  <p className="mt-2 text-base leading-7 text-slate-600">{note.body}</p>
+                )}
+              </article>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
+export type CanvasRightDrawerLayoutState = {
+  collapsed: boolean;
+  contentVisible: boolean;
+  notesCollapsed: boolean;
+  expandedWidth: string;
+  isDesktopLayout: boolean;
+};
+
+export type CanvasRightDrawerComposerState = {
+  title: string;
+  body: string;
+  bodyRef: RefObject<HTMLTextAreaElement | null>;
+};
+
+export type CanvasRightDrawerNotesState = {
+  notes: CanvasRightDrawerPersonalNote[];
+  stage: CanvasStage;
+  editingPersonalNoteId: string;
+  draggingPersonalNoteId: string;
+  personalNoteDraftTitle: string;
+  personalNoteDraftBody: string;
+};
+
+export type CanvasRightDrawerLayoutHandlers = {
+  onToggleDrawer: () => void;
+  onStartResize: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onToggleNotesCollapsed: () => void;
+};
+
+export type CanvasRightDrawerComposerHandlers = {
+  onTitleChange: (value: string) => void;
+  onBodyChange: (value: string) => void;
+  onSave: () => void;
+};
+
+export type CanvasRightDrawerNoteHandlers = {
+  onDragStart: (noteId: string) => void;
+  onDragEnd: () => void;
+  onDraftTitleChange: (value: string) => void;
+  onDraftBodyChange: (value: string) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (noteId: string) => void;
+  onStartEdit: (note: CanvasRightDrawerPersonalNote) => void;
+  onDelete: (noteId: string) => void;
+};
+
+type CanvasRightDrawerProps = {
+  layout: CanvasRightDrawerLayoutState;
+  composer: CanvasRightDrawerComposerState;
+  notesState: CanvasRightDrawerNotesState;
+  quickAskSlot: ReactNode;
+  layoutHandlers: CanvasRightDrawerLayoutHandlers;
+  composerHandlers: CanvasRightDrawerComposerHandlers;
+  noteHandlers: CanvasRightDrawerNoteHandlers;
+};
+
+export function CanvasRightDrawer({
+  layout,
+  composer,
+  notesState,
+  quickAskSlot,
+  layoutHandlers,
+  composerHandlers,
+  noteHandlers,
+}: CanvasRightDrawerProps) {
+  const {
+    collapsed,
+    contentVisible,
+    notesCollapsed,
+    expandedWidth,
+    isDesktopLayout,
+  } = layout;
+  const {
+    title: composerTitle,
+    body: composerBody,
+    bodyRef: composerBodyRef,
+  } = composer;
+  const {
+    notes,
+    stage,
+    editingPersonalNoteId,
+    draggingPersonalNoteId,
+    personalNoteDraftTitle,
+    personalNoteDraftBody,
+  } = notesState;
+  const {
+    onToggleDrawer,
+    onStartResize,
+    onToggleNotesCollapsed,
+  } = layoutHandlers;
+  const {
+    onTitleChange,
+    onBodyChange,
+    onSave,
+  } = composerHandlers;
+  const {
+    onDragStart,
+    onDragEnd,
+    onDraftTitleChange,
+    onDraftBodyChange,
+    onCancelEdit,
+    onSaveEdit,
+    onStartEdit,
+    onDelete,
+  } = noteHandlers;
+
+  const bodyClassName = contentVisible
+    ? "imms-drawer-body imms-overlay-scroll box-border h-full max-h-none translate-x-0 overflow-y-auto px-[clamp(1rem,1.6vw,1.35rem)] py-[clamp(1rem,2vh,1.5rem)] opacity-100 xl:overflow-y-auto"
+    : `imms-drawer-body ${collapsed ? "hidden " : ""}pointer-events-none translate-x-8 opacity-0`;
+  const bodyStyle = isDesktopLayout && !collapsed ? { width: expandedWidth } : undefined;
+  const wrapperClassName = `imms-drawer-pane imms-side-panel relative order-2 flex min-h-[min(34vh,420px)] flex-col overflow-visible border-b border-black/10 shadow-[inset_1px_0_0_rgba(0,0,0,0.04)] xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:min-h-0 xl:border-b-0 ${collapsed ? "border border-black/10 bg-[#f7f8fb]" : "bg-white"}`;
+  const toggleClassName = `pointer-events-auto absolute top-1/2 z-50 flex h-[clamp(2.25rem,3vw,2.75rem)] w-[clamp(2.25rem,3vw,2.75rem)] items-center justify-center rounded-full border border-black/10 bg-white text-[#4d4d4d] shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition-all duration-300 hover:bg-[#f5f6f8] ${
+    collapsed ? "left-1/2 -translate-x-1/2 -translate-y-1/2" : "left-0 -translate-x-1/2 -translate-y-1/2"
+  }`;
+  const toggleIconClassName = `h-5 w-5 transition-transform duration-200 ${collapsed ? "" : "rotate-180"}`;
+  const resizeHandleClassName = "absolute left-[-7px] top-0 hidden h-full w-4 cursor-ew-resize xl:block";
+  const bottomPanelClassName = `imms-drawer-pane imms-side-panel imms-right-panel relative flex-1 overflow-hidden bg-transparent min-h-0 max-h-none ${
+    collapsed && !contentVisible
+      ? "hidden pointer-events-none -translate-x-8 px-0 py-0 opacity-0"
+      : "translate-x-0 opacity-100"
+  }`;
+
+  return (
+    <div className={wrapperClassName}>
+      <button
+        type="button"
+        aria-label={collapsed ? "오른쪽 패널 열기" : "오른쪽 패널 접기"}
+        onClick={onToggleDrawer}
+        className={toggleClassName}
+      >
+        <KeyboardDoubleArrowLeftIcon className={toggleIconClassName} />
+      </button>
+      <button
+        type="button"
+        aria-label="오른쪽 패널 너비 조절"
+        onMouseDown={onStartResize}
+        className={resizeHandleClassName}
+      >
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-black/10" />
+      </button>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <RightDrawerPanel
+          className={bottomPanelClassName}
+          bodyClassName={bodyClassName}
+          bodyStyle={bodyStyle}
+        >
+          <RightDrawerNotesPanel
+            collapsed={notesCollapsed}
+            noteCount={notes.length}
+            onToggleCollapsed={onToggleNotesCollapsed}
+          >
+            <PersonalNoteComposer
+              composerTitle={composerTitle}
+              composerBody={composerBody}
+              composerBodyRef={composerBodyRef}
+              onTitleChange={onTitleChange}
+              onBodyChange={onBodyChange}
+              onSave={onSave}
+            />
+          </RightDrawerNotesPanel>
+
+          {notesCollapsed ? null : (
+            <PersonalNoteList
+              notes={notes}
+              stage={stage}
+              editingPersonalNoteId={editingPersonalNoteId}
+              draggingPersonalNoteId={draggingPersonalNoteId}
+              personalNoteDraftTitle={personalNoteDraftTitle}
+              personalNoteDraftBody={personalNoteDraftBody}
+              onDragStartNote={onDragStart}
+              onDragEndNote={onDragEnd}
+              onDraftTitleChange={onDraftTitleChange}
+              onDraftBodyChange={onDraftBodyChange}
+              onCancelEdit={onCancelEdit}
+              onSaveEdit={onSaveEdit}
+              onStartEdit={onStartEdit}
+              onDelete={onDelete}
+            />
+          )}
+        </RightDrawerPanel>
+      </div>
+      {quickAskSlot}
+    </div>
+  );
+}

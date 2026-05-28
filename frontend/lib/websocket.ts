@@ -1,17 +1,25 @@
 type WebSocketMessage = Record<string, unknown>
 type WebSocketMessageHandler = (data: WebSocketMessage) => void
+type QueuedWebSocketMessage = {
+  type: string
+  data: Record<string, unknown>
+}
 
 export class WebSocketClient {
   private ws: WebSocket | null = null
   private reconnectAttempts = 0
-  private reconnectDelay = 2000
-  private maxReconnectDelay = 15000
+  private reconnectDelay = 750
+  private maxReconnectDelay = 8000
   private shouldReconnect = true
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private meetingId: string
   private userId: string
   private messageHandlers: Map<string, WebSocketMessageHandler> = new Map()
   private connectionStateHandler: ((connected: boolean) => void) | null = null
+  private pendingMessages: QueuedWebSocketMessage[] = []
+  private maxPendingMessages = 40
+  private coalescedMessageTypes = new Set(['canvas_sync', 'meeting_goal_sync', 'mic_calibration'])
+  private volatileMessageTypes = new Set(['canvas_node_preview', 'canvas_edit_presence'])
 
   constructor(meetingId: string, userId: string) {
     this.meetingId = meetingId
@@ -44,6 +52,7 @@ export class WebSocketClient {
       console.log('✅ WebSocket connected')
       this.reconnectAttempts = 0
       this.emitConnectionState(true)
+      this.flushPendingMessages()
     }
 
     this.ws.onmessage = (event) => {
@@ -55,7 +64,9 @@ export class WebSocketClient {
           messageType !== 'audio_selection' &&
           messageType !== 'transcript' &&
           messageType !== 'transcript_created' &&
-          messageType !== 'stt_summary_updated'
+          messageType !== 'transcript_persistence_updated' &&
+          messageType !== 'stt_summary_updated' &&
+          messageType !== 'canvas_node_preview'
         ) {
           console.log('📨 WebSocket message:', message)
         }
@@ -117,6 +128,61 @@ export class WebSocketClient {
     this.connectionStateHandler = handler
   }
 
+  private buildMessage(type: string, data: Record<string, unknown>) {
+    return {
+      type,
+      meeting_id: this.meetingId,
+      user_id: this.userId,
+      ...data
+    }
+  }
+
+  private isVolatileMessage(type: string, data: Record<string, unknown>) {
+    if (this.volatileMessageTypes.has(type)) {
+      return true
+    }
+
+    const workspace = data.workspace
+    return (
+      type === 'canvas_sync' &&
+      typeof workspace === 'object' &&
+      workspace !== null &&
+      'sync_scope' in workspace &&
+      (workspace as { sync_scope?: unknown }).sync_scope === 'node_positions'
+    )
+  }
+
+  private queueMessage(type: string, data: Record<string, unknown>) {
+    if (!this.shouldReconnect) {
+      return
+    }
+
+    if (this.isVolatileMessage(type, data)) {
+      return
+    }
+
+    if (this.coalescedMessageTypes.has(type)) {
+      this.pendingMessages = this.pendingMessages.filter((message) => message.type !== type)
+    }
+
+    this.pendingMessages.push({ type, data })
+    if (this.pendingMessages.length > this.maxPendingMessages) {
+      this.pendingMessages = this.pendingMessages.slice(-this.maxPendingMessages)
+    }
+  }
+
+  private flushPendingMessages() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.pendingMessages.length === 0) {
+      return
+    }
+
+    const messages = this.pendingMessages
+    this.pendingMessages = []
+    messages.forEach(({ type, data }) => {
+      this.ws?.send(JSON.stringify(this.buildMessage(type, data)))
+    })
+  }
+
   sendAudioChunk(
     audioBlob: Blob,
     speaker: string,
@@ -140,7 +206,10 @@ export class WebSocketClient {
       combinedChunkCount?: number
       trimmedFromSilence?: boolean
     },
-    meetingGoal?: string,
+    meetingContext?: {
+      meetingGoal?: string
+      meetingGoalContext?: string
+    },
     canvasContext?: {
       stage?: string
       targetId?: string
@@ -155,8 +224,10 @@ export class WebSocketClient {
     const reader = new FileReader()
     reader.onload = () => {
       const base64Audio = (reader.result as string).split(',')[1]
+      const cleanMeetingGoal = meetingContext?.meetingGoal?.trim() || ''
+      const cleanMeetingGoalContext = meetingContext?.meetingGoalContext?.trim() || ''
       
-      const message = {
+      const message: Record<string, unknown> = {
         type: 'audio_chunk',
         meeting_id: this.meetingId,
         user_id: this.userId,
@@ -164,7 +235,6 @@ export class WebSocketClient {
         audio_data: base64Audio,
         audio_mime: audioBlob.type || audioMeta?.mimeType || 'audio/wav',
         audio_filename: audioBlob.type === 'audio/wav' || audioMeta?.mimeType === 'audio/wav' ? 'chunk.wav' : 'chunk.webm',
-        meeting_goal: meetingGoal || '',
         canvas_stage: canvasContext?.stage || 'ideation',
         canvas_target_id: canvasContext?.targetId || '',
         canvas_selected_node_id: canvasContext?.selectedNodeId || '',
@@ -191,6 +261,12 @@ export class WebSocketClient {
             }
           : undefined
       }
+      if (cleanMeetingGoal) {
+        message.meeting_goal = cleanMeetingGoal
+      }
+      if (cleanMeetingGoalContext) {
+        message.meeting_goal_context = cleanMeetingGoalContext
+      }
 
       this.ws?.send(JSON.stringify(message))
     }
@@ -202,18 +278,14 @@ export class WebSocketClient {
 
   sendMessage(type: string, data: Record<string, unknown>) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('⚠️ WebSocket not connected, cannot send message')
+      if (!this.isVolatileMessage(type, data)) {
+        console.warn('⚠️ WebSocket not connected, cannot send message')
+      }
+      this.queueMessage(type, data)
       return
     }
 
-    const message = {
-      type,
-      meeting_id: this.meetingId,
-      user_id: this.userId,
-      ...data
-    }
-
-    this.ws.send(JSON.stringify(message))
+    this.ws.send(JSON.stringify(this.buildMessage(type, data)))
   }
 
   disconnect() {
@@ -226,6 +298,7 @@ export class WebSocketClient {
       this.ws.close()
       this.ws = null
     }
+    this.pendingMessages = []
     this.emitConnectionState(false)
   }
 

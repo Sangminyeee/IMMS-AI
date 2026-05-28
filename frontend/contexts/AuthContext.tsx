@@ -1,7 +1,7 @@
 'use client'
 
 import React, { createContext, useContext, useState, useEffect } from 'react'
-import { logSupabaseFailure, supabase } from '@/lib/supabase'
+import { clearSupabaseAuthStorage, logSupabaseFailure, supabase } from '@/lib/supabase'
 import { User, Session } from '@supabase/supabase-js'
 
 interface AuthContextType {
@@ -21,6 +21,26 @@ function resolveProfileName(user: User, fullName?: string) {
   if (providedName) return providedName
   if (user.email) return user.email.split('@')[0]
   return '사용자'
+}
+
+function isInvalidRefreshTokenError(error: unknown) {
+  const typedError = error as { code?: unknown; error_code?: unknown; message?: unknown; name?: unknown }
+  const combined = [
+    typedError?.code,
+    typedError?.error_code,
+    typedError?.message,
+    typedError?.name,
+    String(error || ''),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  return (
+    combined.includes('refresh_token_not_found') ||
+    combined.includes('refresh token not found') ||
+    combined.includes('invalid refresh token')
+  )
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -72,6 +92,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const handleSessionError = (error: unknown) => {
       if (cancelled) return
       logSupabaseFailure('auth session recovery', error)
+      if (isInvalidRefreshTokenError(error)) {
+        void supabase.auth.signOut({ scope: 'local' }).catch((signOutError) => {
+          logSupabaseFailure('local sign out after invalid refresh token', signOutError)
+        })
+        clearSupabaseAuthStorage()
+      }
       setSession(null)
       setUser(null)
       setLoading(false)
@@ -80,7 +106,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Check active session
     supabase.auth
       .getSession()
-      .then(({ data: { session } }) => applySession(session))
+      .then(({ data: { session }, error }) => {
+        if (error) {
+          handleSessionError(error)
+          return
+        }
+        applySession(session)
+      })
       .catch(handleSessionError)
 
     // Listen for auth changes
@@ -145,9 +177,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     try {
-      await supabase.auth.signOut()
+      const { error } = await supabase.auth.signOut({ scope: 'local' })
+      if (error) {
+        logSupabaseFailure('sign out', error)
+      }
     } catch (error) {
       logSupabaseFailure('sign out', error)
+    } finally {
+      clearSupabaseAuthStorage()
+      setSession(null)
+      setUser(null)
     }
   }
 

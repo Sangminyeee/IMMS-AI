@@ -1,4 +1,4 @@
-export interface TranscriptUtterance {
+﻿export interface TranscriptUtterance {
   speaker: string;
   text: string;
   timestamp: string;
@@ -8,7 +8,6 @@ export interface AgendaItem {
   title: string;
   status: "PROPOSED" | "ACTIVE" | "CLOSING" | "CLOSED";
 }
-
 export interface LlmStatus {
   provider: string;
   model: string;
@@ -135,69 +134,6 @@ export interface MeetingState {
   analysis: AnalysisOutput | null;
 }
 
-export interface LastLlmJsonResponse {
-  ok: boolean;
-  received_at?: string;
-  has_json: boolean;
-  json: Record<string, unknown>;
-}
-
-export interface AgendaMarkdownExportResponse {
-  ok: boolean;
-  filename: string;
-  agenda_count: number;
-  transcript_count: number;
-  markdown: string;
-}
-
-export interface AgendaSnapshotExportResponse {
-  ok: boolean;
-  filename: string;
-  agenda_count: number;
-  transcript_count: number;
-  snapshot: Record<string, unknown>;
-}
-
-export interface AgendaSnapshotImportResponse {
-  ok: boolean;
-  state: MeetingState;
-  import_debug: {
-    filename: string;
-    meeting_goal: string;
-    transcript_count: number;
-    agenda_count: number;
-    reset_state: boolean;
-  };
-}
-
-export interface AudioImportJobStartResponse {
-  ok: boolean;
-  job_id: string;
-  meeting_id: string;
-  filename: string;
-  status: "queued" | "processing" | "completed" | "error" | string;
-  created_at: string;
-}
-
-export interface AudioImportJobStatusResponse {
-  ok: boolean;
-  job_id: string;
-  meeting_id: string;
-  filename: string;
-  status: "queued" | "processing" | "completed" | "error" | string;
-  progress: number;
-  step: string;
-  detail?: string;
-  created_at: string;
-  updated_at: string;
-  transcript_count?: number;
-  speaker_count?: number;
-  used_diarization?: boolean;
-  warning?: string;
-  error?: string;
-  state?: MeetingState | null;
-}
-
 export interface CanvasProblemDefinitionGroup {
   group_id: string;
   parent_group_id?: string;
@@ -245,14 +181,6 @@ export interface CanvasProblemDiscussionItem {
   created_at?: string;
 }
 
-export interface CanvasProblemDefinitionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  groups: CanvasProblemDefinitionGroup[];
-}
-
 export interface CanvasProblemTaxonomyResponse {
   ok: boolean;
   used_llm: boolean;
@@ -270,16 +198,6 @@ export interface CanvasPersonalNote {
   kind: string;
   title: string;
   body: string;
-}
-
-export interface CanvasProblemConclusionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  group_id: string;
-  insight_lens?: string;
-  conclusion: string;
 }
 
 export interface CanvasProblemGroupingRationaleResponse {
@@ -375,37 +293,6 @@ export interface CanvasIdeaAssimilationUtterance {
   speaker: string;
   text: string;
   timestamp: string;
-}
-
-export interface CanvasIdeaAssimilationIdea {
-  id: string;
-  title: string;
-  summary: string;
-  keywords: string[];
-  key_evidence?: string[];
-  refined_utterances?: CanvasRefinedUtterance[];
-  evidence_utterance_ids?: string[];
-  user_edited?: boolean;
-}
-
-export interface CanvasIdeaAssimilationUpdate {
-  action: "merge" | "create";
-  targetIdeaId?: string;
-  title: string;
-  summary: string;
-  keywords: string[];
-  keyEvidence: string[];
-  refinedUtterances?: CanvasRefinedUtterance[];
-  evidenceUtteranceIds: string[];
-  ignoredUtteranceIds: string[];
-}
-
-export interface CanvasIdeaAssimilationResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  updates: CanvasIdeaAssimilationUpdate[];
 }
 
 export interface CanvasCustomGroup {
@@ -544,6 +431,7 @@ export interface CanvasPersonalNotesStateResponse {
 export interface CanvasRealtimeSyncPayload {
   sync_id: string;
   meeting_id: string;
+  sync_scope?: "full" | "node_positions";
   meeting_goal?: string;
   meeting_goal_context?: string;
   updated_by: string;
@@ -557,14 +445,44 @@ export interface CanvasRealtimeSyncPayload {
       summaryBullets?: string[];
     }
   >;
-  canvas_items: CanvasWorkspaceItem[];
+  canvas_items?: CanvasWorkspaceItem[];
   custom_groups?: CanvasCustomGroup[];
-  problem_groups: CanvasWorkspaceProblemGroup[];
+  problem_groups?: CanvasWorkspaceProblemGroup[];
   problem_structure?: CanvasProblemStructureState;
-  solution_topics: CanvasSolutionTopicResponse[];
+  solution_topics?: CanvasSolutionTopicResponse[];
   final_solution_summary?: CanvasFinalSolutionSummary;
-  node_positions: CanvasNodePositionsByStage;
+  node_positions?: CanvasNodePositionsByStage;
   imported_state?: MeetingState | null;
+}
+
+export interface CanvasEditPresencePayload {
+  meeting_id: string;
+  target_type:
+    | "agenda"
+    | "canvas_item"
+    | "problem_group"
+    | "problem_structure_group"
+    | "problem_structure_node"
+    | "solution_topic"
+    | "solution_note"
+    | "summary_document";
+  target_id: string;
+  note_id?: string;
+  status: "start" | "stop";
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface CanvasNodePreviewPayload {
+  meeting_id: string;
+  stage: "ideation" | "problem-definition" | "solution";
+  node_id: string;
+  x: number;
+  y: number;
+  updated_by: string;
+  updated_at: string;
+  drag_id: string;
+  client_seq: number;
 }
 
 export interface CanvasFinalSolutionSummaryItem {
@@ -597,12 +515,14 @@ export interface CanvasFinalSolutionSummary {
   topics: CanvasFinalSolutionSummaryTopic[];
   items: CanvasFinalSolutionSummaryItem[];
   markdown: string;
+  document_blocks?: CanvasSummaryDocumentBlock[];
   document_status?: "empty" | "ready" | "edited" | string;
   generated_at?: string;
   used_llm?: boolean;
   warning?: string;
   source_signature?: string;
   sections?: CanvasSummaryDocumentSection[];
+  structured?: CanvasSummaryStructuredDocument;
 }
 
 export interface CanvasSummaryEvidenceItem {
@@ -622,6 +542,85 @@ export interface CanvasSummaryDocumentSection {
   evidence: CanvasSummaryEvidenceItem[];
 }
 
+export interface CanvasSummaryStructuredIdeaGroup {
+  group_id: string;
+  title: string;
+  items: string[];
+}
+
+export interface CanvasSummaryStructuredOpinion {
+  label: string;
+  text: string;
+}
+
+export interface CanvasSummaryStructuredDiscussionFlow {
+  group_id: string;
+  title: string;
+  opinions: CanvasSummaryStructuredOpinion[];
+  conclusion: string;
+}
+
+export interface CanvasSummaryStructuredFlowSection {
+  section_id: string;
+  group_id: string;
+  title: string;
+  time_range?: string;
+  trigger?: string;
+  narrative: string;
+  key_points: string[];
+  opinions: CanvasSummaryStructuredOpinion[];
+  settlement: string;
+  open_questions: string[];
+}
+
+export interface CanvasSummaryStructuredConclusionGroup {
+  group_id: string;
+  title: string;
+  status: "draft" | "review" | "final" | string;
+  status_label?: string;
+  bullets: string[];
+}
+
+export type CanvasSummaryDocumentBlock =
+  | {
+      id: string;
+      type: "heading";
+      text: string;
+      level?: 1 | 2 | 3;
+    }
+  | {
+      id: string;
+      type: "paragraph";
+      text: string;
+    }
+  | {
+      id: string;
+      type: "bullets";
+      items: string[];
+    }
+  | {
+      id: string;
+      type: "table";
+      title?: string;
+      columns: string[];
+      rows: string[][];
+    };
+
+export interface CanvasSummaryStructuredDocument {
+  meeting_overview: string;
+  attendee_summary?: string;
+  key_summary: string;
+  idea_groups: CanvasSummaryStructuredIdeaGroup[];
+  discussion_flows: CanvasSummaryStructuredDiscussionFlow[];
+  flow_sections: CanvasSummaryStructuredFlowSection[];
+  pending_items: string[];
+  conclusion: {
+    title: string;
+    summary: string;
+    groups: CanvasSummaryStructuredConclusionGroup[];
+  };
+}
+
 export interface CanvasSummaryDocumentResponse {
   ok: boolean;
   used_llm: boolean;
@@ -629,7 +628,9 @@ export interface CanvasSummaryDocumentResponse {
   generated_at: string;
   source_signature: string;
   markdown: string;
+  document_blocks?: CanvasSummaryDocumentBlock[];
   sections: CanvasSummaryDocumentSection[];
+  structured?: CanvasSummaryStructuredDocument;
 }
 
 export interface CanvasQuickAskResponse {
@@ -646,41 +647,24 @@ export interface CanvasIdeationKeywordResponse {
   warning?: string;
   generated_at: string;
   source_signature: string;
+  merge_keywords?: Array<{
+    source: string;
+    target: string;
+    reason?: string;
+  }>;
+  remove_keywords?: string[];
   keywords: Array<{
     text: string;
     count: number;
     related?: string[];
+    kind?: "entity" | "topic" | "relation" | "action" | "off_topic";
+    importance?: number;
+    relevance?: number;
+    off_topic?: boolean;
+    off_topic_reason?: string;
+    anchor?: string;
   }>;
 }
-
-export interface MeetingGoalSuggestionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  topic: string;
-  goal: string;
-  goals?: string[];
-}
-
-export interface CanvasPlacementConfirmResponse {
-  ok: boolean;
-  saved_at: string;
-  draft: {
-    tool: string;
-    ui_x: number;
-    ui_y: number;
-    flow_x: number;
-    flow_y: number;
-    agenda_id?: string;
-    point_id?: string;
-    title?: string;
-    body?: string;
-    saved_at: string;
-  };
-  state: MeetingState;
-}
-
 export interface CanvasSolutionTopicResponse {
   group_id: string;
   topic_no: number;
@@ -706,20 +690,4 @@ export interface CanvasSolutionTopicResponse {
     is_final_candidate?: boolean;
     final_comment?: string;
   }>;
-}
-
-export interface CanvasSolutionStageResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  topics: CanvasSolutionTopicResponse[];
-}
-
-export interface CanvasIdeationSuggestionResponse {
-  ok: boolean;
-  used_llm: boolean;
-  warning?: string;
-  generated_at: string;
-  suggestions: CanvasIdeationSuggestion[];
 }

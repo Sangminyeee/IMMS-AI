@@ -138,106 +138,66 @@ ALTER TABLE meeting_user_states ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
 -- user_profiles: 본인 프로필만 읽기/쓰기
-CREATE POLICY "Users can view own profile" ON user_profiles FOR SELECT USING (auth.uid() = id);
-CREATE POLICY "Users can update own profile" ON user_profiles FOR UPDATE USING (auth.uid() = id);
-CREATE POLICY "Users can insert own profile" ON user_profiles FOR INSERT WITH CHECK (auth.uid() = id);
+DROP POLICY IF EXISTS "Users can view own profile" ON user_profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON user_profiles;
+DROP POLICY IF EXISTS "Users can insert own profile" ON user_profiles;
+CREATE POLICY "Users can view own profile" ON user_profiles FOR SELECT TO authenticated USING ((select auth.uid()) = id);
+CREATE POLICY "Users can update own profile" ON user_profiles FOR UPDATE TO authenticated USING ((select auth.uid()) = id) WITH CHECK ((select auth.uid()) = id);
+CREATE POLICY "Users can insert own profile" ON user_profiles FOR INSERT TO authenticated WITH CHECK ((select auth.uid()) = id);
 
--- meetings: 호스트가 생성, 참여자도 읽기 가능
-CREATE POLICY "Anyone can view meetings they participate in" ON meetings FOR SELECT USING (
-  auth.uid() = host_id OR 
-  EXISTS (SELECT 1 FROM participants WHERE participants.meeting_id = meetings.id AND participants.user_id = auth.uid())
-);
-CREATE POLICY "Users can create meetings" ON meetings FOR INSERT WITH CHECK (auth.uid() = host_id);
-CREATE POLICY "Hosts can update own meetings" ON meetings FOR UPDATE USING (auth.uid() = host_id);
+-- meetings: 로그인한 모든 사용자가 모든 회의를 보고, 본인 host_id로 회의를 만들 수 있음
+DROP POLICY IF EXISTS "Anyone can view meetings they participate in" ON meetings;
+DROP POLICY IF EXISTS "Authenticated users can view all meetings" ON meetings;
+DROP POLICY IF EXISTS "Users can create meetings" ON meetings;
+DROP POLICY IF EXISTS "Hosts can update own meetings" ON meetings;
+DROP POLICY IF EXISTS "Authenticated users can update meetings" ON meetings;
+CREATE POLICY "Authenticated users can view all meetings" ON meetings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Users can create meetings" ON meetings FOR INSERT TO authenticated WITH CHECK ((select auth.uid()) = host_id);
+CREATE POLICY "Authenticated users can update meetings" ON meetings FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
--- participants: 참여자 본인과 호스트가 관리
-CREATE POLICY "Anyone can view participants of their meetings" ON participants FOR SELECT USING (
-  EXISTS (SELECT 1 FROM meetings WHERE meetings.id = participants.meeting_id AND (meetings.host_id = auth.uid() OR participants.user_id = auth.uid()))
-);
-CREATE POLICY "Users can join meetings" ON participants FOR INSERT WITH CHECK (auth.uid() = user_id);
+-- participants: 로그인한 모든 사용자가 참여자 목록을 볼 수 있고, 본인 참여 기록을 만들 수 있음
+DROP POLICY IF EXISTS "Anyone can view participants of their meetings" ON participants;
+DROP POLICY IF EXISTS "Authenticated users can view all participants" ON participants;
+DROP POLICY IF EXISTS "Users can join meetings" ON participants;
+CREATE POLICY "Authenticated users can view all participants" ON participants FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Users can join meetings" ON participants FOR INSERT TO authenticated WITH CHECK ((select auth.uid()) = user_id);
 
--- transcripts: 회의 참여자만 읽기 가능
-CREATE POLICY "Participants can view transcripts" ON transcripts FOR SELECT USING (
-  EXISTS (SELECT 1 FROM participants WHERE participants.meeting_id = transcripts.meeting_id AND participants.user_id = auth.uid())
-);
-CREATE POLICY "Participants can insert transcripts" ON transcripts FOR INSERT WITH CHECK (auth.uid() = user_id);
+-- transcripts: 로그인한 모든 사용자가 모든 회의 전사를 읽을 수 있음
+DROP POLICY IF EXISTS "Participants can view transcripts" ON transcripts;
+DROP POLICY IF EXISTS "Authenticated users can view all transcripts" ON transcripts;
+DROP POLICY IF EXISTS "Participants can insert transcripts" ON transcripts;
+CREATE POLICY "Authenticated users can view all transcripts" ON transcripts FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Participants can insert transcripts" ON transcripts FOR INSERT TO authenticated WITH CHECK ((select auth.uid()) = user_id);
 
--- agendas, decisions, action_items, reports: 회의 참여자만 읽기 가능
-CREATE POLICY "Participants can view agendas" ON agendas FOR SELECT USING (
-  EXISTS (SELECT 1 FROM participants WHERE participants.meeting_id = agendas.meeting_id AND participants.user_id = auth.uid())
-);
+-- agendas, decisions, action_items, reports: 로그인한 모든 사용자가 모든 회의 결과를 읽을 수 있음
+DROP POLICY IF EXISTS "Participants can view agendas" ON agendas;
+DROP POLICY IF EXISTS "Authenticated users can view all agendas" ON agendas;
+CREATE POLICY "Authenticated users can view all agendas" ON agendas FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "Participants can view decisions" ON decisions FOR SELECT USING (
-  EXISTS (SELECT 1 FROM participants WHERE participants.meeting_id = decisions.meeting_id AND participants.user_id = auth.uid())
-);
+DROP POLICY IF EXISTS "Participants can view decisions" ON decisions;
+DROP POLICY IF EXISTS "Authenticated users can view all decisions" ON decisions;
+CREATE POLICY "Authenticated users can view all decisions" ON decisions FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "Participants can view action_items" ON action_items FOR SELECT USING (
-  EXISTS (SELECT 1 FROM participants WHERE participants.meeting_id = action_items.meeting_id AND participants.user_id = auth.uid())
-);
+DROP POLICY IF EXISTS "Participants can view action_items" ON action_items;
+DROP POLICY IF EXISTS "Authenticated users can view all action_items" ON action_items;
+CREATE POLICY "Authenticated users can view all action_items" ON action_items FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "Participants can view reports" ON reports FOR SELECT USING (
-  EXISTS (SELECT 1 FROM participants p JOIN meetings m ON p.meeting_id = m.id WHERE m.id = reports.meeting_id AND p.user_id = auth.uid())
-);
+DROP POLICY IF EXISTS "Participants can view reports" ON reports;
+DROP POLICY IF EXISTS "Authenticated users can view all reports" ON reports;
+CREATE POLICY "Authenticated users can view all reports" ON reports FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "Participants can view runtime states" ON meeting_runtime_states FOR SELECT USING (
-  EXISTS (
-    SELECT 1 FROM meetings
-    WHERE meetings.id = meeting_runtime_states.meeting_id
-      AND (
-        meetings.host_id = auth.uid()
-        OR EXISTS (
-          SELECT 1 FROM participants
-          WHERE participants.meeting_id = meeting_runtime_states.meeting_id
-            AND participants.user_id = auth.uid()
-        )
-      )
-  )
-);
+-- shared runtime state: 로그인한 모든 사용자가 모든 회의 공유 캔버스 상태를 읽을 수 있음
+DROP POLICY IF EXISTS "Participants can view runtime states" ON meeting_runtime_states;
+DROP POLICY IF EXISTS "Authenticated users can view all runtime states" ON meeting_runtime_states;
+CREATE POLICY "Authenticated users can view all runtime states" ON meeting_runtime_states FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "Participants can view own meeting user states" ON meeting_user_states FOR SELECT USING (
-  user_id = auth.uid()
-  AND EXISTS (
-    SELECT 1 FROM meetings
-    WHERE meetings.id = meeting_user_states.meeting_id
-      AND (
-        meetings.host_id = auth.uid()
-        OR EXISTS (
-          SELECT 1 FROM participants
-          WHERE participants.meeting_id = meeting_user_states.meeting_id
-            AND participants.user_id = auth.uid()
-        )
-      )
-  )
-);
-
-CREATE POLICY "Participants can insert own meeting user states" ON meeting_user_states FOR INSERT WITH CHECK (
-  user_id = auth.uid()
-  AND EXISTS (
-    SELECT 1 FROM meetings
-    WHERE meetings.id = meeting_user_states.meeting_id
-      AND (
-        meetings.host_id = auth.uid()
-        OR EXISTS (
-          SELECT 1 FROM participants
-          WHERE participants.meeting_id = meeting_user_states.meeting_id
-            AND participants.user_id = auth.uid()
-        )
-      )
-  )
-);
-
-CREATE POLICY "Participants can update own meeting user states" ON meeting_user_states FOR UPDATE USING (
-  user_id = auth.uid()
-  AND EXISTS (
-    SELECT 1 FROM meetings
-    WHERE meetings.id = meeting_user_states.meeting_id
-      AND (
-        meetings.host_id = auth.uid()
-        OR EXISTS (
-          SELECT 1 FROM participants
-          WHERE participants.meeting_id = meeting_user_states.meeting_id
-            AND participants.user_id = auth.uid()
-        )
-      )
-  )
-);
+-- personal runtime state: 모든 회의 접근은 허용하되, 개인 상태는 본인 것만 읽기/쓰기
+DROP POLICY IF EXISTS "Participants can view own meeting user states" ON meeting_user_states;
+DROP POLICY IF EXISTS "Users can view own meeting user states" ON meeting_user_states;
+DROP POLICY IF EXISTS "Participants can insert own meeting user states" ON meeting_user_states;
+DROP POLICY IF EXISTS "Users can insert own meeting user states" ON meeting_user_states;
+DROP POLICY IF EXISTS "Participants can update own meeting user states" ON meeting_user_states;
+DROP POLICY IF EXISTS "Users can update own meeting user states" ON meeting_user_states;
+CREATE POLICY "Users can view own meeting user states" ON meeting_user_states FOR SELECT TO authenticated USING (user_id = (select auth.uid()));
+CREATE POLICY "Users can insert own meeting user states" ON meeting_user_states FOR INSERT TO authenticated WITH CHECK (user_id = (select auth.uid()));
+CREATE POLICY "Users can update own meeting user states" ON meeting_user_states FOR UPDATE TO authenticated USING (user_id = (select auth.uid())) WITH CHECK (user_id = (select auth.uid()));

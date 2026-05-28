@@ -29,6 +29,16 @@ FUSION_WAIT_MS = 250
 FUSION_STICKY_BONUS = 0.35
 FUSION_MIN_RMS = 0.004
 FUSION_MIN_SPEECH_RATIO = 0.05
+TRANSCRIPT_PERSIST_RETRY_DELAYS = (0.0, 2.0, 6.0, 15.0)
+TRANSCRIPT_STATUS_FINAL = "final"
+TRANSCRIPT_PERSISTENCE_SAVING = "saving"
+TRANSCRIPT_PERSISTENCE_RETRYING = "retrying"
+TRANSCRIPT_PERSISTENCE_PERSISTED = "persisted"
+TRANSCRIPT_PERSISTENCE_FAILED = "persist_failed"
+TRANSCRIPT_EVENT_CREATED = "transcript_created"
+TRANSCRIPT_EVENT_PERSISTENCE_UPDATED = "transcript_persistence_updated"
+TRANSCRIPT_SELECT_FIELDS_WITH_STAGE = "id, meeting_id, user_id, speaker, text, timestamp, created_at, canvas_stage, canvas_target_id"
+TRANSCRIPT_SELECT_FIELDS_BASE = "id, meeting_id, user_id, speaker, text, timestamp, created_at"
 fusion_states: Dict[str, Dict[str, Any]] = {}
 
 
@@ -80,6 +90,7 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
             "flow_summary_buffer": [],
             "flow_summaries": [],
             "flow_summary_seq": 0,
+            "recent_transcripts": [],
             "last_winner_user_id": None,
             "last_winner_bucket": None,
             "device_profiles": {},
@@ -87,6 +98,146 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
         }
         fusion_states[meeting_id] = state
     return state
+
+
+def build_recent_transcript_context(
+    state: Dict[str, Any],
+    *,
+    canvas_stage: str,
+    limit: int = 4,
+) -> list[dict[str, str]]:
+    rows = state.get("recent_transcripts")
+    if not isinstance(rows, list):
+        return []
+    selected: list[dict[str, str]] = []
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        row_stage = str(row.get("canvas_stage") or row.get("stage") or "ideation")
+        if row_stage != canvas_stage:
+            continue
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        selected.append({
+            "speaker": str(row.get("speaker") or "참가자"),
+            "text": text,
+            "timestamp": str(row.get("timestamp") or row.get("created_at") or ""),
+        })
+        if len(selected) >= limit:
+            break
+    selected.reverse()
+    return selected
+
+
+def build_current_focus_context(state: Dict[str, Any], *, canvas_stage: str) -> str:
+    summaries = state.get("flow_summaries")
+    if not isinstance(summaries, list):
+        return ""
+    for item in reversed(summaries):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("stage") or "ideation") != canvas_stage:
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            return text[:160]
+    return ""
+
+
+def build_stt_context_pack(
+    state: Dict[str, Any],
+    *,
+    canvas_stage: str,
+    meeting_goal: str = "",
+    meeting_goal_context: str = "",
+) -> dict[str, Any]:
+    pack: dict[str, Any] = {
+        "stage": canvas_stage,
+        "recent_utterances": build_recent_transcript_context(state, canvas_stage=canvas_stage, limit=4),
+    }
+    clean_goal = meeting_goal.strip()
+    clean_context = meeting_goal_context.strip()
+    if clean_goal:
+        pack["meeting_goal"] = clean_goal
+    if clean_context:
+        pack["meeting_goal_context"] = clean_context
+    current_focus = build_current_focus_context(state, canvas_stage=canvas_stage)
+    if current_focus:
+        pack["current_focus"] = current_focus
+
+    key_terms = state.get("stt_key_terms")
+    if isinstance(key_terms, list):
+        pack["key_terms"] = [str(item).strip() for item in key_terms if str(item).strip()][:40]
+
+    correction_hints = state.get("stt_correction_hints")
+    if isinstance(correction_hints, list):
+        pack["correction_hints"] = [
+            {
+                "raw": str(item.get("raw") or "").strip(),
+                "corrected": str(item.get("corrected") or "").strip(),
+            }
+            for item in correction_hints
+            if isinstance(item, dict) and str(item.get("raw") or "").strip() and str(item.get("corrected") or "").strip()
+        ][-20:]
+
+    return {key: value for key, value in pack.items() if value not in ("", [], {})}
+
+
+def remember_recent_transcript(state: Dict[str, Any], transcript: dict[str, Any], limit: int = 60):
+    rows = state.get("recent_transcripts")
+    if not isinstance(rows, list):
+        rows = []
+    rows.append({
+        "id": str(transcript.get("id") or ""),
+        "speaker": str(transcript.get("speaker") or "참가자"),
+        "text": str(transcript.get("text") or "").strip(),
+        "timestamp": str(transcript.get("timestamp") or transcript.get("created_at") or ""),
+        "canvas_stage": str(transcript.get("canvas_stage") or "ideation"),
+    })
+    state["recent_transcripts"] = rows[-limit:]
+
+
+def remember_stt_refine_feedback(state: Dict[str, Any], transcription: dict[str, Any]):
+    context_terms = transcription.get("context_terms")
+    if isinstance(context_terms, list):
+        terms = [str(item).strip() for item in context_terms if str(item).strip()]
+        current_terms = state.get("stt_key_terms")
+        if not isinstance(current_terms, list):
+            current_terms = []
+        deduped_terms: list[str] = []
+        for item in [*current_terms, *terms]:
+            if item and item not in deduped_terms:
+                deduped_terms.append(item)
+        state["stt_key_terms"] = deduped_terms[-60:]
+
+    corrections = transcription.get("corrections")
+    if isinstance(corrections, list):
+        current_corrections = state.get("stt_correction_hints")
+        if not isinstance(current_corrections, list):
+            current_corrections = []
+        merged = [
+            item
+            for item in current_corrections
+            if isinstance(item, dict) and str(item.get("raw") or "").strip() and str(item.get("corrected") or "").strip()
+        ]
+        for item in corrections:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("raw") or item.get("from") or "").strip()
+            corrected = str(item.get("corrected") or item.get("to") or "").strip()
+            if not raw or not corrected or raw == corrected:
+                continue
+            merged = [
+                existing
+                for existing in merged
+                if not (
+                    str(existing.get("raw") or "").strip() == raw
+                    and str(existing.get("corrected") or "").strip() == corrected
+                )
+            ]
+            merged.append({"raw": raw, "corrected": corrected})
+        state["stt_correction_hints"] = merged[-40:]
 
 
 def iso_to_epoch_ms(value: str | None) -> int:
@@ -281,44 +432,78 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
     audio_filename = str(candidate.get("audio_filename") or ("chunk.wav" if audio_mime.lower().startswith("audio/wav") else "chunk.webm"))
     workspace = latest_canvas_workspace_by_meeting.get(str(candidate.get("meeting_id") or "")) or {}
     meeting_goal = str(candidate.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+    meeting_goal_context = str(candidate.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
+    context_pack = candidate.get("context_pack") if isinstance(candidate.get("context_pack"), dict) else {}
     started_at = time.perf_counter()
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{AI_BACKEND_URL}/api/transcribe-chunk",
-            files={'audio_file': (audio_filename, audio_bytes, audio_mime)},
-            data={'meeting_goal': meeting_goal},
-        )
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-        if response.status_code != 200:
-            print(f"❌ Transcription failed: {response.status_code}")
-            return {
-                "text": "",
-                "status": "http_error",
-                "status_code": response.status_code,
-                "error": response.text[:300],
-                "elapsed_ms": elapsed_ms,
-            }
-        result = response.json()
-        if result.get("error"):
-            print(f"❌ Transcription error: {result.get('error')}")
-        if not (result.get('text') or '').strip():
-            meta = candidate.get("audio_meta") or {}
-            print(
-                "ℹ️ Empty transcription "
-                f"bytes={len(audio_bytes)} "
-                f"mime={audio_mime} "
-                f"rms={meta.get('rms')} speech_ratio={meta.get('speech_ratio')} "
-                f"duration_ms={meta.get('duration_ms')}"
+    print(
+        "[STT][gateway] backend transcription request start "
+        f"url={AI_BACKEND_URL}/api/transcribe-chunk bytes={len(audio_bytes)} "
+        f"mime={audio_mime} filename={audio_filename} "
+        f"meeting_goal={bool(meeting_goal)} meeting_goal_context={bool(meeting_goal_context)} "
+        f"context_pack_keys={list(context_pack.keys())}",
+        flush=True,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{AI_BACKEND_URL}/api/transcribe-chunk",
+                files={'audio_file': (audio_filename, audio_bytes, audio_mime)},
+                data={
+                    'meeting_goal': meeting_goal,
+                    'meeting_goal_context': meeting_goal_context,
+                    'context_pack': json.dumps(context_pack, ensure_ascii=False),
+                },
             )
-        text = (result.get('text') or '').strip()
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        print(f"[STT][gateway] backend transcription request exception elapsed_ms={elapsed_ms} error={exc}", flush=True)
+        raise
+
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    print(
+        "[STT][gateway] backend transcription response "
+        f"status={response.status_code} elapsed_ms={elapsed_ms} body_preview={response.text[:160]!r}",
+        flush=True,
+    )
+    if response.status_code != 200:
+        print(f"❌ Transcription failed: {response.status_code}")
         return {
-            "text": text,
-            "status": "ok" if text else "empty",
+            "text": "",
+            "status": "http_error",
             "status_code": response.status_code,
-            "error": result.get("error") or "",
+            "error": response.text[:300],
             "elapsed_ms": elapsed_ms,
-            "backend_elapsed_ms": result.get("elapsed_ms"),
         }
+    result = response.json()
+    if result.get("error"):
+        print(f"❌ Transcription error: {result.get('error')}")
+    if not (result.get('text') or '').strip():
+        meta = candidate.get("audio_meta") or {}
+        print(
+            "ℹ️ Empty transcription "
+            f"bytes={len(audio_bytes)} "
+            f"mime={audio_mime} "
+            f"rms={meta.get('rms')} speech_ratio={meta.get('speech_ratio')} "
+            f"duration_ms={meta.get('duration_ms')}"
+        )
+    text = (result.get('text') or '').strip()
+    return {
+        "text": text,
+        "raw_text": result.get("raw_text") or text,
+        "refined_text": result.get("refined_text") or text,
+        "refine_used_llm": bool(result.get("refine_used_llm")),
+        "refine_warning": result.get("refine_warning") or "",
+        "refine_confidence": result.get("confidence"),
+        "corrections": result.get("corrections") or [],
+        "uncertain_terms": result.get("uncertain_terms") or [],
+        "context_terms": result.get("context_terms") or [],
+        "context_pack_summary": result.get("context_pack_summary") or {},
+        "status": "ok" if text else "empty",
+        "status_code": response.status_code,
+        "error": result.get("error") or "",
+        "elapsed_ms": elapsed_ms,
+        "backend_elapsed_ms": result.get("elapsed_ms"),
+    }
 
 
 async def request_flow_summary(turns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -414,6 +599,273 @@ async def maybe_generate_flow_summary(meeting_id: str, transcript: dict[str, Any
     })
 
 
+def build_transient_transcript_id(
+    meeting_id: str,
+    user_id: str,
+    bucket_id: int,
+    audio_started_at: Any,
+    chunk_index: Any,
+) -> str:
+    started_key = "".join(ch for ch in str(audio_started_at or "") if ch.isalnum())[-18:]
+    chunk_key = str(chunk_index if chunk_index is not None else "x").replace(".", "-")
+    return f"local-transcript-{meeting_id}-{user_id}-{bucket_id}-{chunk_key}-{started_key or int(time.time() * 1000)}"
+
+
+def build_transcript_record(
+    source: dict[str, Any],
+    *,
+    fallback_id: str,
+    meeting_id: str,
+    user_id: str,
+    speaker: str,
+    text: str,
+    timestamp: str,
+    audio_started_at: str,
+    audio_ended_at: str,
+    chunk_index: Any,
+    canvas_stage: str,
+    canvas_target_id: str,
+    persisted: bool,
+    persistence_status: str,
+) -> dict[str, Any]:
+    return {
+        "id": source.get("id") or fallback_id,
+        "meeting_id": source.get("meeting_id", meeting_id),
+        "user_id": source.get("user_id", user_id),
+        "speaker": source.get("speaker", speaker),
+        "text": source.get("text", text),
+        "timestamp": source.get("timestamp") or timestamp,
+        "created_at": source.get("created_at") or source.get("timestamp") or timestamp,
+        "audio_started_at": audio_started_at,
+        "audio_ended_at": audio_ended_at,
+        "audio_chunk_index": chunk_index,
+        "canvas_stage": source.get("canvas_stage") or canvas_stage,
+        "canvas_target_id": source.get("canvas_target_id") or canvas_target_id,
+        "transcript_status": TRANSCRIPT_STATUS_FINAL,
+        "persisted": persisted,
+        "persistence_status": persistence_status,
+    }
+
+
+def build_transcript_persistence_update_message(
+    *,
+    meeting_id: str,
+    transient_id: str,
+    transcript: dict[str, Any],
+    persisted: bool,
+    persistence_status: str,
+    retry_attempt: int | None = None,
+) -> dict[str, Any]:
+    message = {
+        "type": TRANSCRIPT_EVENT_PERSISTENCE_UPDATED,
+        "meeting_id": meeting_id,
+        "transient_id": transient_id,
+        "persisted": persisted,
+        "persistence_status": persistence_status,
+        "transcript": transcript,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if retry_attempt is not None:
+        message["retry_attempt"] = retry_attempt
+    return message
+
+
+def build_transcript_persistence_record(
+    saved: dict[str, Any] | None,
+    *,
+    transient_id: str,
+    meeting_id: str,
+    user_id: str,
+    speaker: str,
+    text: str,
+    audio_started_at: str,
+    audio_ended_at: str,
+    chunk_index: Any,
+    canvas_stage: str,
+    canvas_target_id: str,
+    persisted: bool,
+    persistence_status: str,
+) -> dict[str, Any]:
+    return build_transcript_record(
+        saved or {},
+        fallback_id=transient_id,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        speaker=speaker,
+        text=text,
+        timestamp=str(audio_started_at),
+        audio_started_at=audio_started_at,
+        audio_ended_at=audio_ended_at,
+        chunk_index=chunk_index,
+        canvas_stage=canvas_stage,
+        canvas_target_id=canvas_target_id,
+        persisted=persisted,
+        persistence_status=persistence_status,
+    )
+
+
+def query_existing_transcript(supabase: Any, insert_payload: dict[str, Any]):
+    try:
+        select_fields = TRANSCRIPT_SELECT_FIELDS_WITH_STAGE
+        response = select_transcript_by_identity(supabase, insert_payload, select_fields)
+    except Exception as exc:
+        message = str(exc)
+        if "canvas_stage" not in message and "canvas_target_id" not in message:
+            raise
+        response = select_transcript_by_identity(supabase, insert_payload, TRANSCRIPT_SELECT_FIELDS_BASE)
+    return response
+
+
+def select_transcript_by_identity(supabase: Any, insert_payload: dict[str, Any], select_fields: str):
+    query = supabase.table('transcripts').select(select_fields)
+    for key in ("meeting_id", "user_id", "speaker", "text", "timestamp"):
+        query = query.eq(key, insert_payload[key])
+    return query.limit(1).execute()
+
+
+async def persist_transcript_with_retry(
+    *,
+    meeting_id: str,
+    user_id: str,
+    speaker: str,
+    text: str,
+    transient_id: str,
+    bucket_id: int,
+    audio_started_at: str,
+    audio_ended_at: str,
+    chunk_index: Any,
+    canvas_stage: str,
+    canvas_target_id: str,
+    transcription: dict[str, Any],
+):
+    last_saved: dict[str, Any] | None = None
+    for attempt, delay in enumerate(TRANSCRIPT_PERSIST_RETRY_DELAYS, start=1):
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        saved = await save_transcript(
+            meeting_id,
+            user_id,
+            speaker,
+            text,
+            transcript_timestamp=str(audio_started_at),
+            canvas_stage=canvas_stage,
+            canvas_target_id=canvas_target_id,
+            fallback_id=transient_id,
+        )
+        last_saved = saved
+        if saved and saved.get("persisted") is not False:
+            persisted_transcript = build_transcript_persistence_record(
+                saved,
+                transient_id=transient_id,
+                meeting_id=meeting_id,
+                user_id=user_id,
+                speaker=speaker,
+                text=text,
+                audio_started_at=audio_started_at,
+                audio_ended_at=audio_ended_at,
+                chunk_index=chunk_index,
+                canvas_stage=canvas_stage,
+                canvas_target_id=canvas_target_id,
+                persisted=True,
+                persistence_status=TRANSCRIPT_PERSISTENCE_PERSISTED,
+            )
+            print(
+                f"[STT][gateway] transcript persisted bucket_id={bucket_id} "
+                f"transient_id={transient_id} transcript_id={persisted_transcript.get('id')} attempt={attempt}",
+                flush=True,
+            )
+            await send_stt_debug(
+                meeting_id,
+                user_id,
+                "transcript_saved",
+                bucket_id=bucket_id,
+                text_preview=text[:120],
+                text_length=len(text),
+                transcript_id=persisted_transcript.get("id"),
+                transient_id=transient_id,
+                elapsed_ms=transcription.get("elapsed_ms"),
+                backend_elapsed_ms=transcription.get("backend_elapsed_ms"),
+            )
+            await broadcast_to_meeting(
+                meeting_id,
+                build_transcript_persistence_update_message(
+                    meeting_id=meeting_id,
+                    transient_id=transient_id,
+                    persisted=True,
+                    persistence_status=TRANSCRIPT_PERSISTENCE_PERSISTED,
+                    transcript=persisted_transcript,
+                ),
+            )
+            return
+
+        if attempt < len(TRANSCRIPT_PERSIST_RETRY_DELAYS):
+            await broadcast_to_meeting(
+                meeting_id,
+                build_transcript_persistence_update_message(
+                    meeting_id=meeting_id,
+                    transient_id=transient_id,
+                    persisted=False,
+                    persistence_status=TRANSCRIPT_PERSISTENCE_RETRYING,
+                    retry_attempt=attempt,
+                    transcript=build_transcript_persistence_record(
+                        last_saved,
+                        transient_id=transient_id,
+                        meeting_id=meeting_id,
+                        user_id=user_id,
+                        speaker=speaker,
+                        text=text,
+                        audio_started_at=audio_started_at,
+                        audio_ended_at=audio_ended_at,
+                        chunk_index=chunk_index,
+                        canvas_stage=canvas_stage,
+                        canvas_target_id=canvas_target_id,
+                        persisted=False,
+                        persistence_status=TRANSCRIPT_PERSISTENCE_RETRYING,
+                    ),
+                ),
+            )
+
+    print(
+        f"[STT][gateway] transcript persist failed bucket_id={bucket_id} "
+        f"transient_id={transient_id} attempts={len(TRANSCRIPT_PERSIST_RETRY_DELAYS)}",
+        flush=True,
+    )
+    await send_stt_debug(
+        meeting_id,
+        user_id,
+        "transcript_save_failed",
+        bucket_id=bucket_id,
+        text_preview=text[:120],
+        text_length=len(text),
+        transient_id=transient_id,
+    )
+    await broadcast_to_meeting(
+        meeting_id,
+        build_transcript_persistence_update_message(
+            meeting_id=meeting_id,
+            transient_id=transient_id,
+            persisted=False,
+            persistence_status=TRANSCRIPT_PERSISTENCE_FAILED,
+            transcript=build_transcript_persistence_record(
+                last_saved,
+                transient_id=transient_id,
+                meeting_id=meeting_id,
+                user_id=user_id,
+                speaker=speaker,
+                text=text,
+                audio_started_at=audio_started_at,
+                audio_ended_at=audio_ended_at,
+                chunk_index=chunk_index,
+                canvas_stage=canvas_stage,
+                canvas_target_id=canvas_target_id,
+                persisted=False,
+                persistence_status=TRANSCRIPT_PERSISTENCE_FAILED,
+            ),
+        ),
+    )
+
+
 async def transcribe_and_broadcast_winner(
     meeting_id: str,
     bucket_id: int,
@@ -426,6 +878,23 @@ async def transcribe_and_broadcast_winner(
     chunk_index = audio_meta.get("chunk_index")
     canvas_stage = str(winner.get("canvas_stage") or "ideation")
     canvas_target_id = str(winner.get("canvas_target_id") or "")
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id) or {}
+    meeting_goal = str(winner.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+    meeting_goal_context = str(winner.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
+    context_pack = build_stt_context_pack(
+        state,
+        canvas_stage=canvas_stage,
+        meeting_goal=meeting_goal,
+        meeting_goal_context=meeting_goal_context,
+    )
+    winner["context_pack"] = context_pack
+
+    print(
+        f"[STT][gateway] transcribe winner start meeting_id={meeting_id} bucket_id={bucket_id} "
+        f"user_id={winner.get('user_id')} stage={canvas_stage} target={canvas_target_id} "
+        f"context_pack_keys={list(context_pack.keys())} audio_meta={audio_meta}",
+        flush=True,
+    )
 
     await send_stt_debug(
         meeting_id,
@@ -435,6 +904,11 @@ async def transcribe_and_broadcast_winner(
         bytes=len(winner.get("audio_bytes") or b""),
         audio_mime=winner.get("audio_mime") or winner.get("audio_meta", {}).get("mime_type") or "audio/wav",
         audio_meta=audio_meta,
+        context_pack_summary={
+            "recent_utterance_count": len(context_pack.get("recent_utterances") or []),
+            "key_term_count": len(context_pack.get("key_terms") or []),
+            "has_current_focus": bool(context_pack.get("current_focus")),
+        },
         fusion_wait_ms=FUSION_WAIT_MS,
     )
     await send_stt_debug(
@@ -446,6 +920,15 @@ async def transcribe_and_broadcast_winner(
     )
     transcription = await transcribe_selected_chunk(winner)
     transcribed_text = transcription.get("text") or ""
+    raw_transcribed_text = transcription.get("raw_text") or transcribed_text
+    print(
+        f"[STT][gateway] transcribe winner result bucket_id={bucket_id} "
+        f"status={transcription.get('status')} raw_chars={len(raw_transcribed_text)} "
+        f"refined_chars={len(transcribed_text)} refine_used_llm={bool(transcription.get('refine_used_llm'))} "
+        f"confidence={transcription.get('refine_confidence')} "
+        f"elapsed_ms={transcription.get('elapsed_ms')} backend_elapsed_ms={transcription.get('backend_elapsed_ms')}",
+        flush=True,
+    )
     if not transcribed_text:
         await send_stt_debug(
             meeting_id,
@@ -462,57 +945,72 @@ async def transcribe_and_broadcast_winner(
         )
         return
 
-    saved_transcript = await save_transcript(
+    transient_id = build_transient_transcript_id(
         meeting_id,
         winner["user_id"],
-        winner["speaker"],
-        transcribed_text,
-        transcript_timestamp=str(audio_started_at),
+        bucket_id,
+        audio_started_at,
+        chunk_index,
+    )
+    finalized_transcript = build_transcript_record(
+        {},
+        fallback_id=transient_id,
+        meeting_id=meeting_id,
+        user_id=winner["user_id"],
+        speaker=winner["speaker"],
+        text=transcribed_text,
+        timestamp=str(audio_started_at),
+        audio_started_at=audio_started_at,
+        audio_ended_at=audio_ended_at,
+        chunk_index=chunk_index,
         canvas_stage=canvas_stage,
         canvas_target_id=canvas_target_id,
+        persisted=False,
+        persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
     )
-    if not saved_transcript:
-        await send_stt_debug(
-            meeting_id,
-            winner["user_id"],
-            "transcript_save_failed",
-            bucket_id=bucket_id,
-            text_preview=transcribed_text[:120],
-            text_length=len(transcribed_text),
-        )
-        return
+    print(
+        f"[STT][gateway] transcript finalized bucket_id={bucket_id} transient_id={transient_id} "
+        f"chars={len(transcribed_text)}",
+        flush=True,
+    )
     await send_stt_debug(
         meeting_id,
         winner["user_id"],
-        "transcript_saved",
+        "transcript_finalized",
         bucket_id=bucket_id,
         text_preview=transcribed_text[:120],
         text_length=len(transcribed_text),
-        transcript_id=saved_transcript.get("id"),
+        transcript_id=transient_id,
+        persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
         elapsed_ms=transcription.get("elapsed_ms"),
         backend_elapsed_ms=transcription.get("backend_elapsed_ms"),
+        raw_text_preview=raw_transcribed_text[:120],
+        refine_used_llm=bool(transcription.get("refine_used_llm")),
+        refine_warning=transcription.get("refine_warning") or "",
+        refine_confidence=transcription.get("refine_confidence"),
+        corrections=transcription.get("corrections") or [],
+        uncertain_terms=transcription.get("uncertain_terms") or [],
+        context_pack_summary=transcription.get("context_pack_summary") or {},
     )
     transcript_message = {
-        'type': 'transcript_created',
+        'type': TRANSCRIPT_EVENT_CREATED,
         'meeting_id': meeting_id,
-        'transcript': {
-            'id': saved_transcript.get("id"),
-            'meeting_id': saved_transcript.get("meeting_id", meeting_id),
-            'user_id': saved_transcript.get("user_id", winner["user_id"]),
-            'speaker': saved_transcript.get("speaker", winner["speaker"]),
-            'text': saved_transcript.get("text", transcribed_text),
-            'timestamp': saved_transcript.get("timestamp") or audio_started_at,
-            'created_at': saved_transcript.get("created_at") or saved_transcript.get("timestamp"),
-            'audio_started_at': audio_started_at,
-            'audio_ended_at': audio_ended_at,
-            'audio_chunk_index': chunk_index,
-            'canvas_stage': saved_transcript.get("canvas_stage") or canvas_stage,
-            'canvas_target_id': saved_transcript.get("canvas_target_id") or canvas_target_id,
-        },
-        'canvas_stage': saved_transcript.get("canvas_stage") or canvas_stage,
-        'canvas_target_id': saved_transcript.get("canvas_target_id") or canvas_target_id,
+        'transcript': finalized_transcript,
+        'canvas_stage': canvas_stage,
+        'canvas_target_id': canvas_target_id,
+        'transcript_status': TRANSCRIPT_STATUS_FINAL,
+        'persisted': False,
+        'persistence_status': TRANSCRIPT_PERSISTENCE_SAVING,
         'stt_elapsed_ms': transcription.get("elapsed_ms"),
         'backend_elapsed_ms': transcription.get("backend_elapsed_ms"),
+        'raw_text': raw_transcribed_text,
+        'refined_text': transcription.get("refined_text") or transcribed_text,
+        'refine_used_llm': bool(transcription.get("refine_used_llm")),
+        'refine_warning': transcription.get("refine_warning") or "",
+        'refine_confidence': transcription.get("refine_confidence"),
+        'corrections': transcription.get("corrections") or [],
+        'uncertain_terms': transcription.get("uncertain_terms") or [],
+        'context_pack_summary': transcription.get("context_pack_summary") or {},
         'audio_meta': audio_meta,
         'fusion': {
             'bucket_id': bucket_id,
@@ -524,7 +1022,25 @@ async def transcribe_and_broadcast_winner(
         'timestamp': datetime.utcnow().isoformat(),
     }
     await broadcast_to_meeting(meeting_id, transcript_message)
-    asyncio.create_task(maybe_generate_flow_summary(meeting_id, saved_transcript))
+    remember_recent_transcript(state, finalized_transcript)
+    remember_stt_refine_feedback(state, transcription)
+    asyncio.create_task(maybe_generate_flow_summary(meeting_id, finalized_transcript))
+    asyncio.create_task(
+        persist_transcript_with_retry(
+            meeting_id=meeting_id,
+            user_id=winner["user_id"],
+            speaker=winner["speaker"],
+            text=transcribed_text,
+            transient_id=transient_id,
+            bucket_id=bucket_id,
+            audio_started_at=audio_started_at,
+            audio_ended_at=audio_ended_at,
+            chunk_index=chunk_index,
+            canvas_stage=canvas_stage,
+            canvas_target_id=canvas_target_id,
+            transcription=transcription,
+        )
+    )
 
     async with state["lock"]:
         state["last_winner_user_id"] = winner["user_id"]
@@ -541,6 +1057,12 @@ async def flush_audio_bucket(meeting_id: str, bucket_id: int):
         state["tasks"].pop(bucket_id, None)
         sticky_user_id = state.get("last_winner_user_id")
         sticky_bucket = state.get("last_winner_bucket")
+
+    print(
+        f"[STT][gateway] flush bucket meeting_id={meeting_id} bucket_id={bucket_id} "
+        f"candidate_count={len(candidates)} sticky_user_id={sticky_user_id} sticky_bucket={sticky_bucket}",
+        flush=True,
+    )
 
     if not candidates:
         return
@@ -570,6 +1092,12 @@ async def flush_audio_bucket(meeting_id: str, bucket_id: int):
             ],
         )
         return
+
+    print(
+        f"[STT][gateway] bucket winner user_id={winner.get('user_id')} speaker={winner.get('speaker')} "
+        f"bytes={len(winner.get('audio_bytes') or b'')} audio_meta={winner.get('audio_meta') or {}}",
+        flush=True,
+    )
 
     await send_stt_debug(
         meeting_id,
@@ -602,6 +1130,13 @@ async def queue_audio_for_fusion(meeting_id: str, candidate: dict[str, Any]):
     async with state["lock"]:
         candidate["device_profile"] = dict(state["device_profiles"].get(candidate["user_id"], {}))
         state["buckets"].setdefault(bucket_id, []).append(candidate)
+        print(
+            f"[STT][gateway] queue audio meeting_id={meeting_id} bucket_id={bucket_id} "
+            f"user_id={candidate.get('user_id')} speaker={candidate.get('speaker')} "
+            f"bytes={len(candidate.get('audio_bytes') or b'')} queued={len(state['buckets'].get(bucket_id, []))} "
+            f"audio_meta={candidate.get('audio_meta') or {}}",
+            flush=True,
+        )
         if bucket_id not in state["tasks"]:
             state["tasks"][bucket_id] = asyncio.create_task(flush_audio_bucket(meeting_id, bucket_id))
 
@@ -694,24 +1229,40 @@ async def save_transcript(
     transcript_timestamp: str | None = None,
     canvas_stage: str = "ideation",
     canvas_target_id: str = "",
+    fallback_id: str = "",
 ) -> dict[str, Any] | None:
     """전사 결과를 Supabase에 저장"""
     normalized_text = (text or "").strip()
     if not normalized_text:
         return None
+    transcript_timestamp = transcript_timestamp or datetime.utcnow().isoformat()
+    insert_payload = {
+        'meeting_id': meeting_id,
+        'user_id': user_id,
+        'speaker': speaker,
+        'text': normalized_text,
+        'timestamp': transcript_timestamp,
+        'canvas_stage': canvas_stage,
+        'canvas_target_id': canvas_target_id,
+    }
 
     try:
         supabase = get_supabase()
-        transcript_timestamp = transcript_timestamp or datetime.utcnow().isoformat()
-        insert_payload = {
-            'meeting_id': meeting_id,
-            'user_id': user_id,
-            'speaker': speaker,
-            'text': normalized_text,
-            'timestamp': transcript_timestamp,
-            'canvas_stage': canvas_stage,
-            'canvas_target_id': canvas_target_id,
-        }
+        existing_response = query_existing_transcript(supabase, insert_payload)
+        existing_rows = existing_response.data or []
+        if existing_rows and isinstance(existing_rows[0], dict):
+            print(
+                f"[STT][gateway] duplicate transcript skipped id={existing_rows[0].get('id')} "
+                f"meeting_id={meeting_id} user_id={user_id}",
+                flush=True,
+            )
+            return {
+                **existing_rows[0],
+                "canvas_stage": existing_rows[0].get("canvas_stage") or canvas_stage,
+                "canvas_target_id": existing_rows[0].get("canvas_target_id") or canvas_target_id,
+                "persisted": True,
+            }
+
         try:
             response = supabase.table('transcripts').insert(insert_payload).execute()
         except Exception as exc:
@@ -731,11 +1282,22 @@ async def save_transcript(
                 **rows[0],
                 "canvas_stage": canvas_stage,
                 "canvas_target_id": canvas_target_id,
+                "persisted": True,
             }
-        return insert_payload
+        return {
+            **insert_payload,
+            "id": fallback_id or f"transcript-{meeting_id}-{user_id}-{int(time.time() * 1000)}",
+            "persisted": True,
+        }
     except Exception as e:
         print(f"❌ Failed to save transcript: {e}")
-    return None
+    fallback_id = fallback_id or f"local-transcript-{meeting_id}-{user_id}-{int(time.time() * 1000)}"
+    print(f"[STT][gateway] transcript persistence deferred id={fallback_id}", flush=True)
+    return {
+        **insert_payload,
+        "id": fallback_id,
+        "persisted": False,
+    }
 
 
 @router.websocket("/ws/{meeting_id}")
@@ -861,6 +1423,7 @@ async def websocket_endpoint(
                 audio_filename = str(message.get('audio_filename') or ("chunk.wav" if audio_mime.lower().startswith("audio/wav") else "chunk.webm"))
                 workspace = latest_canvas_workspace_by_meeting.get(meeting_id) or {}
                 meeting_goal = str(message.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
+                meeting_goal_context = str(message.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
                 canvas_stage = str(message.get("canvas_stage") or workspace.get("stage") or "ideation").strip() or "ideation"
                 if canvas_stage not in {"ideation", "problem-definition", "solution"}:
                     canvas_stage = "ideation"
@@ -886,6 +1449,7 @@ async def websocket_endpoint(
                         "audio_filename": audio_filename,
                         "audio_meta": audio_meta,
                         "meeting_goal": meeting_goal,
+                        "meeting_goal_context": meeting_goal_context,
                         "canvas_stage": canvas_stage,
                         "canvas_target_id": canvas_target_id,
                         "started_at_ms": iso_to_epoch_ms(audio_meta.get("started_at") or message.get("timestamp")),
@@ -951,6 +1515,40 @@ async def websocket_endpoint(
                 if not isinstance(workspace, dict):
                     continue
 
+                sync_scope = str(workspace.get('sync_scope') or 'full').strip()
+                if sync_scope == 'node_positions':
+                    node_positions = copy.deepcopy(workspace.get('node_positions') or {})
+                    stage = str(workspace.get('stage') or 'ideation').strip()
+                    if stage not in {'ideation', 'problem-definition', 'solution'}:
+                        stage = 'ideation'
+
+                    current_workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+                    if not isinstance(current_workspace, dict):
+                        current_workspace = {'meeting_id': meeting_id}
+                    current_workspace = copy.deepcopy(current_workspace)
+                    current_workspace['meeting_id'] = meeting_id
+                    current_workspace['stage'] = stage
+                    current_workspace['node_positions'] = node_positions
+                    latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(current_workspace)
+
+                    sync_message = {
+                        'type': 'canvas_sync',
+                        'data': {
+                            'sync_id': str(workspace.get('sync_id') or f"node-positions-{int(datetime.utcnow().timestamp() * 1000)}"),
+                            'meeting_id': meeting_id,
+                            'sync_scope': 'node_positions',
+                            'updated_by': user_id,
+                            'updated_at': datetime.utcnow().isoformat(),
+                            'stage': stage,
+                            'node_positions': node_positions,
+                        },
+                        'meeting_id': meeting_id,
+                        'user_id': user_id,
+                        'timestamp': datetime.utcnow().isoformat(),
+                    }
+                    await broadcast_to_meeting(meeting_id, sync_message, exclude_user=user_id)
+                    continue
+
                 workspace['meeting_id'] = meeting_id
                 latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
                 sync_message = {
@@ -965,6 +1563,71 @@ async def websocket_endpoint(
                     persist_canvas_workspace(meeting_id, workspace),
                     broadcast_to_meeting(meeting_id, sync_message, exclude_user=user_id),
                 )
+
+            elif message_type == 'canvas_node_preview':
+                node_id = str(message.get('node_id') or '').strip()
+                if not node_id:
+                    continue
+
+                stage = str(message.get('stage') or 'ideation').strip()
+                if stage not in {'ideation', 'problem-definition', 'solution'}:
+                    stage = 'ideation'
+
+                try:
+                    x = float(message.get('x') or 0)
+                    y = float(message.get('y') or 0)
+                except (TypeError, ValueError):
+                    continue
+
+                try:
+                    client_seq = int(message.get('client_seq') or 0)
+                except (TypeError, ValueError):
+                    client_seq = 0
+
+                await broadcast_to_meeting(meeting_id, {
+                    'type': 'canvas_node_preview',
+                    'meeting_id': meeting_id,
+                    'stage': stage,
+                    'node_id': node_id,
+                    'x': x,
+                    'y': y,
+                    'updated_by': user_id,
+                    'updated_at': datetime.utcnow().isoformat(),
+                    'drag_id': str(message.get('drag_id') or ''),
+                    'client_seq': client_seq,
+                }, exclude_user=user_id)
+
+            elif message_type == 'canvas_edit_presence':
+                target_type = str(message.get('target_type') or '').strip()
+                if target_type not in {
+                    'agenda',
+                    'canvas_item',
+                    'problem_group',
+                    'problem_structure_group',
+                    'problem_structure_node',
+                    'solution_topic',
+                    'solution_note',
+                }:
+                    continue
+
+                target_id = str(message.get('target_id') or '').strip()
+                if not target_id:
+                    continue
+
+                status = str(message.get('status') or 'start').strip()
+                if status not in {'start', 'stop'}:
+                    status = 'start'
+
+                await broadcast_to_meeting(meeting_id, {
+                    'type': 'canvas_edit_presence',
+                    'meeting_id': meeting_id,
+                    'target_type': target_type,
+                    'target_id': target_id,
+                    'note_id': str(message.get('note_id') or '').strip(),
+                    'status': status,
+                    'updated_by': user_id,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }, exclude_user=user_id)
 
             elif message_type == 'meeting_goal_sync':
                 meeting_goal = str(message.get("meeting_goal") or "").strip()
