@@ -38,19 +38,23 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-left-pad": "clamp(38px, 1.979vw, 51px)",
   "--canvas-left-content": "clamp(243px, 12.656vw, 324px)",
   "--canvas-left-logo-top": "clamp(34px, 3.148vh, 45px)",
-  "--canvas-left-title-gap": "clamp(22px, 2.037vh, 29px)",
+  "--canvas-left-title-gap": "clamp(11px, 1.019vh, 15px)",
   "--canvas-left-keyword-gap": "clamp(12px, 1.111vh, 16px)",
   "--canvas-left-divider": "clamp(159px, 14.722vh, 212px)",
   "--canvas-left-content-top": "clamp(171px, 15.833vh, 228px)",
   "--canvas-note-composer-pt": "clamp(16px, 1.481vh, 21px)",
   "--canvas-note-composer-pb": "clamp(26px, 2.407vh, 35px)",
   "--canvas-note-list-pt": "clamp(29px, 2.685vh, 39px)",
-  "--canvas-note-card-gap": "clamp(12px, 1.111vh, 16px)",
+  "--canvas-note-card-gap": "clamp(15px, 1.389vh, 20px)",
   "--canvas-input-height": "clamp(33px, 3.056vh, 44px)",
   "--canvas-textarea-height": "clamp(85px, 7.87vh, 113px)",
   "--canvas-right-pad": "clamp(23px, 1.198vw, 31px)",
   "--canvas-right-header": "clamp(76px, 7.037vh, 101px)",
-  "--canvas-right-stage-bottom": "clamp(291px, 26.944vh, 388px)",
+  "--canvas-right-stage-bottom": "clamp(306px, 28.333vh, 408px)",
+  "--canvas-right-current-stage-top": "calc(var(--canvas-right-stage-bottom) + 20px)",
+  "--canvas-right-current-stage-height": "clamp(112px, 10.37vh, 149px)",
+  "--canvas-right-problem-ai-title-top": "calc(var(--canvas-right-current-stage-top) + var(--canvas-right-current-stage-height) + 20px)",
+  "--canvas-right-problem-ai-status-top": "calc(var(--canvas-right-problem-ai-title-top) + 22px)",
   "--canvas-right-ai-title-top": "clamp(332px, 30.741vh, 443px)",
   "--canvas-right-ai-status-top": "clamp(354px, 32.778vh, 472px)",
   "--canvas-right-assistant-top": "clamp(605px, 56.019vh, 807px)",
@@ -405,8 +409,10 @@ function PersonalNoteComposerPanel({
   return (
     <section className="border-b border-[#dfdfdf] pb-[var(--canvas-note-composer-pb)] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-composer-pt)]">
       <div className="w-[var(--canvas-left-content)]">
-        <p className="text-[10px] font-medium leading-[11.5px] tracking-[-0.25px] text-black/50">Personal note</p>
-        <h3 className="mt-[2px] text-[14px] font-bold leading-[14.5px] tracking-[-0.35px] text-[#111]">개인 노트</h3>
+        <div className="flex flex-col gap-[3px]">
+          <p className="text-[10px] font-medium leading-[11.5px] tracking-[-0.25px] text-black/50">Personal note</p>
+          <h3 className="text-[14px] font-bold leading-[14.5px] tracking-[-0.35px] text-[#111]">개인 노트</h3>
+        </div>
         <div className="mt-[11px] space-y-[8.7px]">
           <input
             value={composerTitle}
@@ -643,7 +649,7 @@ function CurrentProblemDefinitionStagePanel({
   const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
 
   return (
-    <section className="absolute left-[var(--canvas-right-pad)] right-[clamp(17px,0.885vw,23px)] top-[clamp(308px,28.519vh,411px)] z-10 text-left">
+    <section className="absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] top-[var(--canvas-right-current-stage-top)] z-10 text-left">
       <div className="flex items-start gap-[12px]">
         <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
         <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 · 1단계</p>
@@ -694,6 +700,16 @@ function RightAiPanel({
   const recentMessages = quickAskMessages.slice(-4);
   const showProblemStagePanel =
     header.view.stage === "problem-definition" && (problem.problemDefinitionPhase as ProblemDefinitionPhase) !== "structure";
+  const stageSectionBottom = "var(--canvas-right-stage-bottom)";
+  const aiGuideTitleTopClass = showProblemStagePanel
+    ? "top-[var(--canvas-right-problem-ai-title-top)]"
+    : "top-[var(--canvas-right-ai-title-top)]";
+  const aiGuideStatusTopClass = showProblemStagePanel
+    ? "top-[var(--canvas-right-problem-ai-status-top)]"
+    : "top-[var(--canvas-right-ai-status-top)]";
+  const assistantTopClass = showProblemStagePanel
+    ? "top-[clamp(682px,63.148vh,909px)]"
+    : "top-[var(--canvas-right-assistant-top)]";
 
   return (
     <aside className="relative h-full min-h-0 overflow-hidden border-l border-[#cecccc] bg-white">
@@ -737,7 +753,10 @@ function RightAiPanel({
         </button>
       </div>
 
-      <div className="absolute inset-x-0 top-[var(--canvas-right-header)] z-10 h-[calc(var(--canvas-right-stage-bottom)-var(--canvas-right-header))] border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] pt-[21px]">
+      <div
+        className="absolute inset-x-0 top-[var(--canvas-right-header)] z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] pt-[21px]"
+        style={{ height: `calc(${stageSectionBottom} - var(--canvas-right-header))` }}
+      >
         <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">회의 단계 이동</h3>
         <div className="mt-[21px]">
           <StageSteps
@@ -757,9 +776,7 @@ function RightAiPanel({
       ) : null}
 
       <div
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${
-          showProblemStagePanel ? "top-[clamp(458px,42.407vh,611px)]" : "top-[var(--canvas-right-ai-title-top)]"
-        }`}
+        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${aiGuideTitleTopClass}`}
       >
         <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
           AI 가이드
@@ -767,9 +784,7 @@ function RightAiPanel({
         </h3>
       </div>
       <p
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${
-          showProblemStagePanel ? "top-[clamp(480px,44.444vh,640px)]" : "top-[var(--canvas-right-ai-status-top)]"
-        }`}
+        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${aiGuideStatusTopClass}`}
       >
         {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중"}
       </p>
@@ -789,11 +804,7 @@ function RightAiPanel({
         </div>
       ) : null}
 
-      <div
-        className={`absolute inset-x-0 z-10 text-center ${
-          showProblemStagePanel ? "top-[clamp(682px,63.148vh,909px)]" : "top-[var(--canvas-right-assistant-top)]"
-        }`}
-      >
+      <div className={`absolute inset-x-0 z-10 text-center ${assistantTopClass}`}>
         <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
         <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
           아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />

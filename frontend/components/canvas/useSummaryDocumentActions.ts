@@ -11,7 +11,7 @@ import {
   areSummaryDocumentBlocksEqual,
   summaryDocumentBlocksToMarkdown,
 } from "@/components/canvas/summaryDocumentHelpers";
-import { generateCanvasSummaryDocument, saveCanvasWorkspacePatch } from "@/lib/api";
+import { generateCanvasSummaryConclusion, generateCanvasSummaryDocument, saveCanvasWorkspacePatch } from "@/lib/api";
 import type {
   CanvasFinalSolutionSummary,
   CanvasEditPresencePayload,
@@ -415,11 +415,121 @@ export function useSummaryDocumentActions({
 
   const handleRegenerateSummaryDocument = useCallback(async () => {
     if (busy || summaryDocumentPending) {
-      setActivityMessage("요약 문서 생성 작업이 이미 진행 중입니다.");
+      setActivityMessage("결론 문서 생성 작업이 이미 진행 중입니다.");
       return;
     }
-    await handleGenerateSummaryDocument({ force: true });
-  }, [busy, handleGenerateSummaryDocument, setActivityMessage, summaryDocumentPending]);
+
+    const eligibleGroups = getSummaryEligibleStructureGroups(problemStructureGroups);
+    setStage("solution");
+    setLeftPanelTab("detail");
+    setSelectedProblemGroupId("");
+    setSelectedNodeId("");
+
+    if (eligibleGroups.length === 0) {
+      setActivityMessage("결론 문서에 포함할 2단계 구조화 그룹이 없습니다.");
+      return;
+    }
+
+    setSummaryDocumentPending(true);
+    setBusy(true);
+    try {
+      const result = await generateCanvasSummaryConclusion({
+        meeting_id: meetingId,
+        meeting_topic: meetingTopicForAi,
+        regenerate_nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        current_summary: finalSummaryDocument,
+        groups: eligibleGroups.map((group) => ({
+          id: group.id,
+          title: group.title,
+          node_ids: group.nodeIds,
+          rationale: group.rationale,
+          status: group.status,
+          created_by: group.createdBy,
+        })),
+        nodes: problemStructureNodes.map((node) => ({
+          id: node.id,
+          source_group_id: node.sourceGroupId,
+          title: node.title,
+          body: node.body,
+          status: node.status,
+          depth: node.depth,
+        })),
+      });
+      const nextFinalSummary = buildSummaryDocumentFromResponse({
+        markdown: result.markdown || "",
+        documentBlocks: result.document_blocks || [],
+        sections: result.sections || finalSummaryDocument.sections || [],
+        generatedAt: result.generated_at,
+        usedLlm: result.used_llm,
+        warning: result.warning,
+        sourceSignature:
+          result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
+        structured: result.structured || finalSummaryDocument.structured,
+      });
+
+      setFinalSummaryDocument(nextFinalSummary);
+      setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
+      setSummaryDocumentDraftBlocks(nextFinalSummary.document_blocks || []);
+      setSummaryDocumentDraftDirty(false);
+      setSummaryDocumentEditMode(false);
+      setLocalEditPresenceTarget(null);
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        stage: "solution",
+        finalSolutionSummary: nextFinalSummary,
+        importedState: persistedSharedImportedState,
+      };
+      if (sharedSyncEnabled) {
+        forceBroadcastSharedCanvas({
+          stage: "solution",
+          finalSolutionSummary: nextFinalSummary,
+        });
+        if (meetingId) {
+          void saveCanvasWorkspacePatch({
+            meeting_id: meetingId,
+            stage: "solution",
+            final_solution_summary: nextFinalSummary,
+            imported_state: persistedSharedImportedState,
+          }).catch((error) => {
+            console.error("Failed to save regenerated conclusion document:", error);
+          });
+        }
+      }
+      setActivityMessage(result.warning || "결론 문서를 다시 생성했습니다.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setActivityMessage(`결론 문서 재생성 실패: ${message}`);
+    } finally {
+      setSummaryDocumentPending(false);
+      setBusy(false);
+    }
+  }, [
+    buildSummaryDocumentFromResponse,
+    busy,
+    finalSummaryDocument,
+    forceBroadcastSharedCanvas,
+    latestSharedWorkspaceRef,
+    meetingId,
+    meetingTopicForAi,
+    persistedSharedImportedState,
+    problemStructureGroups,
+    problemStructureNodes,
+    setActivityMessage,
+    setBusy,
+    setFinalSummaryDocument,
+    setLeftPanelTab,
+    setLocalEditPresenceTarget,
+    setSelectedNodeId,
+    setSelectedProblemGroupId,
+    setStage,
+    setSummaryDocumentDraftBlocks,
+    setSummaryDocumentDraftDirty,
+    setSummaryDocumentDraftMarkdown,
+    setSummaryDocumentEditMode,
+    setSummaryDocumentPending,
+    sharedSyncEnabled,
+    summaryDocumentPending,
+  ]);
 
   return {
     handleCopyFinalSolutionMarkdown,

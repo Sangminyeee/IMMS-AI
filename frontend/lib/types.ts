@@ -581,6 +581,17 @@ export interface CanvasSummaryStructuredConclusionGroup {
   bullets: string[];
 }
 
+export interface CanvasSummaryTableColumn {
+  id: string;
+  title: string;
+  type?: "text" | "select" | string;
+}
+
+export interface CanvasSummaryTableRow {
+  id: string;
+  cells: Record<string, string>;
+}
+
 export type CanvasSummaryDocumentBlock =
   | {
       id: string;
@@ -602,8 +613,8 @@ export type CanvasSummaryDocumentBlock =
       id: string;
       type: "table";
       title?: string;
-      columns: string[];
-      rows: string[][];
+      columns: CanvasSummaryTableColumn[];
+      rows: CanvasSummaryTableRow[];
     };
 
 export interface CanvasSummaryStructuredDocument {

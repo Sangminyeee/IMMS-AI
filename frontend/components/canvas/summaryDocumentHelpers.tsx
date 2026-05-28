@@ -3,6 +3,8 @@ import type {
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentBlock,
   CanvasSummaryDocumentSection,
+  CanvasSummaryTableColumn,
+  CanvasSummaryTableRow,
   CanvasSummaryStructuredDocument,
 } from "@/lib/types";
 
@@ -57,17 +59,112 @@ function stableSummaryBlockId(prefix: string, seed: string) {
   return `${prefix}-${Math.abs(hash).toString(36) || "0"}`;
 }
 
+function createSummaryTableColumn(title: string, seed: string, type: CanvasSummaryTableColumn["type"] = "text"): CanvasSummaryTableColumn {
+  return {
+    id: stableSummaryBlockId("col", seed),
+    title,
+    type,
+  };
+}
+
+function defaultSummaryTableColumns(seed: string): CanvasSummaryTableColumn[] {
+  return [
+    createSummaryTableColumn("항목", `${seed}:item`),
+    createSummaryTableColumn("내용", `${seed}:content`),
+  ];
+}
+
+function normalizeSummaryTableColumns(rawColumns: unknown, blockId: string): CanvasSummaryTableColumn[] {
+  if (!Array.isArray(rawColumns)) return defaultSummaryTableColumns(blockId);
+  const usedIds = new Set<string>();
+  const columns = rawColumns
+    .map((column, index): CanvasSummaryTableColumn | null => {
+      if (typeof column === "string") {
+        const title = column.trim();
+        if (!title) return null;
+        return createSummaryTableColumn(title, `${blockId}:${index}:${title}`);
+      }
+      if (!column || typeof column !== "object") return null;
+      const source = column as Record<string, unknown>;
+      const titleSource = source.title || source.name || source.header || source.text || source.id;
+      const title = typeof titleSource === "string" ? titleSource.trim() : "";
+      if (!title) return null;
+      const rawId = typeof source.id === "string" && source.id.trim()
+        ? source.id.trim()
+        : stableSummaryBlockId("col", `${blockId}:${index}:${title}`);
+      const id = usedIds.has(rawId) ? `${rawId}-${index}` : rawId;
+      usedIds.add(id);
+      const type = typeof source.type === "string" && source.type.trim() ? source.type.trim() : "text";
+      return { id, title, type };
+    })
+    .filter((column): column is CanvasSummaryTableColumn => Boolean(column))
+    .slice(0, 8);
+  return columns.length > 0 ? columns : defaultSummaryTableColumns(blockId);
+}
+
+function createBlankSummaryTableRow(columns: CanvasSummaryTableColumn[], seed: string): CanvasSummaryTableRow {
+  return {
+    id: stableSummaryBlockId("row", seed),
+    cells: Object.fromEntries(columns.map((column) => [column.id, ""])),
+  };
+}
+
+function normalizeSummaryTableRows(rawRows: unknown, columns: CanvasSummaryTableColumn[], blockId: string): CanvasSummaryTableRow[] {
+  if (!Array.isArray(rawRows)) return [createBlankSummaryTableRow(columns, `${blockId}:blank`)];
+  const rows = rawRows
+    .map((row, rowIndex): CanvasSummaryTableRow | null => {
+      let cells: Record<string, string> = {};
+      let rawId = "";
+      if (Array.isArray(row)) {
+        cells = Object.fromEntries(
+          columns.map((column, cellIndex) => {
+            const value = row[cellIndex];
+            return [column.id, typeof value === "string" ? value.trim() : ""];
+          }),
+        );
+      } else if (row && typeof row === "object") {
+        const source = row as Record<string, unknown>;
+        rawId = typeof source.id === "string" ? source.id.trim() : "";
+        const sourceCells = source.cells && typeof source.cells === "object"
+          ? (source.cells as Record<string, unknown>)
+          : source;
+        cells = Object.fromEntries(
+          columns.map((column) => {
+            const value = sourceCells[column.id] ?? sourceCells[column.title];
+            return [column.id, typeof value === "string" ? value.trim() : ""];
+          }),
+        );
+      } else {
+        return null;
+      }
+
+      if (!Object.values(cells).some(Boolean)) return null;
+      return {
+        id: rawId || stableSummaryBlockId("row", `${blockId}:${rowIndex}:${Object.values(cells).join("|")}`),
+        cells,
+      };
+    })
+    .filter((row): row is CanvasSummaryTableRow => Boolean(row))
+    .slice(0, 40);
+  return rows.length > 0 ? rows : [createBlankSummaryTableRow(columns, `${blockId}:blank`)];
+}
+
 export function createSummaryDocumentBlock(type: CanvasSummaryDocumentBlock["type"]): CanvasSummaryDocumentBlock {
   const id = `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   if (type === "heading") return { id, type, text: "새 제목", level: 2 };
   if (type === "paragraph") return { id, type, text: "새 문단을 입력하세요." };
   if (type === "bullets") return { id, type, items: ["새 항목"] };
+  const columns = [
+    createSummaryTableColumn("항목", `${id}:item`),
+    createSummaryTableColumn("내용", `${id}:content`),
+    createSummaryTableColumn("비고", `${id}:memo`),
+  ];
   return {
     id,
     type,
     title: "새 표",
-    columns: ["항목", "내용", "비고"],
-    rows: [["", "", ""]],
+    columns,
+    rows: [createBlankSummaryTableRow(columns, `${id}:row`)],
   };
 }
 
@@ -96,25 +193,13 @@ function normalizeSummaryDocumentBlock(raw: unknown, index: number): CanvasSumma
   }
 
   if (type === "table") {
-    const columns = normalizeStringList(source.columns, 8);
-    const safeColumns = columns.length > 0 ? columns : ["항목", "내용"];
-    const rawRows = Array.isArray(source.rows) ? source.rows : [];
-    const rows = rawRows
-      .filter(Array.isArray)
-      .map((row) =>
-        safeColumns.map((_, cellIndex) => {
-          const value = row[cellIndex];
-          return typeof value === "string" ? value.trim() : "";
-        }),
-      )
-      .filter((row) => row.some(Boolean))
-      .slice(0, 40);
+    const columns = normalizeSummaryTableColumns(source.columns, id);
     return {
       id,
       type,
       title: typeof source.title === "string" ? source.title.trim() : "",
-      columns: safeColumns,
-      rows: rows.length > 0 ? rows : [safeColumns.map(() => "")],
+      columns,
+      rows: normalizeSummaryTableRows(source.rows, columns, id),
     };
   }
 
@@ -243,6 +328,11 @@ function buildSummaryDocumentBlocksFromStructured(structured: CanvasSummaryStruc
     blocks.push({ id: stableSummaryBlockId("paragraph", summary), type: "paragraph", text: summary });
   }
 
+  const conclusionColumns = [
+    createSummaryTableColumn("정리 항목", "conclusion:item"),
+    createSummaryTableColumn("상태", "conclusion:status"),
+    createSummaryTableColumn("핵심 내용", "conclusion:content"),
+  ];
   const conclusionRows = (structured.conclusion.groups || []).map((group) => [
     group.title,
     group.status_label || (group.status === "final" ? "확정" : group.status === "review" ? "검토 중" : "초안"),
@@ -253,19 +343,24 @@ function buildSummaryDocumentBlocksFromStructured(structured: CanvasSummaryStruc
       id: "table-problem-solution",
       type: "table",
       title: "문제정의 & 해결 방향",
-      columns: ["정리 항목", "상태", "핵심 내용"],
-      rows: conclusionRows,
+      columns: conclusionColumns,
+      rows: normalizeSummaryTableRows(conclusionRows, conclusionColumns, "table-problem-solution"),
     });
   }
 
   const actionRows = normalizeStringList(structured.pending_items, 20).map((item) => [item, "추가 확인 필요", ""]);
   if (actionRows.length > 0) {
+    const actionColumns = [
+      createSummaryTableColumn("할 일", "actions:item"),
+      createSummaryTableColumn("담당", "actions:owner"),
+      createSummaryTableColumn("비고", "actions:memo"),
+    ];
     blocks.push({
       id: "table-next-actions",
       type: "table",
       title: "앞으로 할 일",
-      columns: ["할 일", "담당", "비고"],
-      rows: actionRows,
+      columns: actionColumns,
+      rows: normalizeSummaryTableRows(actionRows, actionColumns, "table-next-actions"),
     });
   }
 
@@ -313,10 +408,10 @@ export function summaryDocumentBlocksToMarkdown(blocks: CanvasSummaryDocumentBlo
     }
     if (block.type === "table") {
       const title = block.title?.trim();
-      const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
-      const header = `| ${columns.map(escapeMarkdownTableCell).join(" | ")} |`;
+      const columns = block.columns.length > 0 ? block.columns : defaultSummaryTableColumns(block.id);
+      const header = `| ${columns.map((column) => escapeMarkdownTableCell(column.title)).join(" | ")} |`;
       const divider = `| ${columns.map(() => "---").join(" | ")} |`;
-      const rows = block.rows.map((row) => `| ${columns.map((_, index) => escapeMarkdownTableCell(row[index] || "")).join(" | ")} |`);
+      const rows = block.rows.map((row) => `| ${columns.map((column) => escapeMarkdownTableCell(row.cells[column.id] || "")).join(" | ")} |`);
       chunks.push([title ? `### ${title}` : "", header, divider, ...rows].filter(Boolean).join("\n"));
     }
   });

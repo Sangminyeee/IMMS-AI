@@ -1,5 +1,6 @@
 ﻿import type {
   CanvasLocalState,
+  CanvasFinalSolutionSummary,
   CanvasIdeaAssimilationUtterance,
   CanvasIdeationKeywordResponse,
   CanvasPersonalNotesStateResponse,
@@ -156,6 +157,36 @@ export async function generateCanvasSummaryDocument(payload: {
   }>;
 }): Promise<CanvasSummaryDocumentResponse> {
   return requestJson<CanvasSummaryDocumentResponse>("/api/canvas/summary-document", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateCanvasSummaryConclusion(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  refresh_chunk_summaries?: boolean;
+  regenerate_nonce?: string;
+  current_summary?: CanvasFinalSolutionSummary;
+  groups: Array<{
+    id: string;
+    title: string;
+    node_ids: string[];
+    rationale?: string;
+    status?: string;
+    created_by?: string;
+  }>;
+  nodes: Array<{
+    id: string;
+    source_group_id?: string;
+    title: string;
+    body?: string;
+    status?: string;
+    depth?: number;
+  }>;
+}): Promise<CanvasSummaryDocumentResponse> {
+  return requestJson<CanvasSummaryDocumentResponse>("/api/canvas/summary-conclusion", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),

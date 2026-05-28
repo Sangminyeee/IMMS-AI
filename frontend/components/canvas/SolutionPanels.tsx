@@ -8,6 +8,8 @@ import type {
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentBlock,
+  CanvasSummaryTableColumn,
+  CanvasSummaryTableRow,
   CanvasSummaryStructuredConclusionGroup,
   CanvasSummaryStructuredDiscussionFlow,
   CanvasSummaryStructuredDocument,
@@ -291,8 +293,34 @@ function summaryBlockLabel(type: CanvasSummaryDocumentBlock["type"]) {
   return "표";
 }
 
-function normalizeTableRow(row: string[], columnCount: number) {
-  return Array.from({ length: columnCount }, (_, index) => row[index] || "");
+function newDocumentTableId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function fallbackDocumentTableColumns(blockId: string): CanvasSummaryTableColumn[] {
+  return [
+    { id: `${blockId}-col-item`, title: "항목", type: "text" },
+    { id: `${blockId}-col-content`, title: "내용", type: "text" },
+  ];
+}
+
+function createDocumentTableRow(columns: CanvasSummaryTableColumn[], id = newDocumentTableId("row")): CanvasSummaryTableRow {
+  return {
+    id,
+    cells: Object.fromEntries(columns.map((column) => [column.id, ""])),
+  };
+}
+
+function normalizeDocumentTableRows(
+  rows: CanvasSummaryTableRow[],
+  columns: CanvasSummaryTableColumn[],
+  blockId: string,
+) {
+  const normalizedRows = rows.map((row, rowIndex) => ({
+    id: row.id || `${blockId}-row-${rowIndex}`,
+    cells: Object.fromEntries(columns.map((column) => [column.id, row.cells?.[column.id] || ""])),
+  }));
+  return normalizedRows.length > 0 ? normalizedRows : [createDocumentTableRow(columns, `${blockId}-row-empty`)];
 }
 
 function updateSummaryDocumentBlock(
@@ -498,7 +526,7 @@ function SolutionDocumentBlocksView({
           );
         }
 
-        const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
+        const columns = block.columns.length > 0 ? block.columns : fallbackDocumentTableColumns(block.id);
         const rows = block.rows.length > 0 ? block.rows : [];
         const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
         return (
@@ -515,19 +543,19 @@ function SolutionDocumentBlocksView({
               <table className="min-w-full border-collapse text-center text-[11px] leading-[1.5] tracking-[-0.03px]">
                 <thead>
                   <tr className="bg-[#f3f4f7] text-[#181818]">
-                    {columns.map((column, columnIndex) => (
-                      <th key={`${block.id}-head-${columnIndex}`} className="border-b border-r border-[#bfc3ca] px-3 py-[9px] font-semibold last:border-r-0">
-                        {column}
+                    {columns.map((column) => (
+                      <th key={`${block.id}-head-${column.id}`} className="border-b border-r border-[#bfc3ca] px-3 py-[9px] font-semibold last:border-r-0">
+                        {column.title}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="text-[#4d4d4d]">
                   {rows.map((row, rowIndex) => (
-                    <tr key={`${block.id}-row-${rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
-                      {normalizeTableRow(row, columns.length).map((cell, cellIndex) => (
-                        <td key={`${block.id}-cell-${rowIndex}-${cellIndex}`} className="whitespace-pre-line border-r border-[#cdd0d5] px-3 py-[9px] align-top font-medium last:border-r-0">
-                          {cell}
+                    <tr key={`${block.id}-row-${row.id || rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
+                      {columns.map((column) => (
+                        <td key={`${block.id}-cell-${row.id || rowIndex}-${column.id}`} className="whitespace-pre-line border-r border-[#cdd0d5] px-3 py-[9px] align-top font-medium last:border-r-0">
+                          {row.cells?.[column.id] || ""}
                         </td>
                       ))}
                     </tr>
@@ -708,8 +736,8 @@ function TableBlockEditor({
   disabled?: boolean;
   onChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
 }) {
-  const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
-  const rows = block.rows.length > 0 ? block.rows.map((row) => normalizeTableRow(row, columns.length)) : [columns.map(() => "")];
+  const columns = block.columns.length > 0 ? block.columns : fallbackDocumentTableColumns(block.id);
+  const rows = normalizeDocumentTableRows(block.rows, columns, block.id);
 
   const updateTable = (updater: (table: Extract<CanvasSummaryDocumentBlock, { type: "table" }>) => Extract<CanvasSummaryDocumentBlock, { type: "table" }>) => {
     onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "table" ? updater(current) : current)));
@@ -724,16 +752,17 @@ function TableBlockEditor({
           <thead>
             <tr className="bg-[#f4f8ff]">
               {columns.map((column, columnIndex) => (
-                <th key={`${block.id}-edit-column-${columnIndex}`} className="min-w-[118px] border-b border-[#dbe3ef] px-2 py-2 align-top">
+                <th key={`${block.id}-edit-column-${column.id}`} className="min-w-[118px] border-b border-[#dbe3ef] px-2 py-2 align-top">
                   <div className="flex items-center gap-1.5">
                     <DocumentInput
-                      value={column}
+                      value={column.title}
                       disabled={disabled}
                       placeholder="열"
                       onChange={(text) =>
                         updateTable((current) => {
-                          const nextColumns = columns.slice();
-                          nextColumns[columnIndex] = text;
+                          const nextColumns = columns.map((currentColumn, index) => (
+                            index === columnIndex ? { ...currentColumn, title: text } : currentColumn
+                          ));
                           return { ...current, columns: nextColumns, rows };
                         })
                       }
@@ -742,11 +771,14 @@ function TableBlockEditor({
                       type="button"
                       disabled={disabled || columns.length <= 1}
                       onClick={() =>
-                        updateTable((current) => ({
-                          ...current,
-                          columns: columns.filter((_, index) => index !== columnIndex),
-                          rows: rows.map((row) => row.filter((_, index) => index !== columnIndex)),
-                        }))
+                        updateTable((current) => {
+                          const nextColumns = columns.filter((_, index) => index !== columnIndex);
+                          const nextRows = rows.map((row) => ({
+                            ...row,
+                            cells: Object.fromEntries(nextColumns.map((nextColumn) => [nextColumn.id, row.cells[nextColumn.id] || ""])),
+                          }));
+                          return { ...current, columns: nextColumns, rows: nextRows };
+                        })
                       }
                       className="grid h-[28px] w-[24px] shrink-0 place-items-center rounded-full text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-35"
                       aria-label="열 삭제"
@@ -760,11 +792,15 @@ function TableBlockEditor({
                 <DocumentMiniButton
                   disabled={disabled}
                   onClick={() =>
-                    updateTable((current) => ({
-                      ...current,
-                      columns: [...columns, "새 열"],
-                      rows: rows.map((row) => [...row, ""]),
-                    }))
+                    updateTable((current) => {
+                      const nextColumn = { id: newDocumentTableId("col"), title: "새 열", type: "text" };
+                      const nextColumns = [...columns, nextColumn];
+                      const nextRows = rows.map((row) => ({
+                        ...row,
+                        cells: { ...row.cells, [nextColumn.id]: "" },
+                      }));
+                      return { ...current, columns: nextColumns, rows: nextRows };
+                    })
                   }
                 >
                   열
@@ -773,20 +809,22 @@ function TableBlockEditor({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={`${block.id}-edit-row-${rowIndex}`} className="border-t border-[#edf1f6] first:border-t-0">
-                {row.map((cell, cellIndex) => (
-                  <td key={`${block.id}-edit-cell-${rowIndex}-${cellIndex}`} className="min-w-[118px] px-2 py-2 align-top">
+            {rows.map((row) => (
+              <tr key={`${block.id}-edit-row-${row.id}`} className="border-t border-[#edf1f6] first:border-t-0">
+                {columns.map((column) => (
+                  <td key={`${block.id}-edit-cell-${row.id}-${column.id}`} className="min-w-[118px] px-2 py-2 align-top">
                     <DocumentTextarea
-                      value={cell}
+                      value={row.cells[column.id] || ""}
                       disabled={disabled}
                       minHeight={58}
                       placeholder="내용"
                       onChange={(text) =>
                         updateTable((current) => {
-                          const nextRows = rows.map((currentRow, currentRowIndex) =>
-                            currentRowIndex === rowIndex ? currentRow.map((currentCell, currentCellIndex) => (currentCellIndex === cellIndex ? text : currentCell)) : currentRow,
-                          );
+                          const nextRows = rows.map((currentRow) => (
+                            currentRow.id === row.id
+                              ? { ...currentRow, cells: { ...currentRow.cells, [column.id]: text } }
+                              : currentRow
+                          ));
                           return { ...current, columns, rows: nextRows };
                         })
                       }
@@ -799,8 +837,8 @@ function TableBlockEditor({
                     disabled={disabled}
                     onClick={() =>
                       updateTable((current) => {
-                        const nextRows = rows.filter((_, index) => index !== rowIndex);
-                        return { ...current, columns, rows: nextRows.length > 0 ? nextRows : [columns.map(() => "")] };
+                        const nextRows = rows.filter((currentRow) => currentRow.id !== row.id);
+                        return { ...current, columns, rows: nextRows.length > 0 ? nextRows : [createDocumentTableRow(columns)] };
                       })
                     }
                     className="grid h-[30px] w-[30px] place-items-center rounded-full text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-40"
@@ -815,7 +853,7 @@ function TableBlockEditor({
         </table>
       </div>
 
-      <DocumentMiniButton disabled={disabled} onClick={() => updateTable((current) => ({ ...current, columns, rows: [...rows, columns.map(() => "")] }))}>
+      <DocumentMiniButton disabled={disabled} onClick={() => updateTable((current) => ({ ...current, columns, rows: [...rows, createDocumentTableRow(columns)] }))}>
         행 추가
       </DocumentMiniButton>
     </div>
