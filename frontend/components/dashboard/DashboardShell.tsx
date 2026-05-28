@@ -29,9 +29,8 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
     >
       <aside className="absolute inset-y-0 left-0 z-20 hidden w-[var(--dashboard-sidebar)] lg:block">
         <MoaLogo
-          size="md"
-          markClassName="h-[23.358px] w-[38.269px]"
-          className="moa-dt-logo absolute left-[38.63px] top-[34.56px] gap-[11.52px]"
+          size="figma"
+          className="moa-dt-logo absolute left-[38px] top-[35px]"
         />
 
         <button

@@ -614,7 +614,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 handlers.onGenerateProblemChildren(root);
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan absolute bottom-[23px] left-[17px] flex h-[27px] w-[207px] items-center justify-center rounded-[4px] bg-[#097df2] text-[10px] font-bold leading-none tracking-[-0.02px] text-white shadow-[0_2px_4px_rgba(9,125,242,0.18)] transition hover:bg-[#236cf3] disabled:cursor-wait disabled:bg-[#d8d8d8]"
+              className="nodrag nopan absolute bottom-[23px] left-[17px] flex h-[27px] w-[207px] items-center justify-center rounded-[5.195px] border-[0.649px] border-[#01a3ff] bg-[rgba(1,163,255,0.03)] text-[10px] font-semibold leading-[15.584px] tracking-[-0.25px] text-[#01a3ff] transition hover:bg-white hover:text-[#0780f8] disabled:cursor-wait disabled:border-[#d8d8d8] disabled:bg-[#f7f7f7] disabled:text-[#90a1b9]"
             >
               <AddIcon className="mr-[7px] h-[10px] w-[10px]" />
               {problemChildGenerationPendingId === root.group_id ? "생성 중" : "세부 내용 추가"}

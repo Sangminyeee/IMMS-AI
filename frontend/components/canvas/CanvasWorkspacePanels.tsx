@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
+import Link from "next/link";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import type {
   CanvasHeaderProps,
@@ -37,7 +38,7 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-right-panel": "clamp(340px, 17.708vw, 453px)",
   "--canvas-left-pad": "clamp(38px, 1.979vw, 51px)",
   "--canvas-left-content": "clamp(243px, 12.656vw, 324px)",
-  "--canvas-left-logo-top": "clamp(34px, 3.148vh, 45px)",
+  "--canvas-left-logo-top": "clamp(35px, 3.241vh, 45px)",
   "--canvas-left-title-gap": "clamp(11px, 1.019vh, 15px)",
   "--canvas-left-keyword-gap": "clamp(12px, 1.111vh, 16px)",
   "--canvas-note-composer-pt": "clamp(16px, 1.481vh, 21px)",
@@ -63,6 +64,36 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-transport-wave": "clamp(29px, 1.51vw, 39px)",
   "--canvas-transport-arrow": "clamp(18px, 0.938vw, 24px)",
   "--canvas-transport-skip": "clamp(22px, 1.146vw, 29px)",
+};
+
+const panelButtonClasses = {
+  save:
+    "ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-[34.535px] bg-[#eff0f6] px-[6.907px] py-[6.907px] transition hover:bg-[#e3e5ee]",
+  share:
+    "flex h-[32.4px] w-[66.9px] items-center gap-[8.1px] rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition hover:bg-[#3f3f43]",
+  stageBase:
+    "flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
+  stageActive:
+    "border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
+  stageInactive:
+    "border-[0.8px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] hover:border-[#01a3ff] hover:bg-[#f4fbff]",
+  stageNumber:
+    "grid h-[20.521px] w-[20.521px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold leading-[15.39px]",
+  primary:
+    "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+  aiInput:
+    "-ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
+  aiIcon:
+    "grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-[123px] text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]",
+  aiSend:
+    "ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-[575.735px] border-[0.666px] border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+};
+
+const panelButtonTextClasses = {
+  save: "moa-font-pretendard text-center text-[10px] font-semibold leading-[1.4] tracking-[-0.025px] text-[#505050]",
+  share: "moa-font-pretendard text-center text-[12px] font-semibold leading-[20.008px] tracking-[-0.03px] text-[#ededed]",
+  stage: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]",
+  primary: "moa-font-pretendard text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white",
 };
 
 export type CanvasWorkspaceParticipant = {
@@ -152,11 +183,19 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 
 function ShareIcon({ className = "" }: { className?: string }) {
   return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M8.3 12.6 15.8 17M15.7 7 8.3 11.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <circle cx="6.6" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="17.5" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="17.5" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+    <svg aria-hidden="true" className={className} viewBox="0 0 13 13" fill="none">
+      <g clipPath="url(#canvas-share-icon-clip)">
+        <path d="M9.61777 4.27656C10.5032 4.27656 11.2209 3.55882 11.2209 2.67344C11.2209 1.78806 10.5032 1.07031 9.61777 1.07031C8.73239 1.07031 8.01465 1.78806 8.01465 2.67344C8.01465 3.55882 8.73239 4.27656 9.61777 4.27656Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M3.20542 8.01484C4.0908 8.01484 4.80855 7.2971 4.80855 6.41172C4.80855 5.52634 4.0908 4.80859 3.20542 4.80859C2.32004 4.80859 1.60229 5.52634 1.60229 6.41172C1.60229 7.2971 2.32004 8.01484 3.20542 8.01484Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9.61777 11.757C10.5032 11.757 11.2209 11.0393 11.2209 10.1539C11.2209 9.26852 10.5032 8.55078 9.61777 8.55078C8.73239 8.55078 8.01465 9.26852 8.01465 10.1539C8.01465 11.0393 8.73239 11.757 9.61777 11.757Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4.58667 7.21875L8.23645 9.34556" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M8.23111 3.48047L4.58667 5.60728" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+      <defs>
+        <clipPath id="canvas-share-icon-clip">
+          <rect width="12.825" height="12.825" fill="white" />
+        </clipPath>
+      </defs>
     </svg>
   );
 }
@@ -226,17 +265,13 @@ function StageSteps({
             key={item}
             type="button"
             onClick={() => onStageSelect(item)}
-            className={`flex h-[33px] w-full items-center rounded-full border px-[11px] text-left shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition ${
-              active
-                ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)]"
-                : "border-[rgba(1,163,255,0.33)] bg-white text-[#7c7c7c] hover:border-[#01a3ff] hover:bg-[#f4fbff]"
-            }`}
+            className={`${panelButtonClasses.stageBase} ${active ? panelButtonClasses.stageActive : panelButtonClasses.stageInactive}`}
           >
-            <span className={`grid h-[20.5px] w-[20.5px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
+            <span className={`${panelButtonClasses.stageNumber} ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
               {stageNumber(item)}
             </span>
-            <span className="ml-[8px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]">{stageLabel(item, problemDefinitionPhase)}</span>
-            {!active ? <ChevronRightIcon className="ml-auto h-[14px] w-[14px] text-[#90a1b9]" /> : null}
+            <span className={`ml-[8px] ${panelButtonTextClasses.stage} ${active ? "text-white" : "text-[#7c7c7c]"}`}>{stageLabel(item, problemDefinitionPhase)}</span>
+            {!active ? <ChevronRightIcon className="ml-auto h-[12px] w-[7px] text-[#90a1b9]" /> : null}
           </button>
         );
       })}
@@ -292,9 +327,11 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       <button
         type="button"
         onClick={meetingGoalEditorOpen ? onCancelMeetingGoalEdit : onOpenMeetingGoalEditor}
-        className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
+        className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
       >
-        {meetingGoalDraft.trim() || meetingTitle || "회의 목표 입력란"}
+        <span className="moa-font-pretendard truncate text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636]">
+          {meetingGoalDraft.trim() || meetingTitle || "회의 목표 입력란"}
+        </span>
       </button>
       <div className="mt-[9px] inline-flex h-[32px] w-[110px] items-center justify-center gap-[8px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)]">
         <ClockIcon className={`h-[16.4px] w-[16.4px] ${isRecording ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
@@ -327,11 +364,13 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
             {meetingGoalContextDraft.trim() ? `현재 맥락: ${meetingGoalContextDraft.trim()}` : "목표와 맥락은 AI 분석의 참고 정보로 사용됩니다."}
           </p>
           <div className="mt-3 flex justify-end gap-2">
-            <button type="button" onClick={onCancelMeetingGoalEdit} className="rounded-full bg-[#eff0f6] px-4 py-2 text-[12px] font-semibold text-[#505050]">
-              취소
+            <button type="button" onClick={onCancelMeetingGoalEdit} className="rounded-full bg-[#eff0f6] px-4 py-2">
+              <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] text-[#505050]">취소</span>
             </button>
-            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 text-[12px] font-semibold tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
-              {meetingGoalSaving ? "저장 중" : "저장"}
+            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
+              <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white">
+                {meetingGoalSaving ? "저장 중" : "저장"}
+              </span>
             </button>
           </div>
         </div>
@@ -414,9 +453,9 @@ function PersonalNoteComposerPanel({
           <button
             type="button"
             onClick={handlers.onSave}
-            className="ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-full bg-[#eff0f6] text-[10px] font-semibold tracking-[-0.25px] text-[#505050] transition hover:bg-[#e3e5ee]"
+            className={panelButtonClasses.save}
           >
-            저장
+            <span className={panelButtonTextClasses.save}>저장</span>
           </button>
         </div>
       </div>
@@ -559,7 +598,13 @@ function LeftMeetingPanel({
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white">
       <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
-        <MoaLogo size="md" markClassName="h-[23.264px] w-[38.115px]" className="moa-dt-logo gap-[11.5px]" />
+        <Link
+          href="/dashboard"
+          aria-label="대시보드로 이동"
+          className="inline-flex w-fit rounded-[8px] outline-none transition focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
+        >
+          <MoaLogo size="figma" className="moa-dt-logo" />
+        </Link>
         <div className="mt-[var(--canvas-left-title-gap)]">
           <div className="flex items-center gap-[9px]">
             <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{header.view.meetingTitle || "회의 제목"}</h2>
@@ -620,36 +665,105 @@ export type CanvasWorkspaceQuickAskHandlers = {
   onSubmit: (event?: FormEvent<HTMLFormElement>) => void;
 };
 
-function CurrentProblemDefinitionStagePanel({
+function CurrentStagePanel({
+  header,
   problem,
   problemHandlers,
 }: {
+  header: CanvasHeaderProps;
   problem: CanvasSurfaceProblemState;
   problemHandlers: CanvasSurfaceProblemHandlers;
 }) {
-  const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+  const stage = header.view.stage;
+  const problemDefinitionPhase = problem.problemDefinitionPhase as ProblemDefinitionPhase;
+  const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
+  const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
+
+  let title = stageLabel(stage, problemDefinitionPhase);
+  let description = (
+    <>
+      현재 회의 흐름을 확인하고,
+      <br />
+      다음 단계로 진행할 수 있습니다.
+    </>
+  );
+  let buttonLabel = "";
+  let buttonDisabled = false;
+  let onButtonClick: (() => void) | null = null;
+
+  if (stage === "ideation") {
+    title = "아이디어 발산";
+    description = (
+      <>
+        회의 중 나온 핵심 키워드를 정리합니다.
+        <br />
+        충분히 모이면 문제정의를 시작하세요.
+      </>
+    );
+    buttonLabel = "문제정의 시작하기";
+    buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
+    onButtonClick = () => header.handlers.onStageSelect("problem-definition");
+  } else if (isProblemExplore) {
+    title = "문제정의 · 1단계";
+    description = (
+      <>
+        문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
+        <br />
+        남은 후보는 모두 다음 단계로 이동합니다.
+      </>
+    );
+    buttonLabel = problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기";
+    buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+    onButtonClick = () => {
+      void problemHandlers.onStartProblemStructure();
+    };
+  } else if (isProblemStructure) {
+    title = "문제정의 · 2단계";
+    description = (
+      <>
+        구조화된 문제 묶음을 검토하고,
+        <br />
+        요약 및 정리 단계로 넘깁니다.
+      </>
+    );
+    buttonLabel = "요약 및 정리 시작하기";
+    buttonDisabled = header.view.busy;
+    onButtonClick = () => {
+      void header.handlers.onStageSelect("solution");
+    };
+  } else if (stage === "solution") {
+    title = "요약 및 정리";
+    description = (
+      <>
+        최종 회의록 내용을 확인한 뒤,
+        <br />
+        회의를 종료하고 결과를 생성합니다.
+      </>
+    );
+    buttonLabel = header.view.endMeetingSaving ? "회의 종료 중" : "회의를 종료하고 회의록 생성하기";
+    buttonDisabled = header.view.endMeetingSaving;
+    onButtonClick = header.handlers.onEndMeetingClick;
+  }
 
   return (
     <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
       <div className="flex items-start gap-[12px]">
         <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
-        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 · 1단계</p>
+        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
       </div>
       <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
-        문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
-        <br />
-        남은 후보는 모두 다음 단계로 이동합니다.
+        {description}
       </p>
-      <button
-        type="button"
-        onClick={() => {
-          void problemHandlers.onStartProblemStructure();
-        }}
-        disabled={buttonDisabled}
-        className="mt-[20px] flex h-[33px] w-full items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
-      >
-        {problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기"}
-      </button>
+      {buttonLabel && onButtonClick ? (
+        <button
+          type="button"
+          onClick={onButtonClick}
+          disabled={buttonDisabled}
+          className={`mt-[20px] ${panelButtonClasses.primary}`}
+        >
+          <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -680,9 +794,7 @@ function RightAiPanel({
   const hiddenParticipantCount = Math.max(0, participants.length - visibleParticipants.length);
   const recentMessages = quickAskMessages.slice(-4);
   const quickAskHasMessages = quickAskMessages.length > 0;
-  const showProblemStagePanel =
-    header.view.stage === "problem-definition" && (problem.problemDefinitionPhase as ProblemDefinitionPhase) !== "structure";
-  const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중";
+  const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
 
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
@@ -707,9 +819,9 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button type="button" className="flex h-[32.4px] items-center gap-[8.1px] rounded-full bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.2px] text-[12px] font-semibold leading-[20px] tracking-[-0.03px] text-[#ededed] transition hover:bg-[#3f3f43]" aria-label="회의 공유">
-          <ShareIcon className="h-[12.825px] w-[12.825px]" />
-          공유
+        <button type="button" className={panelButtonClasses.share} aria-label="회의 공유">
+          <ShareIcon className="h-[13px] w-[13px]" />
+          <span className={panelButtonTextClasses.share}>공유</span>
         </button>
       </header>
 
@@ -724,9 +836,7 @@ function RightAiPanel({
         </div>
       </section>
 
-      {showProblemStagePanel ? (
-        <CurrentProblemDefinitionStagePanel problem={problem} problemHandlers={problemHandlers} />
-      ) : null}
+      <CurrentStagePanel header={header} problem={problem} problemHandlers={problemHandlers} />
 
       <section className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden bg-white px-[var(--canvas-right-pad)] pb-[22px] pt-[24px]">
         <div
@@ -767,17 +877,17 @@ function RightAiPanel({
 
         {!quickAskHasMessages ? (
           <div className="pointer-events-none absolute inset-x-[var(--canvas-right-pad)] top-1/2 z-10 -translate-y-1/2 text-center">
-            <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
+            <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">AI 가이드 시작하기</h4>
             <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
-              아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />
+              글쓰기, 요약, 번역, 코드, 아이디어 등<br />
               필요한 도움을 요청할 수 있습니다
             </p>
           </div>
         ) : null}
 
         <div className="relative z-10 mt-auto shrink-0 pt-[24px] text-center">
-          <form onSubmit={quickAskHandlers.onSubmit} className="flex h-[48px] items-center rounded-full border border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]">
-            <button type="button" className="grid h-[33.936px] w-[33.936px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
+          <form onSubmit={quickAskHandlers.onSubmit} className={panelButtonClasses.aiInput}>
+            <button type="button" className={panelButtonClasses.aiIcon} aria-label="파일 첨부">
               <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
             </button>
             <input
@@ -789,14 +899,14 @@ function RightAiPanel({
               placeholder="무엇이든 물어보세요"
               className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
             />
-            <button type="button" className="grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
+            <button type="button" className={panelButtonClasses.aiIcon} aria-label="음성 질문">
               <MicIcon className="h-[20.36px] w-[20.36px]" />
             </button>
             <button
               type="submit"
               disabled={!quickAskDraft.trim()}
               aria-label="AI 가이드 질문 보내기"
-              className="ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+              className={panelButtonClasses.aiSend}
             >
               <SendIcon className="h-[17.4px] w-[17.4px]" />
             </button>

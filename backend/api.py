@@ -5525,11 +5525,13 @@ def _build_canvas_quick_ask_prompt(payload: CanvasQuickAskInput, rows: list[dict
     context_json = _truncate_text(json.dumps(compact_context, ensure_ascii=False, indent=2), 10000)
     question = _truncate_text(payload.question, 2000)
     return (
-        "너는 하단 패널에서 구글 검색처럼 던지는 질문에 즉시 답하는 범용 LLM 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 일반 LLM 채팅 서비스처럼 사용자의 질문에 답하는 범용 AI 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
         "[역할]\n"
-        "- 사용자의 질문에 한국어로 바로 답한다.\n"
-        "- 질문이 회의나 캔버스와 관련 있으면 제공된 회의 맥락을 참고한다.\n"
-        "- 질문이 회의와 무관하면 제공된 회의 맥락을 억지로 끌어오지 말고 일반 LLM 답변으로 처리한다.\n"
+        "- 사용자의 질문에 한국어로 바로 답한다. 질문은 회의와 관련 없어도 된다.\n"
+        "- 제공된 회의/캔버스 맥락은 선택 참고자료일 뿐이며, 답변의 기본 주제가 아니다.\n"
+        "- 질문이 회의나 캔버스를 직접 가리킬 때만 제공된 회의 맥락을 참고한다.\n"
+        "- 질문이 일반 지식, 글쓰기, 코드, 번역, 아이디어, 잡담이면 회의 맥락을 무시하고 일반 LLM 답변으로 처리한다.\n"
+        "- 회의 맥락을 사용하지 않았다면 회의와 연결하려는 문장을 덧붙이지 않는다.\n"
         "- 실시간 웹 검색은 현재 연결되어 있지 않다. 최신성이나 실시간 사실 확인이 핵심이면 그 한계를 짧게 말한다.\n\n"
         "[참고 맥락 JSON]\n"
         f"{context_json}\n\n"
@@ -5568,14 +5570,14 @@ def _build_canvas_quick_ask_local_answer(question: str, rows: list[dict[str, str
     snippets = matches[:3]
     if snippets:
         lines = [
-            "LLM 연결이 없어 자동 답변 대신 회의 기록에서 관련 발언 후보를 찾았습니다.",
+            "LLM 연결이 없어 일반 답변을 생성하지 못했습니다. 참고로 회의 기록에서 질문과 겹치는 발언 후보는 아래와 같습니다.",
             *[
                 f"- {_safe_text(row.get('speaker'), '참가자')}: {_truncate_text(row.get('text'), 180)}"
                 for _score, _index, row in snippets
             ],
         ]
         return "\n".join(lines)
-    return "LLM 연결이 없어 지금은 답변을 생성하지 못했습니다. 회의 기록 검색에 쓸 만한 관련 발언도 찾지 못했습니다."
+    return "LLM 연결이 없어 지금은 일반 답변을 생성하지 못했습니다."
 
 
 _IDEATION_KEYWORD_NON_NOUN_PATTERNS = [

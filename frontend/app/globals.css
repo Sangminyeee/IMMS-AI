@@ -383,11 +383,11 @@ body {
 }
 
 .moa-dt-logo {
-  color: var(--moa-logo-text);
-  font-family: var(--font-gmarket-sans, var(--font-body));
-  font-size: 19.909px;
+  color: #0651fe;
+  font-family: var(--font-logo);
+  font-size: 19.829px;
   font-style: normal;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 0;
   line-height: normal;
 }
