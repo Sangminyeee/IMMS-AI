@@ -1648,6 +1648,20 @@ async def websocket_endpoint(
                     'timestamp': datetime.utcnow().isoformat(),
                 }, exclude_user=user_id)
 
+            elif message_type == 'meeting_timer_sync':
+                status = str(message.get("status") or "").strip()
+                if status not in {"scheduled", "active", "in_progress", "completed", "waiting"}:
+                    status = ""
+                await broadcast_to_meeting(meeting_id, {
+                    'type': 'meeting_timer_updated',
+                    'meeting_id': meeting_id,
+                    'started_at': str(message.get("started_at") or "").strip(),
+                    'ended_at': str(message.get("ended_at") or "").strip(),
+                    'status': status,
+                    'updated_by': user_id,
+                    'timestamp': datetime.utcnow().isoformat(),
+                }, exclude_user=user_id)
+
             elif message_type == 'mic_calibration':
                 profile = message.get('profile') or {}
                 state = get_fusion_state(meeting_id)

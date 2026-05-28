@@ -17,12 +17,14 @@ interface DashboardMeetingsViewProps {
   loading: boolean;
   meetings: DashboardMeeting[];
   onCreateMeeting: () => void;
+  onDeleteMeeting: (meeting: DashboardMeeting) => void;
   onJoinMeeting: (meetingId: string) => void;
   onOpenMeetingResult: (meeting: DashboardMeeting) => void;
   onSearchQueryChange: (query: string) => void;
   onStatusFilterChange: (filter: MeetingStatusFilter) => void;
   searchQuery: string;
   statusFilter: MeetingStatusFilter;
+  deletingMeetingId?: string | null;
 }
 
 const statusFilters: Array<{ label: string; value: MeetingStatusFilter }> = [
@@ -43,12 +45,14 @@ export function DashboardMeetingsView({
   loading,
   meetings,
   onCreateMeeting,
+  onDeleteMeeting,
   onJoinMeeting,
   onOpenMeetingResult,
   onSearchQueryChange,
   onStatusFilterChange,
   searchQuery,
   statusFilter,
+  deletingMeetingId = null,
 }: DashboardMeetingsViewProps) {
   const upcomingScrollRef = useRef<HTMLDivElement | null>(null);
   const upcomingDragRef = useRef({
@@ -284,6 +288,8 @@ export function DashboardMeetingsView({
             <MeetingListRow
               key={meeting.id}
               meeting={meeting}
+              deleting={deletingMeetingId === meeting.id}
+              onDeleteMeeting={onDeleteMeeting}
               onJoinMeeting={onJoinMeeting}
               onOpenMeetingResult={onOpenMeetingResult}
             />
@@ -340,11 +346,15 @@ function UpcomingMeetingCard({
 }
 
 function MeetingListRow({
+  deleting,
   meeting,
+  onDeleteMeeting,
   onJoinMeeting,
   onOpenMeetingResult,
 }: {
+  deleting: boolean;
   meeting: DashboardMeeting;
+  onDeleteMeeting: (meeting: DashboardMeeting) => void;
   onJoinMeeting: (meetingId: string) => void;
   onOpenMeetingResult: (meeting: DashboardMeeting) => void;
 }) {
@@ -365,7 +375,7 @@ function MeetingListRow({
       <button
         type="button"
         onClick={() => (completed ? onOpenMeetingResult(meeting) : onJoinMeeting(meeting.id))}
-        className="absolute inset-y-0 left-[71.16px] right-[170px] flex min-w-0 items-center text-left"
+        className="absolute inset-y-0 left-[71.16px] right-[238px] flex min-w-0 items-center text-left"
       >
         <span className="moa-dt-row-title max-w-[min(780px,45vw)] truncate whitespace-nowrap">
           {meeting.title}
@@ -392,6 +402,16 @@ function MeetingListRow({
           className="group inline-flex h-[27.78px] min-w-[69.467px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-dashboard-action-border)] bg-white px-[14.233px] text-[var(--moa-dashboard-action-text)] transition hover:border-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)] hover:text-[var(--moa-dashboard-outline)]"
         >
           <span className="moa-dt-row-action-text block whitespace-nowrap transition group-hover:text-[var(--moa-dashboard-outline)]">{getMeetingActionLabel(meeting.status)}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onDeleteMeeting(meeting)}
+          disabled={deleting}
+          className="group inline-flex h-[27.78px] min-w-[57px] items-center justify-center rounded-full border-[0.678px] border-[#d9e4f4] bg-white px-[11px] text-[#90a1b9] transition hover:border-[#ef4444]/30 hover:bg-[#fff5f5] hover:text-[#ef4444] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="moa-dt-row-action-text block whitespace-nowrap transition group-hover:text-[#ef4444]">
+            {deleting ? "삭제 중" : "삭제"}
+          </span>
         </button>
       </div>
     </div>

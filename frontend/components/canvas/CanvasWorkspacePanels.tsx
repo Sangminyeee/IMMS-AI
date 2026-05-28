@@ -277,6 +277,8 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   const {
     isRecording,
     recordingStartedAtMs,
+    meetingTimerStartedAtMs,
+    meetingTimerEndedAtMs,
   } = view;
   const {
     meetingGoalDraft,
@@ -297,7 +299,8 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!isRecording || !recordingStartedAtMs) {
+    const timerRunning = Boolean((meetingTimerStartedAtMs || recordingStartedAtMs) && !meetingTimerEndedAtMs);
+    if (!timerRunning) {
       return undefined;
     }
 
@@ -308,10 +311,13 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       window.cancelAnimationFrame(frameId);
       window.clearInterval(intervalId);
     };
-  }, [isRecording, recordingStartedAtMs]);
+  }, [isRecording, meetingTimerEndedAtMs, meetingTimerStartedAtMs, recordingStartedAtMs]);
 
+  const timerStartedAtMs = meetingTimerStartedAtMs || recordingStartedAtMs || null;
+  const timerEndedAtMs = meetingTimerEndedAtMs || null;
+  const timerRunning = Boolean(timerStartedAtMs && !timerEndedAtMs);
   const recordingElapsedText = formatRecordingElapsed(
-    isRecording && recordingStartedAtMs ? nowMs - recordingStartedAtMs : 0,
+    timerStartedAtMs ? (timerEndedAtMs || nowMs) - timerStartedAtMs : 0,
   );
 
   return (
@@ -326,7 +332,7 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
         </span>
       </button>
       <div className="mt-[9px] inline-flex h-[32px] w-[110px] items-center justify-center gap-[8px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)]">
-        <ClockIcon className={`h-[16.4px] w-[16.4px] ${isRecording ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
+        <ClockIcon className={`h-[16.4px] w-[16.4px] ${timerRunning ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
         <span>{recordingElapsedText}</span>
       </div>
 
@@ -375,35 +381,16 @@ function CenterTransportControls({ header }: { header: CanvasHeaderProps }) {
   const { view, handlers } = header;
   return (
     <div className="pointer-events-none absolute bottom-[var(--canvas-transport-bottom)] left-1/2 z-20 -translate-x-1/2">
-      <div className="pointer-events-auto relative h-[var(--canvas-transport-height)] w-[var(--canvas-transport-width)] rounded-full bg-[#f9f9f9] shadow-[0_-0.675px_6.8px_rgba(0,0,0,0.07),0_0.675px_2.025px_rgba(133,133,133,0.15),0_3.375px_3.375px_rgba(133,133,133,0.13),0_7.425px_4.725px_rgba(133,133,133,0.08),0_12.825px_5.4px_rgba(133,133,133,0.02)]">
-        <button
-          type="button"
-          onClick={handlers.onBackToDashboard}
-          aria-label="대시보드로 돌아가기"
-          className="absolute left-[var(--canvas-transport-left-x)] top-1/2 grid h-[var(--canvas-transport-side)] w-[var(--canvas-transport-side)] -translate-y-1/2 place-items-center rounded-full text-[#90a1b9] transition hover:bg-white hover:text-[#01a3ff]"
-        >
-          <ArrowLeftIcon className="h-[var(--canvas-transport-arrow)] w-[var(--canvas-transport-arrow)]" />
-        </button>
-        <button
-          type="button"
-          onClick={handlers.onRecordingToggle}
-          aria-label={view.isRecording ? "녹음 중지" : "녹음 시작"}
-          className="absolute left-1/2 top-[var(--canvas-transport-fab-top)] grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] -translate-x-1/2 place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition"
-        >
-          <span className="grid h-[var(--canvas-transport-inner)] w-[var(--canvas-transport-inner)] place-items-center rounded-full border border-white/30 bg-[linear-gradient(180deg,#01a3ff_0%,#236cf3_100%)] shadow-[0_-3.44px_2.29px_rgba(255,255,255,0.29),0_1.66px_5.1px_rgba(1,231,255,0.3)]">
-            {view.isRecording ? <RecordingWaveIcon className="h-[var(--canvas-transport-wave)] w-[var(--canvas-transport-wave)]" /> : <MicIcon className="h-[var(--canvas-transport-mic)] w-[var(--canvas-transport-mic)]" />}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={handlers.onEndMeetingClick}
-          disabled={view.endMeetingSaving}
-          aria-label="회의 종료"
-          className="absolute right-[var(--canvas-transport-right-x)] top-1/2 grid h-[var(--canvas-transport-side)] w-[var(--canvas-transport-side)] -translate-y-1/2 place-items-center rounded-full text-[#90a1b9] transition hover:bg-white hover:text-[#01a3ff] disabled:opacity-50"
-        >
-          <SkipForwardIcon className="h-[var(--canvas-transport-skip)] w-[var(--canvas-transport-skip)]" />
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={handlers.onRecordingToggle}
+        aria-label={view.isRecording ? "녹음 중지" : "녹음 시작"}
+        className="pointer-events-auto grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition hover:scale-[1.02]"
+      >
+        <span className="grid h-[var(--canvas-transport-inner)] w-[var(--canvas-transport-inner)] place-items-center rounded-full border border-white/30 bg-[linear-gradient(180deg,#01a3ff_0%,#236cf3_100%)] shadow-[0_-3.44px_2.29px_rgba(255,255,255,0.29),0_1.66px_5.1px_rgba(1,231,255,0.3)]">
+          {view.isRecording ? <RecordingWaveIcon className="h-[var(--canvas-transport-wave)] w-[var(--canvas-transport-wave)]" /> : <MicIcon className="h-[var(--canvas-transport-mic)] w-[var(--canvas-transport-mic)]" />}
+        </span>
+      </button>
     </div>
   );
 }

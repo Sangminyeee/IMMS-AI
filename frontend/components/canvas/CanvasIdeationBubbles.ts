@@ -26,6 +26,10 @@ export type IdeationKeywordBubble = {
   offTopic?: boolean;
   offTopicReason?: string;
   anchorText?: string;
+  layoutX?: number;
+  layoutY?: number;
+  layoutSize?: number;
+  clusterId?: string;
   activity?: number;
   opacity?: number;
   layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
@@ -956,6 +960,19 @@ function clampIdeationBubblePosition(x: number, y: number, size: number) {
   };
 }
 
+function hasServerIdeationBubbleTarget(bubble: IdeationKeywordBubble) {
+  return Number.isFinite(Number(bubble.layoutX)) && Number.isFinite(Number(bubble.layoutY));
+}
+
+function getServerIdeationBubblePosition(bubble: IdeationKeywordBubble, size: number) {
+  const serverSize = Number.isFinite(Number(bubble.layoutSize)) && Number(bubble.layoutSize) > 0
+    ? Number(bubble.layoutSize)
+    : size;
+  const centerX = Number(bubble.layoutX) + serverSize / 2;
+  const centerY = Number(bubble.layoutY) + serverSize / 2;
+  return clampIdeationBubblePosition(centerX - size / 2, centerY - size / 2, size);
+}
+
 function findIdeationBubbleVisualByText(
   visuals: IdeationKeywordBubbleVisual[],
   text?: string,
@@ -1415,6 +1432,50 @@ function resolveIdeationBubbleVisualCollisions(
   return nextVisuals;
 }
 
+function buildServerManagedIdeationBubbleVisuals(
+  previousVisuals: IdeationKeywordBubbleVisual[],
+  incomingBubbles: IdeationKeywordBubble[],
+  growthById: Record<string, number>,
+  tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  const previousById = new Map(previousVisuals.map((visual) => [visual.id, visual]));
+  const maxCount = Math.max(1, ...incomingBubbles.map((bubble) => bubble.count));
+  const newBubbleIds = new Set<string>();
+
+  const visuals = incomingBubbles.map((bubble) => {
+    const previous = previousById.get(bubble.id);
+    const incomingActivity = getIdeationBubbleIncomingActivity(bubble);
+    const activity = previous
+      ? clampNumber(Math.max(previous.activity, 0.5) * 0.35 + incomingActivity * 0.65, 0.18, 1)
+      : incomingActivity;
+    const size = getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
+    const position = getServerIdeationBubblePosition(bubble, size);
+    if (!previous) {
+      newBubbleIds.add(bubble.id);
+    }
+
+    const merged = previous ? { ...previous, ...bubble } : bubble;
+    return {
+      ...merged,
+      activity,
+      opacity: getIdeationBubbleVisualOpacity(merged, activity),
+      size,
+      targetX: position.x,
+      targetY: position.y,
+      settledTargetX: undefined,
+      settledTargetY: undefined,
+      visualScale: 1,
+      entering: false,
+      firstSeenTick: previous?.firstSeenTick ?? tick,
+      lastSeenTick: tick,
+    };
+  });
+
+  const emphasized = applyIdeationBubblePrimaryEmphasis(visuals);
+  return applyIdeationBubbleEnterState(emphasized, newBubbleIds, tick, layoutAnchor);
+}
+
 export function buildStableIdeationBubbleVisuals(
   previousVisuals: IdeationKeywordBubbleVisual[],
   incomingBubbles: IdeationKeywordBubble[],
@@ -1422,6 +1483,16 @@ export function buildStableIdeationBubbleVisuals(
   tick: number,
   layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ) {
+  if (incomingBubbles.length > 0 && incomingBubbles.every(hasServerIdeationBubbleTarget)) {
+    return buildServerManagedIdeationBubbleVisuals(
+      previousVisuals,
+      incomingBubbles,
+      growthById,
+      tick,
+      layoutAnchor,
+    );
+  }
+
   const incomingById = new Map(incomingBubbles.map((bubble) => [bubble.id, bubble]));
   const incomingIds = new Set(incomingById.keys());
   const visiblePreviousVisuals = previousVisuals.filter((visual) => incomingIds.has(visual.id));

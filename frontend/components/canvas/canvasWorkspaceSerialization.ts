@@ -287,6 +287,7 @@ export function normalizeIdeationBubbleGraphForWorkspace(
   return {
     version: Number(graph.version || 1),
     update_cycle: Number(graph.update_cycle || 0),
+    layout_revision: Number(graph.layout_revision || 0),
     bubbles: Array.isArray(graph.bubbles) ? graph.bubbles : [],
     processed_utterance_ids: Array.isArray(graph.processed_utterance_ids)
       ? graph.processed_utterance_ids.filter((id): id is string => typeof id === "string" && id.length > 0)

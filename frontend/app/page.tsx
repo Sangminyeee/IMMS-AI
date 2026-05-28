@@ -186,6 +186,12 @@ function readBoolean(value: unknown, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function parseIsoTimestampMs(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function getSpeechDetectionDecision(
   metrics: RecordedAudioChunk["metrics"],
   profile: SpeechDetectionProfile | null,
@@ -231,6 +237,8 @@ function HomeContent() {
   const [analysisState, setAnalysisState] = useState<MeetingState | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<number | null>(null);
+  const [meetingTimerStartedAtMs, setMeetingTimerStartedAtMs] = useState<number | null>(null);
+  const [meetingTimerEndedAtMs, setMeetingTimerEndedAtMs] = useState<number | null>(null);
   const [ideationBubbleFinalizing, setIdeationBubbleFinalizing] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingMeeting, setLoadingMeeting] = useState(true);
@@ -368,6 +376,22 @@ function HomeContent() {
     setAgendas(mapped.agendas);
   }, []);
 
+  const applyMeetingTimerSnapshot = useCallback((snapshot: {
+    started_at?: unknown;
+    ended_at?: unknown;
+    status?: unknown;
+  }) => {
+    const nextStartedAtMs = parseIsoTimestampMs(snapshot.started_at);
+    const nextEndedAtMs = parseIsoTimestampMs(snapshot.ended_at);
+    const nextStatus = readString(snapshot.status);
+
+    setMeetingTimerStartedAtMs(nextStartedAtMs);
+    setMeetingTimerEndedAtMs(nextEndedAtMs);
+    if (nextStatus) {
+      setMeetingStatus(nextStatus);
+    }
+  }, []);
+
   useEffect(() => {
     if (!authLoading) {
       if (!user) {
@@ -385,6 +409,8 @@ function HomeContent() {
     setMeetingGoal("");
     setMeetingGoalContext("");
     setMeetingStatus("");
+    setMeetingTimerStartedAtMs(null);
+    setMeetingTimerEndedAtMs(null);
     clearIdeationBubbleFinalization();
     setIncomingCanvasStateRequestId("");
 
@@ -396,7 +422,7 @@ function HomeContent() {
           { data: transcriptData, error: transcriptError },
           workspaceState,
         ] = await Promise.all([
-          supabase.from("meetings").select("title,status").eq("id", meetingId).single(),
+          supabase.from("meetings").select("title,status,started_at,ended_at").eq("id", meetingId).single(),
           loadTranscriptRows(meetingId),
           getCanvasWorkspaceState(meetingId).catch(() => null),
         ]);
@@ -422,6 +448,11 @@ function HomeContent() {
 
         setMeetingTitle(nextMeetingTitle);
         setMeetingStatus(nextMeetingStatus);
+        applyMeetingTimerSnapshot({
+          started_at: meetingData?.started_at,
+          ended_at: meetingData?.ended_at,
+          status: nextMeetingStatus,
+        });
         setMeetingGoal(workspaceState?.meeting_goal || "");
         setMeetingGoalContext(workspaceState?.meeting_goal_context || "");
         setTranscripts(nextTranscripts);
@@ -440,7 +471,7 @@ function HomeContent() {
     };
 
     void loadMeeting();
-  }, [applyMeetingStateToUi, clearIdeationBubbleFinalization, user, meetingId]);
+  }, [applyMeetingStateToUi, applyMeetingTimerSnapshot, clearIdeationBubbleFinalization, user, meetingId]);
 
   useEffect(() => {
     if (!user || !meetingId) return;
@@ -605,6 +636,28 @@ function HomeContent() {
       if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
       setMeetingGoal(readString(payload.meeting_goal));
       setMeetingGoalContext(readString(payload.meeting_goal_context));
+    });
+
+    wsClient.on("meeting_timer_updated", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+
+      applyMeetingTimerSnapshot({
+        started_at: payload.started_at,
+        ended_at: payload.ended_at,
+        status: payload.status,
+      });
+
+      if (readString(payload.status) === "completed") {
+        const recorder = audioRecorderRef.current;
+        audioRecorderRef.current = null;
+        void recorder?.stopAndCleanup();
+        setIsRecording(false);
+        setRecordingStartedAtMs(null);
+        clearIdeationBubbleFinalization();
+        showTranscriptPersistenceStatus("회의가 종료되었습니다.", 8000);
+      }
     });
 
     wsClient.on("stt_debug", (message) => {
@@ -826,7 +879,15 @@ function HomeContent() {
       wsClient.disconnect();
       setWsConnected(false);
     };
-  }, [user, meetingId, showLiveSpeechPreview, showTranscriptPersistenceStatus, applyMeetingStateToUi]);
+  }, [
+    user,
+    meetingId,
+    showLiveSpeechPreview,
+    showTranscriptPersistenceStatus,
+    applyMeetingStateToUi,
+    applyMeetingTimerSnapshot,
+    clearIdeationBubbleFinalization,
+  ]);
 
   const finishCalibration = useCallback(() => {
     if (!user) return;
@@ -927,6 +988,70 @@ function HomeContent() {
     calibrationAccumulatorRef.current.sumNoiseFloor += metrics.noiseFloor;
   }, []);
 
+  const startSharedMeetingTimerIfNeeded = useCallback(async () => {
+    if (!meetingId) return false;
+    if (meetingStatus === "completed" || meetingTimerEndedAtMs) {
+      alert("이미 종료된 회의에서는 녹음을 시작할 수 없습니다.");
+      return false;
+    }
+
+    if (meetingTimerStartedAtMs) {
+      if (meetingStatus !== "active" && meetingStatus !== "in_progress") {
+        const { data, error } = await supabase
+          .from("meetings")
+          .update({ status: "active" })
+          .eq("id", meetingId)
+          .select("started_at,ended_at,status")
+          .single();
+
+        if (error) throw error;
+        applyMeetingTimerSnapshot(data || {});
+        wsClientRef.current?.sendMessage("meeting_timer_sync", {
+          started_at: data?.started_at || new Date(meetingTimerStartedAtMs).toISOString(),
+          ended_at: data?.ended_at || "",
+          status: data?.status || "active",
+        });
+      }
+      return true;
+    }
+
+    const requestedStartedAt = new Date().toISOString();
+    const updateResult = await supabase
+      .from("meetings")
+      .update({ status: "active", started_at: requestedStartedAt })
+      .eq("id", meetingId)
+      .is("started_at", null)
+      .select("started_at,ended_at,status")
+      .maybeSingle();
+
+    if (updateResult.error) throw updateResult.error;
+
+    let timerRow = updateResult.data;
+    if (!timerRow) {
+      const existingResult = await supabase
+        .from("meetings")
+        .select("started_at,ended_at,status")
+        .eq("id", meetingId)
+        .single();
+      if (existingResult.error) throw existingResult.error;
+      timerRow = existingResult.data;
+    }
+
+    applyMeetingTimerSnapshot(timerRow || {});
+    wsClientRef.current?.sendMessage("meeting_timer_sync", {
+      started_at: timerRow?.started_at || requestedStartedAt,
+      ended_at: timerRow?.ended_at || "",
+      status: timerRow?.status || "active",
+    });
+    return true;
+  }, [
+    applyMeetingTimerSnapshot,
+    meetingId,
+    meetingStatus,
+    meetingTimerEndedAtMs,
+    meetingTimerStartedAtMs,
+  ]);
+
   const toggleRecording = async () => {
     if (!user) return;
 
@@ -943,6 +1068,15 @@ function HomeContent() {
       finishCalibration();
       setIsRecording(false);
       setRecordingStartedAtMs(null);
+      return;
+    }
+
+    try {
+      const timerStarted = await startSharedMeetingTimerIfNeeded();
+      if (!timerStarted) return;
+    } catch (error) {
+      console.error("Failed to start shared meeting timer:", error);
+      alert("회의 타이머 시작에 실패했습니다.");
       return;
     }
 
@@ -1012,6 +1146,12 @@ function HomeContent() {
           });
           return;
         }
+        showTranscriptPersistenceStatus(
+          canvasContext.stage === "ideation"
+            ? "현재 STT 전사 및 키워드 추출 중입니다."
+            : "현재 STT 전사 중입니다.",
+          9000,
+        );
         console.info("[STT] 음성 감지 - 전사 요청 전송", {
           rms: metrics.rms,
           peak: metrics.peak,
@@ -1060,18 +1200,38 @@ function HomeContent() {
       setRecordingStartedAtMs(null);
     }
 
-    wsClientRef.current?.disconnect();
-
     try {
+      const endedAt = new Date().toISOString();
+      const updatePayload: {
+        status: string;
+        ended_at: string;
+        started_at?: string;
+      } = {
+        status: "completed",
+        ended_at: endedAt,
+      };
+
+      if (!meetingTimerStartedAtMs) {
+        updatePayload.started_at = endedAt;
+      }
+
       const { error } = await supabase
         .from("meetings")
-        .update({
-          status: "completed",
-          ended_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", meetingId);
 
       if (error) throw error;
+      applyMeetingTimerSnapshot({
+        started_at: updatePayload.started_at || new Date(meetingTimerStartedAtMs || Date.parse(endedAt)).toISOString(),
+        ended_at: endedAt,
+        status: "completed",
+      });
+      wsClientRef.current?.sendMessage("meeting_timer_sync", {
+        started_at: updatePayload.started_at || new Date(meetingTimerStartedAtMs || Date.parse(endedAt)).toISOString(),
+        ended_at: endedAt,
+        status: "completed",
+      });
+      wsClientRef.current?.disconnect();
       router.push("/dashboard");
     } catch (error) {
       console.error("Failed to end meeting:", error);
@@ -1166,6 +1326,8 @@ function HomeContent() {
         liveSpeechPreview={liveSpeechPreview}
         isRecording={isRecording}
         recordingStartedAtMs={recordingStartedAtMs}
+        meetingTimerStartedAtMs={meetingTimerStartedAtMs}
+        meetingTimerEndedAtMs={meetingTimerEndedAtMs}
         onToggleRecording={toggleRecording}
         onStopRecording={toggleRecording}
         onEndMeeting={endMeeting}

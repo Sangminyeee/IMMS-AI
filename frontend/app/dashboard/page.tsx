@@ -134,6 +134,20 @@ function buildFinalResultSummaryFromSolutionTopics(topics: CanvasSolutionTopicRe
   };
 }
 
+function formatMeetingDuration(startedAt?: string, endedAt?: string) {
+  const startedMs = Date.parse(startedAt || "");
+  const endedMs = Date.parse(endedAt || "");
+  if (!Number.isFinite(startedMs) || !Number.isFinite(endedMs) || endedMs < startedMs) {
+    return "";
+  }
+
+  const totalMinutes = Math.max(0, Math.round((endedMs - startedMs) / 60000));
+  if (totalMinutes < 60) return `${totalMinutes}분`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}시간 ${minutes}분` : `${hours}시간`;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading, signOut } = useAuth();
@@ -152,6 +166,7 @@ export default function DashboardPage() {
   const [resultRebuildMessages, setResultRebuildMessages] = useState<Record<string, string>>({});
   const [resultLoadingMeetingId, setResultLoadingMeetingId] = useState<string | null>(null);
   const [resultRebuildingMeetingId, setResultRebuildingMeetingId] = useState<string | null>(null);
+  const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
@@ -236,6 +251,57 @@ export default function DashboardPage() {
   const handleJoinMeeting = (meetingId: string) => {
     console.log("📊 Dashboard - Joining meeting:", meetingId);
     router.push(`/?meeting_id=${meetingId}`);
+  };
+
+  const handleDeleteMeeting = async (meeting: DashboardMeeting) => {
+    if (deletingMeetingId) return;
+    const confirmed = window.confirm(
+      `"${meeting.title}" 회의를 삭제할까요?\n삭제하면 전사, 캔버스, 최종 문서 데이터도 함께 삭제됩니다.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeletingMeetingId(meeting.id);
+      const { error } = await supabase
+        .from("meetings")
+        .delete()
+        .eq("id", meeting.id);
+
+      if (error) throw error;
+
+      setMeetings((prev) => prev.filter((item) => item.id !== meeting.id));
+      setSelectedResultMeeting((current) => (current?.id === meeting.id ? null : current));
+      setResultSummaries((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultSolutionTopics((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultSavedAt((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultErrors((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultRebuildMessages((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+    } catch (error) {
+      console.error("Error deleting meeting:", error);
+      alert("회의 삭제에 실패했습니다: " + getErrorMessage(error, "알 수 없는 오류"));
+    } finally {
+      setDeletingMeetingId((current) => (current === meeting.id ? null : current));
+    }
   };
 
   const handleOpenMeetingResult = async (meeting: DashboardMeeting) => {
@@ -391,6 +457,9 @@ export default function DashboardPage() {
     : hasFinalResult(selectedResultSummary)
       ? "저장됨"
       : "없음";
+  const selectedResultDuration = selectedResultMeeting
+    ? formatMeetingDuration(selectedResultMeeting.started_at, selectedResultMeeting.ended_at)
+    : "";
 
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
@@ -399,7 +468,9 @@ export default function DashboardPage() {
         meetings={meetings}
         searchQuery={meetingSearchQuery}
         statusFilter={meetingStatusFilter}
+        deletingMeetingId={deletingMeetingId}
         onCreateMeeting={() => setShowCreateModal(true)}
+        onDeleteMeeting={(meeting) => void handleDeleteMeeting(meeting)}
         onJoinMeeting={handleJoinMeeting}
         onOpenMeetingResult={(meeting) => void handleOpenMeetingResult(meeting)}
         onSearchQueryChange={setMeetingSearchQuery}
@@ -442,6 +513,7 @@ export default function DashboardPage() {
                   </h2>
                   <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">
                     <span>생성 {formatDashboardDateTime(selectedResultMeeting.created_at)}</span>
+                    {selectedResultDuration ? <span>진행 {selectedResultDuration}</span> : null}
                     <span>종료 {formatDashboardDateTime(selectedResultMeeting.ended_at)}</span>
                     <span>결과 저장 {formatDashboardDateTime(selectedResultSavedAt)}</span>
                   </div>

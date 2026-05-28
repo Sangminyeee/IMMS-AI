@@ -147,6 +147,9 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
     const activity = clampNumber(Number(bubble.activity ?? (bubble.display_state === "dimmed" ? 0.22 : 0.72)), 0, 1);
     const durable = durableIds.has(bubble.id);
     const layoutZone = bubble.layout_zone || (bubble.display_state === "dimmed" ? "peripheral" : "default");
+    const layoutX = Number(bubble.x);
+    const layoutY = Number(bubble.y);
+    const layoutSize = Number(bubble.size);
     return {
       id: bubble.id,
       text: bubble.label,
@@ -162,6 +165,10 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
       offTopic: Boolean(bubble.off_topic || kind === "off_topic"),
       offTopicReason: bubble.off_topic_reason || "",
       anchorText: labelById.get(bubble.anchor_id || "") || "",
+      layoutX: Number.isFinite(layoutX) ? layoutX : undefined,
+      layoutY: Number.isFinite(layoutY) ? layoutY : undefined,
+      layoutSize: Number.isFinite(layoutSize) && layoutSize > 0 ? layoutSize : undefined,
+      clusterId: bubble.cluster_id || "",
       activity,
       layoutZone: durable && layoutZone === "default" ? "core" : layoutZone,
       durable,
@@ -259,7 +266,7 @@ export function useIdeationKeywordBubbles({
     }
 
     if (requestInFlightRef.current) {
-      deferStateUpdate(() => setStatusMessage("AI가 서버 버블 그래프를 정리 중입니다."));
+      deferStateUpdate(() => setStatusMessage("현재 STT 전사 기반 키워드 버블을 정리 중입니다."));
       return undefined;
     }
 
@@ -273,7 +280,7 @@ export function useIdeationKeywordBubbles({
       const requestSeq = requestSeqRef.current + 1;
       requestSeqRef.current = requestSeq;
       requestInFlightRef.current = true;
-      setStatusMessage("AI가 서버 버블 그래프를 정리 중입니다.");
+      setStatusMessage("현재 STT 전사 기반 키워드 추출 중입니다.");
 
       const bubbleGraphRequest: Parameters<typeof updateCanvasIdeationBubbleGraph>[0] = {
         meeting_id: meetingId,
@@ -326,7 +333,7 @@ export function useIdeationKeywordBubbles({
 
           const visibleCount = nextGraph.bubbles.filter((bubble) => bubble.display_state !== "archived").length;
           const archivedCount = nextGraph.bubbles.length - visibleCount;
-          setStatusMessage(`버블 그래프를 갱신했습니다. 표시 ${visibleCount}개, 보관 ${archivedCount}개`);
+          setStatusMessage(`키워드 버블을 갱신했습니다. 표시 ${visibleCount}개, 보관 ${archivedCount}개`);
         })
         .catch((error) => {
           if (requestSeqRef.current !== requestSeq) return;
@@ -355,7 +362,7 @@ export function useIdeationKeywordBubbles({
       return undefined;
     }
 
-    deferStateUpdate(() => setStatusMessage(`버블 분석 대기 중 ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`));
+    deferStateUpdate(() => setStatusMessage(`STT 전사를 모아 키워드 추출을 준비 중입니다. ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`));
     const timeoutMs = Math.max(
       250,
       Math.min(

@@ -323,6 +323,8 @@ type MeetingCanvasTabProps = {
   liveSpeechPreview: LiveSpeechPreview | null;
   isRecording?: boolean;
   recordingStartedAtMs?: number | null;
+  meetingTimerStartedAtMs?: number | null;
+  meetingTimerEndedAtMs?: number | null;
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
   onStopRecording?: () => void | Promise<void>;
@@ -682,6 +684,8 @@ export default function MeetingCanvasTab({
   incomingCanvasStateRequestId,
   isRecording = false,
   recordingStartedAtMs = null,
+  meetingTimerStartedAtMs = null,
+  meetingTimerEndedAtMs = null,
   onToggleRecording,
   onEndMeeting,
   onStopRecording,
@@ -3276,6 +3280,8 @@ export default function MeetingCanvasTab({
       meetingTitle,
       isRecording: Boolean(isRecording),
       recordingStartedAtMs,
+      meetingTimerStartedAtMs,
+      meetingTimerEndedAtMs,
       endMeetingSaving,
       stage,
       busy,

@@ -737,6 +737,10 @@ export interface CanvasIdeationBubbleGraphBubble {
   importance?: number;
   relevance?: number;
   activity?: number;
+  x?: number;
+  y?: number;
+  size?: number;
+  cluster_id?: string;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
@@ -754,6 +758,7 @@ export interface CanvasIdeationBubbleGraphBubble {
 export interface CanvasIdeationBubbleGraph {
   version: number;
   update_cycle: number;
+  layout_revision?: number;
   bubbles: CanvasIdeationBubbleGraphBubble[];
   processed_utterance_ids: string[];
   updated_at?: string;
