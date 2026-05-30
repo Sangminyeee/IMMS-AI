@@ -590,6 +590,12 @@ def _normalize_canvas_problem_structure_state(raw: Any) -> dict[str, Any]:
         "phase": phase,
         "method": method,
         "mode": mode,
+        "revision": _safe_nonnegative_int(raw.get("revision")),
+        "source_generation_id": _safe_text(raw.get("source_generation_id") or raw.get("sourceGenerationId")),
+        "based_on_transcript_revision": _safe_nonnegative_int(
+            raw.get("based_on_transcript_revision") or raw.get("basedOnTranscriptRevision")
+        ),
+        "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
         "nodes": nodes,
         "groups": groups,
     }
@@ -2551,6 +2557,10 @@ class CanvasWorkspaceProblemStructureInput(BaseModel):
     phase: str = "explore"
     method: str = "affinity"
     mode: str = ""
+    revision: int = 0
+    source_generation_id: str = ""
+    based_on_transcript_revision: int = 0
+    updated_at: str = ""
     nodes: list[CanvasWorkspaceProblemStructureNodeInput] = Field(default_factory=list)
     groups: list[CanvasWorkspaceProblemStructureGroupInput] = Field(default_factory=list)
 
@@ -2565,6 +2575,7 @@ class CanvasArtifactGenerationEntryInput(BaseModel):
     finished_at: str = ""
     error: str = ""
     version: int = 0
+    input_transcript_revision: int = 0
 
 
 class CanvasWorkspaceStateInput(BaseModel):
@@ -2608,6 +2619,16 @@ class CanvasArtifactGenerationStartInput(BaseModel):
     artifact_key: str = ""
     user_id: str = ""
     force: bool = False
+
+
+class CanvasArtifactGenerationFinishInput(BaseModel):
+    meeting_id: str = ""
+    artifact_key: str = ""
+    user_id: str = ""
+    generation_id: str = ""
+    status: str = "ready"
+    error: str = ""
+    problem_structure: CanvasWorkspaceProblemStructureInput | None = None
 
 
 class CanvasFinalReportShareInput(BaseModel):
@@ -11285,8 +11306,73 @@ def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]
             "finished_at": _safe_text(raw_value.get("finished_at")),
             "error": _safe_text(raw_value.get("error")),
             "version": version,
+            "input_transcript_revision": _safe_nonnegative_int(raw_value.get("input_transcript_revision")),
         }
     return normalized
+
+
+def _should_accept_problem_structure_patch(
+    current: dict[str, Any],
+    incoming: dict[str, Any],
+) -> bool:
+    current_revision = _safe_nonnegative_int(current.get("revision"))
+    incoming_revision = _safe_nonnegative_int(incoming.get("revision"))
+    if current_revision > 0 and incoming_revision < current_revision:
+        return False
+    if (
+        current_revision > 0
+        and incoming_revision == current_revision
+        and current.get("groups")
+        and not incoming.get("groups")
+    ):
+        return False
+    return True
+
+
+def _finish_canvas_artifact_generation_entry(
+    current: dict[str, Any],
+    artifact_key: str,
+    status: str,
+    generation_id: str,
+    requested_by: str,
+    saved_at: str,
+    error: str = "",
+) -> dict[str, Any]:
+    previous_version = _safe_nonnegative_int(current.get("version"))
+    next_version = previous_version + 1 if status == "ready" else previous_version
+    return {
+        "artifact_key": artifact_key,
+        "status": status,
+        "generation_id": generation_id or _safe_text(current.get("generation_id")),
+        "started_by": _safe_text(current.get("started_by")) or requested_by,
+        "started_at": _safe_text(current.get("started_at")) or saved_at,
+        "updated_at": saved_at,
+        "finished_at": saved_at,
+        "error": error if status == "failed" else "",
+        "version": next_version,
+        "input_transcript_revision": _safe_nonnegative_int(current.get("input_transcript_revision")),
+    }
+
+
+def _merge_canvas_artifact_generation_patch(
+    current_map: dict[str, dict[str, Any]],
+    incoming_map: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    merged = copy.deepcopy(current_map)
+    for key, incoming in incoming_map.items():
+        current = current_map.get(key) or {}
+        current_version = _safe_nonnegative_int(current.get("version"))
+        incoming_version = _safe_nonnegative_int(incoming.get("version"))
+        if current_version > incoming_version:
+            continue
+        if (
+            current_version == incoming_version
+            and _safe_text(current.get("status")) == "ready"
+            and _safe_text(incoming.get("status")) != "ready"
+        ):
+            continue
+        merged[key] = copy.deepcopy(incoming)
+    return merged
 
 
 def _summarize_canvas_node_positions_for_debug(
@@ -14561,6 +14647,8 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
         generation = copy.deepcopy(current)
         acquired = False
     else:
+        with RT.lock:
+            input_transcript_revision = _safe_nonnegative_int(getattr(RT, "transcript_version", 0))
         generation = {
             "artifact_key": artifact_key,
             "status": "generating",
@@ -14571,6 +14659,7 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
             "finished_at": "",
             "error": "",
             "version": int(current.get("version") or 0),
+            "input_transcript_revision": input_transcript_revision,
         }
         generation_map[artifact_key] = generation
         workspace["artifact_generation"] = generation_map
@@ -14582,6 +14671,90 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
     return {
         "ok": True,
         "acquired": acquired,
+        "generation": copy.deepcopy(generation),
+        "workspace": _canvas_workspace_response(workspace),
+    }
+
+
+@app.post("/api/canvas/artifact-generation/finish")
+def post_canvas_artifact_generation_finish(payload: CanvasArtifactGenerationFinishInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    artifact_key = _safe_text(payload.artifact_key)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if artifact_key not in _CANVAS_ARTIFACT_KEYS:
+        raise HTTPException(status_code=400, detail="invalid artifact_key")
+    status = _safe_text(payload.status)
+    if status not in {"ready", "failed"}:
+        raise HTTPException(status_code=400, detail="invalid status")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+    current = generation_map.get(artifact_key) or {}
+    current_generation_id = _safe_text(current.get("generation_id"))
+    requested_generation_id = _safe_text(payload.generation_id)
+
+    if current_generation_id and requested_generation_id and current_generation_id != requested_generation_id:
+        return {
+            "ok": True,
+            "applied": False,
+            "generation": copy.deepcopy(current),
+            "workspace": _canvas_workspace_response(workspace),
+        }
+
+    generation_id = requested_generation_id or current_generation_id or f"{artifact_key}:{uuid4().hex}"
+    generation = _finish_canvas_artifact_generation_entry(
+        current,
+        artifact_key,
+        status,
+        generation_id,
+        _safe_text(payload.user_id),
+        saved_at,
+        _safe_text(payload.error),
+    )
+    generation_map[artifact_key] = generation
+    workspace["artifact_generation"] = generation_map
+
+    if status == "ready" and artifact_key == "problem-definition:structure":
+        if payload.problem_structure is None:
+            raise HTTPException(status_code=400, detail="problem_structure is required")
+        next_structure = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        previous_structure = _normalize_canvas_problem_structure_state(workspace.get("problem_structure"))
+        next_revision = max(
+            _safe_nonnegative_int(previous_structure.get("revision")) + 1,
+            _safe_nonnegative_int(generation.get("version")),
+        )
+        next_structure["phase"] = "structure"
+        next_structure["revision"] = next_revision
+        next_structure["source_generation_id"] = generation_id
+        next_structure["based_on_transcript_revision"] = _safe_nonnegative_int(
+            current.get("input_transcript_revision")
+        )
+        next_structure["updated_at"] = saved_at
+        workspace["problem_structure"] = next_structure
+
+    with RT.lock:
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+    print(
+        "[canvas artifact finish]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "artifact_key": artifact_key,
+            "status": status,
+            "generation_id": generation_id,
+            "version": _safe_nonnegative_int(generation.get("version")),
+            "problem_structure_revision": _safe_nonnegative_int(
+                (workspace.get("problem_structure") or {}).get("revision")
+            ),
+        },
+    )
+    return {
+        "ok": True,
+        "applied": True,
         "generation": copy.deepcopy(generation),
         "workspace": _canvas_workspace_response(workspace),
     }
@@ -14613,7 +14786,19 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "problem_groups" in provided_fields:
         workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
     if "problem_structure" in provided_fields:
-        workspace["problem_structure"] = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        incoming_problem_structure = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        current_problem_structure = _normalize_canvas_problem_structure_state(workspace.get("problem_structure"))
+        if _should_accept_problem_structure_patch(current_problem_structure, incoming_problem_structure):
+            workspace["problem_structure"] = incoming_problem_structure
+        else:
+            print(
+                "[canvas workspace PATCH] ignored stale problem_structure",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "current_revision": _safe_nonnegative_int(current_problem_structure.get("revision")),
+                    "incoming_revision": _safe_nonnegative_int(incoming_problem_structure.get("revision")),
+                },
+            )
     if "solution_topics" in provided_fields:
         workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
     if "final_solution_summary" in provided_fields:
@@ -14623,7 +14808,10 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
     if "artifact_generation" in provided_fields:
-        workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
+        workspace["artifact_generation"] = _merge_canvas_artifact_generation_patch(
+            _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {}),
+            _normalize_canvas_artifact_generation(payload.artifact_generation or {}),
+        )
     if "ideation_bubble_graph" in provided_fields:
         workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     if "imported_state" in provided_fields:

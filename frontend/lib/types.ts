@@ -232,6 +232,10 @@ export interface CanvasProblemStructureState {
   phase: "explore" | "structure" | string;
   method: "affinity" | "card-sorting" | string;
   mode?: "" | "manual" | "ai" | string;
+  revision?: number;
+  source_generation_id?: string;
+  based_on_transcript_revision?: number;
+  updated_at?: string;
   nodes: CanvasProblemStructureNode[];
   groups: CanvasProblemStructureGroup[];
 }
@@ -361,6 +365,7 @@ export interface CanvasArtifactGenerationState {
   finished_at?: string;
   error?: string;
   version?: number;
+  input_transcript_revision?: number;
 }
 
 export type CanvasArtifactGenerationMap = Record<string, CanvasArtifactGenerationState>;

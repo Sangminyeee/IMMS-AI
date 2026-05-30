@@ -16,6 +16,7 @@ import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
   hydrateProblemStructureState,
+  type ProblemStructureArtifactMeta,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -106,6 +107,7 @@ type UseSharedCanvasIncomingSyncOptions = {
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
   setProblemGroups: Dispatch<SetStateAction<ProblemGroupModel[]>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
+  setProblemStructureArtifactMeta: Dispatch<SetStateAction<ProblemStructureArtifactMeta>>;
   setProblemStructureNodes: Dispatch<SetStateAction<ProblemStructureNodeViewModel[]>>;
   setProblemStructurePending: Dispatch<SetStateAction<boolean>>;
   setSummaryDocumentDraftDirty: Dispatch<SetStateAction<boolean>>;
@@ -182,6 +184,7 @@ export function useSharedCanvasIncomingSync({
   setNodePositions,
   setProblemGroups,
   setProblemStructureGroups,
+  setProblemStructureArtifactMeta,
   setProblemStructureNodes,
   setProblemStructurePending,
   setSummaryDocumentDraftDirty,
@@ -372,6 +375,12 @@ export function useSharedCanvasIncomingSync({
     setProblemGroups(nextProblemGroups);
     setProblemStructureNodes(nextProblemStructure.nodes);
     setProblemStructureGroups(nextProblemStructure.groups);
+    setProblemStructureArtifactMeta({
+      revision: nextProblemStructure.revision,
+      sourceGenerationId: nextProblemStructure.sourceGenerationId,
+      basedOnTranscriptRevision: nextProblemStructure.basedOnTranscriptRevision,
+      updatedAt: nextProblemStructure.updatedAt,
+    });
     setProblemStructurePending(false);
     setFinalSummaryDocument(nextFinalSummary);
     setArtifactGeneration(nextArtifactGeneration);
@@ -447,6 +456,7 @@ export function useSharedCanvasIncomingSync({
     setMeetingGoalDrafts,
     setNodePositions,
     setProblemGroups,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureNodes,
     setProblemStructurePending,

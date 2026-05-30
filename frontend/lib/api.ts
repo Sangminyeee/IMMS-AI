@@ -363,6 +363,27 @@ export async function startCanvasArtifactGeneration(payload: {
   });
 }
 
+export async function finishCanvasArtifactGeneration(payload: {
+  meeting_id: string;
+  artifact_key: CanvasArtifactGenerationKey;
+  user_id?: string;
+  generation_id?: string;
+  status: "ready" | "failed";
+  error?: string;
+  problem_structure?: CanvasWorkspacePatchRequest["problem_structure"];
+}): Promise<{
+  ok: boolean;
+  applied: boolean;
+  generation: CanvasArtifactGenerationState;
+  workspace?: CanvasWorkspaceStateResponse;
+}> {
+  return requestJson("/api/canvas/artifact-generation/finish", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function saveCanvasWorkspacePatch(
   payload: CanvasWorkspacePatchRequest,
 ): Promise<CanvasWorkspaceStateResponse> {

@@ -35,6 +35,21 @@ export type ProblemStructureGroupViewModel = {
   createdBy: "ai" | "user";
 };
 
+export type ProblemStructureArtifactMeta = {
+  revision: number;
+  sourceGenerationId: string;
+  basedOnTranscriptRevision: number;
+  updatedAt: string;
+};
+
+export type HydratedProblemStructureState = {
+  phase: ProblemDefinitionPhase;
+  method: ProblemStructureMethod;
+  mode: ProblemDefinitionMode;
+  nodes: ProblemStructureNodeViewModel[];
+  groups: ProblemStructureGroupViewModel[];
+} & ProblemStructureArtifactMeta;
+
 export type ProblemStructureDragState = {
   nodeId: string;
   overGroupId: string;
@@ -172,17 +187,39 @@ export function normalizeProblemStructureGroupsFromResponse(
     .filter((group): group is ProblemStructureGroupViewModel => Boolean(group));
 }
 
+export function createDefaultProblemStructureArtifactMeta(): ProblemStructureArtifactMeta {
+  return {
+    revision: 0,
+    sourceGenerationId: "",
+    basedOnTranscriptRevision: 0,
+    updatedAt: "",
+  };
+}
+
+function normalizeProblemStructureRevision(raw: unknown) {
+  const value = Number(raw || 0);
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
 export function buildProblemStructureStatePayload(input: {
   phase: ProblemDefinitionPhase;
   method: ProblemStructureMethod;
   mode: ProblemDefinitionMode;
   nodes: ProblemStructureNodeViewModel[];
   groups: ProblemStructureGroupViewModel[];
+  revision?: number;
+  sourceGenerationId?: string;
+  basedOnTranscriptRevision?: number;
+  updatedAt?: string;
 }): CanvasProblemStructureState {
   return {
     phase: input.phase,
     method: input.method,
     mode: input.mode,
+    revision: normalizeProblemStructureRevision(input.revision),
+    source_generation_id: input.sourceGenerationId?.trim() || "",
+    based_on_transcript_revision: normalizeProblemStructureRevision(input.basedOnTranscriptRevision),
+    updated_at: input.updatedAt?.trim() || "",
     nodes: input.nodes.map((node) => ({
       id: node.id,
       source_group_id: node.sourceGroupId,
@@ -215,13 +252,7 @@ export function createDefaultProblemStructureState(): CanvasProblemStructureStat
 export function hydrateProblemStructureState(
   raw: CanvasProblemStructureState | null | undefined,
   fallbackProblemGroups: ProblemStructureSourceGroup[] = [],
-): {
-  phase: ProblemDefinitionPhase;
-  method: ProblemStructureMethod;
-  mode: ProblemDefinitionMode;
-  nodes: ProblemStructureNodeViewModel[];
-  groups: ProblemStructureGroupViewModel[];
-} {
+): HydratedProblemStructureState {
   const phase: ProblemDefinitionPhase = raw?.phase === "structure" ? "structure" : "explore";
   const method: ProblemStructureMethod = raw?.method === "card-sorting" ? "card-sorting" : "affinity";
   const mode: ProblemDefinitionMode = raw?.mode === "ai" || raw?.mode === "manual" ? raw.mode : "";
@@ -252,6 +283,10 @@ export function hydrateProblemStructureState(
     phase: fallbackNodes.length > 0 ? phase : "explore",
     method,
     mode,
+    revision: normalizeProblemStructureRevision(raw?.revision),
+    sourceGenerationId: raw?.source_generation_id?.trim() || "",
+    basedOnTranscriptRevision: normalizeProblemStructureRevision(raw?.based_on_transcript_revision),
+    updatedAt: raw?.updated_at?.trim() || "",
     nodes: fallbackNodes,
     groups: pruneProblemStructureGroups(groups, fallbackNodes),
   };
