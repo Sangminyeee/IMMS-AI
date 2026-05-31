@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAuth } from "@/contexts/AuthContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
@@ -14,6 +13,7 @@ import type {
   MeetingState,
 } from "@/lib/types";
 import MeetingCanvasTab, { type MeetingAgenda as CanvasAgenda, type MeetingTranscript as CanvasTranscript } from "@/components/MeetingCanvasTab";
+import { useRequireAuth } from "@/components/auth/useRequireAuth";
 import { useMoaRouteTransition } from "@/components/moa-ui/MoaRouteTransitionLink";
 
 interface Transcript {
@@ -226,7 +226,7 @@ function getSpeechDetectionDecision(
 function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading } = useAuth();
+  const { user, checkingAuth } = useRequireAuth();
   const meetingId = searchParams.get("meeting_id");
   const dashboardRouteTransition = useMoaRouteTransition({ href: "/dashboard" });
 
@@ -395,14 +395,10 @@ function HomeContent() {
   }, []);
 
   useEffect(() => {
-    if (!authLoading) {
-      if (!user) {
-        router.push("/login");
-      } else if (!meetingId) {
-        router.push("/dashboard");
-      }
+    if (!checkingAuth && user && !meetingId) {
+      router.replace("/dashboard");
     }
-  }, [user, authLoading, meetingId, router]);
+  }, [user, checkingAuth, meetingId, router]);
 
   useEffect(() => {
     if (!user || !meetingId) return;
@@ -1285,7 +1281,7 @@ function HomeContent() {
     }
   }, [meetingId, meetingTitle]);
 
-  if (authLoading || !user || !meetingId || loadingMeeting) {
+  if (checkingAuth || !user || !meetingId || loadingMeeting) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#eaf0f7]">
         <div className="rounded-[28px] border border-white/70 bg-white/85 px-8 py-7 text-center shadow-[0_24px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl">

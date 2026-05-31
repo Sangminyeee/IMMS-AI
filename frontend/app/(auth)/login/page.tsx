@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEventHandler } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
@@ -55,15 +55,31 @@ function getGuestLoginErrorMessage(error: unknown) {
   return message || "게스트 로그인에 실패했습니다.";
 }
 
+function getSafeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/dashboard";
+  if (value.startsWith("/login") || value.startsWith("/register")) return "/dashboard";
+  return value;
+}
+
+function getLoginNextPath() {
+  if (typeof window === "undefined") return "/dashboard";
+  return getSafeNextPath(new URLSearchParams(window.location.search).get("next"));
+}
+
 export default function LoginPage() {
   const renderMode = useAuthRenderMode();
   const router = useRouter();
-  const { signIn, signInGuest, loading: authLoading } = useAuth();
+  const { signIn, signInGuest, loading: authLoading, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [guestLoading, setGuestLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+    router.replace(getLoginNextPath());
+  }, [authLoading, router, user]);
 
   const handleSubmit: FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
@@ -76,7 +92,7 @@ export default function LoginPage() {
         setError(getErrorMessage(signInError, "로그인에 실패했습니다."));
         return;
       }
-      router.push("/dashboard");
+      router.replace(getLoginNextPath());
     } catch (err) {
       setError(getErrorMessage(err, "로그인에 실패했습니다."));
     } finally {
@@ -94,7 +110,7 @@ export default function LoginPage() {
         setError(getGuestLoginErrorMessage(guestError));
         return;
       }
-      router.push("/dashboard");
+      router.replace(getLoginNextPath());
     } catch (err) {
       setError(getGuestLoginErrorMessage(err));
     } finally {

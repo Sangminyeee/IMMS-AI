@@ -8,6 +8,7 @@ import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { formatDashboardDateTime, getMeetingStatusLabel } from "@/components/dashboard/dashboardUtils";
 import type { DashboardMeeting, MeetingStatusFilter } from "@/components/dashboard/types";
 import { buildPrintableSummaryDocumentHtml } from "@/components/canvas/summaryDocumentHelpers";
+import { useRequireAuth } from "@/components/auth/useRequireAuth";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import { useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { useAuth } from "@/contexts/AuthContext";
@@ -152,7 +153,8 @@ function formatMeetingDuration(startedAt?: string, endedAt?: string) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { loading: authLoading, signOut } = useAuth();
+  const { user } = useRequireAuth();
 
   const [meetings, setMeetings] = useState<DashboardMeeting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -172,10 +174,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
-    if (!authLoading && !user) {
-      console.log("❌ Dashboard - No user, redirecting to /login");
-      router.push("/login");
-    }
   }, [user, authLoading, router]);
 
   useEffect(() => {
@@ -419,6 +417,33 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
+  const selectedResultDialogMeeting = selectedResultPresence.presentValue;
+  const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
+  const selectedResultError = selectedResultDialogMeeting ? resultErrors[selectedResultDialogMeeting.id] : "";
+  const selectedResultRebuildMessage = selectedResultDialogMeeting ? resultRebuildMessages[selectedResultDialogMeeting.id] : "";
+  const selectedResultSavedAt = selectedResultDialogMeeting ? resultSavedAt[selectedResultDialogMeeting.id] : "";
+  const selectedResultLoading = selectedResultDialogMeeting ? resultLoadingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultRebuilding = selectedResultDialogMeeting ? resultRebuildingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
+  const selectedResultCount = getFinalResultCount(selectedResultSummary);
+  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
+  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
+  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
+  const selectedResultDocumentHtml = selectedResultMarkdown
+    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
+    : "";
+  const selectedResultStatusLabel = selectedResultLoading
+    ? "확인 중"
+    : selectedResultRebuilding
+      ? "재구성 중"
+      : selectedResultHasFinalResult
+        ? "저장됨"
+        : "없음";
+  const selectedResultDuration = selectedResultDialogMeeting
+    ? formatMeetingDuration(selectedResultDialogMeeting.started_at, selectedResultDialogMeeting.ended_at)
+    : "";
+
   if (authLoading) {
     console.log("⏳ Dashboard - Auth loading...");
     return (
@@ -443,33 +468,6 @@ export default function DashboardPage() {
   }
 
   console.log("🎨 Dashboard - Rendering UI with", meetings.length, "meetings");
-
-  const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
-  const selectedResultDialogMeeting = selectedResultPresence.presentValue;
-  const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
-  const selectedResultError = selectedResultDialogMeeting ? resultErrors[selectedResultDialogMeeting.id] : "";
-  const selectedResultRebuildMessage = selectedResultDialogMeeting ? resultRebuildMessages[selectedResultDialogMeeting.id] : "";
-  const selectedResultSavedAt = selectedResultDialogMeeting ? resultSavedAt[selectedResultDialogMeeting.id] : "";
-  const selectedResultLoading = selectedResultDialogMeeting ? resultLoadingMeetingId === selectedResultDialogMeeting.id : false;
-  const selectedResultRebuilding = selectedResultDialogMeeting ? resultRebuildingMeetingId === selectedResultDialogMeeting.id : false;
-  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
-  const selectedResultCount = getFinalResultCount(selectedResultSummary);
-  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
-  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
-  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
-  const selectedResultDocumentHtml = selectedResultMarkdown
-    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
-    : "";
-  const selectedResultStatusLabel = selectedResultLoading
-    ? "확인 중"
-    : selectedResultRebuilding
-      ? "재구성 중"
-    : selectedResultHasFinalResult
-      ? "저장됨"
-      : "없음";
-  const selectedResultDuration = selectedResultDialogMeeting
-    ? formatMeetingDuration(selectedResultDialogMeeting.started_at, selectedResultDialogMeeting.ended_at)
-    : "";
 
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
