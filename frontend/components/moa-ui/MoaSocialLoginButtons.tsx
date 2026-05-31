@@ -15,7 +15,7 @@ function GuestIcon() {
 
 export function MoaGuestLoginButton({ disabled, loading, ...props }: MoaGuestLoginButtonProps) {
   return (
-    <div className="mt-[30px] lg:mt-[clamp(30px,5vh,68px)]">
+    <div className="mt-[22px] lg:mt-[clamp(30px,5vh,68px)]">
       <div className="flex items-center gap-4">
         <span className="h-px flex-1 bg-[#d7d7d7]" />
         <span className="text-[11px] font-medium leading-4 text-[#777] lg:text-[clamp(11px,1vw,20px)] lg:leading-[163%]">간편 로그인</span>
@@ -23,7 +23,7 @@ export function MoaGuestLoginButton({ disabled, loading, ...props }: MoaGuestLog
       </div>
       <button
         {...props}
-        className="mt-[22px] flex h-[42px] w-full items-center justify-center gap-2 rounded-[10px] border border-[#d6d6d6] bg-white text-[13px] font-bold text-[var(--moa-auth-text)] transition hover:border-[#bdbdbd] hover:bg-[#fafafa] disabled:cursor-not-allowed disabled:bg-[#f4f4f4] disabled:text-[var(--moa-disabled-text)]"
+        className="mt-[18px] flex h-[48px] w-full items-center justify-center gap-2 rounded-[14px] border border-[#d6d6d6] bg-white text-[14px] font-bold text-[var(--moa-auth-text)] transition hover:border-[#bdbdbd] hover:bg-[#fafafa] disabled:cursor-not-allowed disabled:bg-[#f4f4f4] disabled:text-[var(--moa-disabled-text)] lg:mt-[22px] lg:h-[42px] lg:rounded-[10px] lg:text-[13px]"
         disabled={disabled || loading}
         type="button"
       >

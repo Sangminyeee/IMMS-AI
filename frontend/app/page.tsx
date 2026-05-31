@@ -14,6 +14,7 @@ import type {
   MeetingState,
 } from "@/lib/types";
 import MeetingCanvasTab, { type MeetingAgenda as CanvasAgenda, type MeetingTranscript as CanvasTranscript } from "@/components/MeetingCanvasTab";
+import { useMoaRouteTransition } from "@/components/moa-ui/MoaRouteTransitionLink";
 
 interface Transcript {
   id: string;
@@ -227,6 +228,7 @@ function HomeContent() {
   const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const meetingId = searchParams.get("meeting_id");
+  const dashboardRouteTransition = useMoaRouteTransition({ href: "/dashboard" });
 
   const [meetingTitle, setMeetingTitle] = useState("회의 워크스페이스");
   const [meetingStatus, setMeetingStatus] = useState("");
@@ -1232,7 +1234,7 @@ function HomeContent() {
         status: "completed",
       });
       wsClientRef.current?.disconnect();
-      router.push("/dashboard");
+      dashboardRouteTransition.startRouteTransition();
     } catch (error) {
       console.error("Failed to end meeting:", error);
       alert("회의 종료에 실패했습니다.");
@@ -1345,6 +1347,7 @@ function HomeContent() {
             : "WebSocket 연결 안 됨")
         }
       />
+      {dashboardRouteTransition.exiting ? <div aria-hidden="true" className="moa-route-exit-overlay fixed inset-0 z-[9999] pointer-events-none" /> : null}
     </div>
   );
 }

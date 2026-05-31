@@ -23,6 +23,10 @@ import {
   CanvasWorkspacePanels,
   type CanvasWorkspaceParticipant,
 } from "@/components/canvas/CanvasWorkspacePanels";
+import {
+  MobileMeetingReadOnlyView,
+  type MobileMeetingViewStage,
+} from "@/components/canvas/MobileMeetingReadOnlyView";
 import { useCanvasWorkspacePanelModels } from "@/components/canvas/useCanvasWorkspacePanelModels";
 import {
   buildProblemExploreLayout,
@@ -191,6 +195,12 @@ function buildFinalReportShareUrl(meetingId: string, token: string) {
     `/final-report/${encodeURIComponent(meetingId)}/${encodeURIComponent(token)}`,
     window.location.origin,
   ).toString();
+}
+
+function toMobileViewedStage(stage: CanvasStage, phase: ProblemDefinitionPhase): MobileMeetingViewStage {
+  if (stage === "ideation") return "ideation";
+  if (stage === "solution") return "summary";
+  return phase === "structure" ? "problem-structure" : "problem-explore";
 }
 
 async function copyTextToClipboard(text: string) {
@@ -706,6 +716,7 @@ export default function MeetingCanvasTab({
   const captureProblemPhaseOverride: ProblemDefinitionPhase | "" =
     captureProblemPhaseParam === "explore" || captureProblemPhaseParam === "structure" ? captureProblemPhaseParam : "";
   const [stage, setStage] = useState<CanvasStage>("ideation");
+  const [mobileViewedStage, setMobileViewedStage] = useState<MobileMeetingViewStage>("ideation");
   const [composerAgendaId, setComposerAgendaId] = useState("");
   const [composerTitle, setComposerTitle] = useState("");
   const [composerBody, setComposerBody] = useState("");
@@ -831,6 +842,7 @@ export default function MeetingCanvasTab({
     toggleRightDrawer,
     rightPanelRatio,
     isDesktopLayout,
+    viewportModeReady,
     startPanelResize,
     solutionRightPaneRef,
   } = useCanvasUiState({
@@ -857,6 +869,7 @@ export default function MeetingCanvasTab({
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef } = useCanvasFlowRefs();
   const ideationViewportCenteredKeyRef = useRef("");
+  const mobileViewedStageInitializedRef = useRef(false);
   const autoProblemDefinitionRef = useRef(false);
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
@@ -1404,6 +1417,14 @@ export default function MeetingCanvasTab({
   }, [isRecording, onStopRecording, stage]);
 
   useEffect(() => {
+    if (isDesktopLayout || !viewportModeReady || mobileViewedStageInitializedRef.current) return;
+    if (!workspaceLoadedRef.current) return;
+
+    mobileViewedStageInitializedRef.current = true;
+    setMobileViewedStage(toMobileViewedStage(stage, problemDefinitionPhase));
+  }, [isDesktopLayout, problemDefinitionPhase, stage, viewportModeReady]);
+
+  useEffect(() => {
     autoProblemDefinitionRef.current = false;
     problemConclusionEntryHandledRef.current = false;
     lastIncomingSharedSyncIdRef.current = "";
@@ -1434,6 +1455,8 @@ export default function MeetingCanvasTab({
       importedState: null,
     };
     latestSharedSyncEnabledRef.current = true;
+    mobileViewedStageInitializedRef.current = false;
+    setMobileViewedStage("ideation");
     setImportOverrideActive(false);
     setAgendaOverrides({});
     setCanvasItems([]);
@@ -3570,6 +3593,42 @@ export default function MeetingCanvasTab({
     onSaveAndEnd: handleSaveAndEndMeeting,
     getFinalSummarySnapshot: getEndingFinalSummaryDocumentSnapshot,
   });
+
+  if (!viewportModeReady) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center bg-[#f8fbff] text-[#526070]">
+        <div className="rounded-[22px] border border-[#d8e3f0] bg-white px-6 py-5 text-center shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+          <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-[#dceeff] border-t-[#236cf3]" />
+          <p className="mt-3 text-[13px] font-semibold leading-6 tracking-[-0.03px]">화면을 준비하는 중입니다.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isDesktopLayout) {
+    return (
+      <div className="h-full min-h-0 bg-[#f8fbff] text-black">
+        <MobileMeetingReadOnlyView
+          actualStage={stage}
+          actualProblemPhase={problemDefinitionPhase}
+          finalSummaryDocument={finalSummaryDocument}
+          ideationBubbleVisuals={ideationBubbleVisuals}
+          meetingStatus={meetingStatus}
+          meetingTimerEndedAtMs={meetingTimerEndedAtMs}
+          meetingTimerStartedAtMs={meetingTimerStartedAtMs}
+          meetingTitle={meetingTitle}
+          onViewedStageChange={setMobileViewedStage}
+          problemDefinitionPending={problemDefinitionStagePending || sharedProblemDefinitionGenerating}
+          problemGroups={problemGroups}
+          problemStructureGroups={problemStructureGroups}
+          problemStructureNodes={problemStructureNodes}
+          problemStructurePending={problemStructurePending || sharedProblemStructureGenerating}
+          summaryDocumentPending={summaryDocumentPending || sharedSummaryGenerating}
+          viewedStage={mobileViewedStage}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">

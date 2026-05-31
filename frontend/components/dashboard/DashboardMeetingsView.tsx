@@ -1,4 +1,4 @@
-import { useMemo, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type WheelEvent } from "react";
 import { classNames } from "@/lib/classNames";
 import { BellIcon, PlusIcon, SearchIcon } from "./DashboardIcons";
 import {
@@ -36,6 +36,7 @@ const statusFilters: Array<{ label: string; value: MeetingStatusFilter }> = [
 
 const UPCOMING_CARD_SCROLL_STEP = 427;
 const UPCOMING_DRAG_IGNORE_SELECTOR = "button,a,input,textarea,select,[role='button']";
+type DashboardListTransitionPhase = "idle" | "out" | "in";
 
 function isUpcomingInteractiveTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest(UPCOMING_DRAG_IGNORE_SELECTOR));
@@ -77,8 +78,58 @@ export function DashboardMeetingsView({
       return meeting.title.toLowerCase().includes(normalizedQuery);
     });
   }, [meetings, searchQuery, statusFilter]);
-  const meetingRowCount = loading ? 5 : Math.max(filteredMeetings.length, 1);
+  const filterSignature = `${loading ? "loading" : "ready"}:${statusFilter}:${searchQuery.trim().toLowerCase()}:${filteredMeetings
+    .map((meeting) => meeting.id)
+    .join(",")}`;
+  const [displayedFilteredMeetings, setDisplayedFilteredMeetings] = useState(filteredMeetings);
+  const [displayedListLoading, setDisplayedListLoading] = useState(loading);
+  const [listTransitionPhase, setListTransitionPhase] = useState<DashboardListTransitionPhase>("idle");
+  const listTransitionInitializedRef = useRef(false);
+  const listTransitionTimerRef = useRef<number | null>(null);
+  const listTransitionIdleTimerRef = useRef<number | null>(null);
+  const meetingRowCount = displayedListLoading ? 5 : Math.max(displayedFilteredMeetings.length, 1);
   const contentMinHeight = 702 + meetingRowCount * 49.5 + 48;
+
+  useEffect(() => {
+    if (listTransitionTimerRef.current !== null) {
+      window.clearTimeout(listTransitionTimerRef.current);
+      listTransitionTimerRef.current = null;
+    }
+    if (listTransitionIdleTimerRef.current !== null) {
+      window.clearTimeout(listTransitionIdleTimerRef.current);
+      listTransitionIdleTimerRef.current = null;
+    }
+
+    if (!listTransitionInitializedRef.current) {
+      listTransitionInitializedRef.current = true;
+      setDisplayedFilteredMeetings(filteredMeetings);
+      setDisplayedListLoading(loading);
+      return;
+    }
+
+    setListTransitionPhase("out");
+    listTransitionTimerRef.current = window.setTimeout(() => {
+      setDisplayedFilteredMeetings(filteredMeetings);
+      setDisplayedListLoading(loading);
+      setListTransitionPhase("in");
+      listTransitionIdleTimerRef.current = window.setTimeout(() => {
+        setListTransitionPhase("idle");
+        listTransitionIdleTimerRef.current = null;
+      }, 240);
+      listTransitionTimerRef.current = null;
+    }, 130);
+
+    return () => {
+      if (listTransitionTimerRef.current !== null) {
+        window.clearTimeout(listTransitionTimerRef.current);
+        listTransitionTimerRef.current = null;
+      }
+      if (listTransitionIdleTimerRef.current !== null) {
+        window.clearTimeout(listTransitionIdleTimerRef.current);
+        listTransitionIdleTimerRef.current = null;
+      }
+    };
+  }, [filterSignature, filteredMeetings, loading]);
   const resetUpcomingDrag = () => {
     const scrollElement = upcomingScrollRef.current;
     const dragState = upcomingDragRef.current;
@@ -172,7 +223,25 @@ export function DashboardMeetingsView({
 
   return (
     <div className="imms-overlay-scroll moa-dashboard-type relative h-full overflow-y-auto overflow-x-hidden bg-[var(--moa-surface)]">
-      <div aria-hidden="true" style={{ height: contentMinHeight }} />
+      <MobileDashboardContent
+        deletingMeetingId={deletingMeetingId}
+        filteredMeetings={displayedFilteredMeetings}
+        listTransitionPhase={listTransitionPhase}
+        loading={displayedListLoading}
+        meetings={meetings}
+        onCreateMeeting={onCreateMeeting}
+        onDeleteMeeting={onDeleteMeeting}
+        onJoinMeeting={onJoinMeeting}
+        onOpenMeetingResult={onOpenMeetingResult}
+        onSearchQueryChange={onSearchQueryChange}
+        onStatusFilterChange={onStatusFilterChange}
+        searchQuery={searchQuery}
+        statusFilter={statusFilter}
+        upcomingMeetings={upcomingMeetings}
+      />
+
+      <div className="relative hidden min-h-full lg:block">
+        <div aria-hidden="true" style={{ height: contentMinHeight }} />
       <section
         className="absolute left-[19px] right-0 top-[19px] h-[550px] overflow-hidden rounded-tl-[31.853px] bg-[linear-gradient(104deg,#fcfcfc_1%,#f0f0f2_87%)] bg-[length:100%_100%] bg-no-repeat"
         style={{ backgroundImage: "url('/figma-assets/dashboard-hero-blue.png')" }}
@@ -251,13 +320,13 @@ export function DashboardMeetingsView({
               type="button"
               onClick={() => onStatusFilterChange(filter.value)}
               className={classNames(
-                "moa-dt-filter inline-flex h-[26px] items-center justify-center rounded-[6px] px-[8px] transition",
+                "moa-dashboard-filter-button moa-dt-filter inline-flex h-[26px] items-center justify-center rounded-[6px] px-[8px]",
                 active
-                  ? "moa-dt-filter-active gap-[5px] bg-[var(--moa-filter-selected-bg)] text-[var(--moa-filter-selected-text)]"
+                  ? "moa-dashboard-filter-button-active moa-dt-filter-active gap-[5px] border border-[#2cb1fe] text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)]"
                   : "bg-[var(--moa-surface-soft)] text-[var(--moa-filter-text)] hover:bg-[var(--moa-filter-hover)] hover:text-[var(--moa-dashboard-action-text)]",
               )}
             >
-              {active ? <span className="text-[11.5px] leading-none text-white">✓</span> : null}
+              <span className={classNames("moa-dashboard-filter-check text-[11.5px] leading-none text-white", active ? "opacity-100" : "opacity-0")}>✓</span>
               <span className={classNames("block leading-none", active ? "text-white" : "")}>{filter.label}</span>
             </button>
           );
@@ -274,17 +343,23 @@ export function DashboardMeetingsView({
         <SearchIcon className="ml-[5.422px] h-[10.844px] w-[10.844px] shrink-0 text-[var(--moa-text)]" />
       </label>
 
-      <div className="absolute left-[118.37px] right-[107.08px] top-[701.52px] space-y-[6.1px] pb-[48px] pr-1">
-        {loading ? (
+      <div
+        className={classNames(
+          "moa-dashboard-meeting-list absolute left-[118.37px] right-[107.08px] top-[701.52px] space-y-[6.1px] pb-[48px] pr-1",
+          listTransitionPhase === "out" ? "moa-dashboard-meeting-list-out" : "",
+          listTransitionPhase === "in" ? "moa-dashboard-meeting-list-in" : "",
+        )}
+      >
+        {displayedListLoading ? (
           <MeetingRowsSkeleton />
-        ) : filteredMeetings.length === 0 ? (
+        ) : displayedFilteredMeetings.length === 0 ? (
           <div className="flex h-[88px] items-center justify-center rounded-[19.654px] bg-[var(--moa-surface-muted)] px-6 text-center">
             <p className="text-[13px] font-semibold text-[var(--moa-disabled-text)]">
               {meetings.length === 0 ? "아직 생성된 회의가 없습니다." : "조건에 맞는 회의가 없습니다."}
             </p>
           </div>
         ) : (
-          filteredMeetings.map((meeting) => (
+          displayedFilteredMeetings.map((meeting) => (
             <MeetingListRow
               key={meeting.id}
               meeting={meeting}
@@ -296,7 +371,292 @@ export function DashboardMeetingsView({
           ))
         )}
       </div>
+      </div>
     </div>
+  );
+}
+
+function MobileDashboardContent({
+  deletingMeetingId,
+  filteredMeetings,
+  listTransitionPhase,
+  loading,
+  meetings,
+  onCreateMeeting,
+  onDeleteMeeting,
+  onJoinMeeting,
+  onOpenMeetingResult,
+  onSearchQueryChange,
+  onStatusFilterChange,
+  searchQuery,
+  statusFilter,
+  upcomingMeetings,
+}: {
+  deletingMeetingId?: string | null;
+  filteredMeetings: DashboardMeeting[];
+  listTransitionPhase: DashboardListTransitionPhase;
+  loading: boolean;
+  meetings: DashboardMeeting[];
+  onCreateMeeting: () => void;
+  onDeleteMeeting: (meeting: DashboardMeeting) => void;
+  onJoinMeeting: (meetingId: string) => void;
+  onOpenMeetingResult: (meeting: DashboardMeeting) => void;
+  onSearchQueryChange: (query: string) => void;
+  onStatusFilterChange: (filter: MeetingStatusFilter) => void;
+  searchQuery: string;
+  statusFilter: MeetingStatusFilter;
+  upcomingMeetings: DashboardMeeting[];
+}) {
+  return (
+    <div className="lg:hidden">
+      <section className="px-4 pb-[calc(env(safe-area-inset-bottom)+24px)] pt-4">
+        <section className="overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#5cc8ff_0%,#0542ff_100%)] px-5 pb-5 pt-6 text-white shadow-[0_22px_54px_rgba(5,66,255,0.22)]">
+          <h1 className="text-[27px] font-bold leading-[1.24] tracking-[-0.8px]">
+            오늘의 회의를
+            <br />
+            하나의 흐름으로 정리하세요
+          </h1>
+          <button
+            type="button"
+            onClick={onCreateMeeting}
+            className="mt-6 inline-flex h-[46px] items-center justify-center rounded-full bg-white px-5 text-[#0542ff] shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
+          >
+            <PlusIcon className="h-[18px] w-[18px] shrink-0 text-[#0542ff]" />
+            <span className="ml-2 block text-[14px] font-bold leading-none tracking-[-0.035px] text-[#0542ff]">새 회의 만들기</span>
+          </button>
+        </section>
+
+        <section className="mt-6">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">예정된 회의</h2>
+            <span className="text-[12px] font-bold leading-none tracking-[-0.03px] text-[#90a1b9]">{upcomingMeetings.length}개</span>
+          </div>
+          <div className="-mx-4 overflow-x-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex gap-3">
+              {loading ? (
+                <MobileMeetingCardSkeleton compact />
+              ) : upcomingMeetings.length === 0 ? (
+                <MobileEmptyCard message="예정된 회의가 없습니다." />
+              ) : (
+                upcomingMeetings.map((meeting) => (
+                  <MobileMeetingCard
+                    key={meeting.id}
+                    compact
+                    deleting={deletingMeetingId === meeting.id}
+                    meeting={meeting}
+                    onDeleteMeeting={onDeleteMeeting}
+                    onJoinMeeting={onJoinMeeting}
+                    onOpenMeetingResult={onOpenMeetingResult}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="mt-6">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="shrink-0 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">전체 회의 목록</h2>
+            <label className="flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-[#d8e7ff] bg-white px-3">
+              <input
+                value={searchQuery}
+                onChange={(event) => onSearchQueryChange(event.target.value)}
+                placeholder="Search"
+                className="min-w-0 flex-1 bg-transparent text-[13px] font-medium text-[#181818] outline-none placeholder:text-[#90a1b9]"
+              />
+              <SearchIcon className="ml-2 h-[14px] w-[14px] shrink-0 text-[#526070]" />
+            </label>
+          </div>
+
+          <div className="-mx-4 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex gap-2">
+              {statusFilters.map((filter) => {
+                const active = statusFilter === filter.value;
+                return (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => onStatusFilterChange(filter.value)}
+                    className={classNames(
+                      "moa-dashboard-filter-button inline-flex h-[34px] shrink-0 items-center justify-center rounded-full px-4",
+                      active
+                        ? "moa-dashboard-filter-button-active border border-[#2cb1fe] bg-white text-white shadow-[0_6px_16px_rgba(5,66,255,0.16)]"
+                        : "border border-[#d8e7ff] bg-white text-[#526070]",
+                    )}
+                  >
+                    <span className={classNames("block text-[13px] font-bold leading-none tracking-[-0.03px]", active ? "text-white" : "")}>{filter.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div
+            className={classNames(
+              "moa-dashboard-meeting-list mt-3 space-y-3",
+              listTransitionPhase === "out" ? "moa-dashboard-meeting-list-out" : "",
+              listTransitionPhase === "in" ? "moa-dashboard-meeting-list-in" : "",
+            )}
+          >
+            {loading ? (
+              <MobileMeetingListSkeleton />
+            ) : filteredMeetings.length === 0 ? (
+              <MobileEmptyCard message={meetings.length === 0 ? "아직 생성된 회의가 없습니다." : "조건에 맞는 회의가 없습니다."} />
+            ) : (
+              filteredMeetings.map((meeting) => (
+                <MobileMeetingCard
+                  key={meeting.id}
+                  deleting={deletingMeetingId === meeting.id}
+                  meeting={meeting}
+                  onDeleteMeeting={onDeleteMeeting}
+                  onJoinMeeting={onJoinMeeting}
+                  onOpenMeetingResult={onOpenMeetingResult}
+                />
+              ))
+            )}
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function MobileMeetingCard({
+  compact = false,
+  deleting,
+  meeting,
+  onDeleteMeeting,
+  onJoinMeeting,
+  onOpenMeetingResult,
+}: {
+  compact?: boolean;
+  deleting: boolean;
+  meeting: DashboardMeeting;
+  onDeleteMeeting: (meeting: DashboardMeeting) => void;
+  onJoinMeeting: (meetingId: string) => void;
+  onOpenMeetingResult: (meeting: DashboardMeeting) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const completed = isCompletedMeeting(meeting.status);
+  const tone = getMeetingStatusTone(meeting.status);
+  const statusClassName = completed
+    ? "bg-[var(--moa-status-completed)]"
+    : tone === "active"
+      ? "bg-[var(--moa-status-active)]"
+      : "bg-[var(--moa-status-scheduled)]";
+
+  return (
+    <article
+      className={classNames(
+        "relative rounded-[22px] border border-[#d8e7ff] bg-white p-4 shadow-[0_14px_42px_rgba(15,23,42,0.07)]",
+        compact ? "w-[286px] shrink-0" : "w-full",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className={classNames("inline-flex h-[24px] items-center rounded-full px-3 text-white", statusClassName)}>
+          <span className="block text-[11px] font-semibold leading-none tracking-[-0.025px] text-white">
+            {getMeetingStatusLabel(meeting.status)}
+          </span>
+        </span>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((current) => !current)}
+            aria-label="회의 메뉴"
+            className="grid h-[30px] w-[30px] place-items-center rounded-full bg-[#f3f8ff] text-[#526070]"
+          >
+            <MoreIcon className="h-[16px] w-[16px]" />
+          </button>
+          {menuOpen ? (
+            <div className="absolute right-0 top-[34px] z-10 w-[116px] rounded-[14px] border border-[#e5edf6] bg-white p-1 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDeleteMeeting(meeting);
+                }}
+                disabled={deleting}
+                className="flex h-[36px] w-full items-center justify-center rounded-[10px] text-[#ef4444] transition hover:bg-[#fff5f5] disabled:opacity-50"
+              >
+                <span className="block text-[12px] font-bold leading-none tracking-[-0.03px]">
+                  {deleting ? "삭제 중" : "삭제"}
+                </span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <h3 className="mt-4 line-clamp-2 min-h-[44px] text-[18px] font-bold leading-[1.25] tracking-[-0.6px] text-[#181818]">
+        {meeting.title}
+      </h3>
+      <p className="mt-3 text-[13px] font-medium leading-none tracking-[-0.03px] text-[#90a1b9]">
+        {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
+      </p>
+
+      <div className="mt-5 flex items-center gap-2">
+        {completed ? (
+          <button
+            type="button"
+            onClick={() => onOpenMeetingResult(meeting)}
+            className="moa-dashboard-primary-button inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 text-white"
+          >
+            <span className="block text-[13px] font-bold leading-none tracking-[-0.03px] text-white">결과 보기</span>
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => onJoinMeeting(meeting.id)}
+          className={classNames(
+            "inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 transition",
+            completed
+              ? "border border-[#d8e7ff] bg-white text-[#526070]"
+              : "moa-dashboard-primary-button text-white",
+          )}
+        >
+          <span className={classNames("block text-[13px] font-bold leading-none tracking-[-0.03px]", completed ? "text-[#526070]" : "text-white")}>
+            {compact && !completed ? getUpcomingMeetingActionLabel(meeting.status) : getMeetingActionLabel(meeting.status)}
+          </span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function MobileEmptyCard({ message }: { message: string }) {
+  return (
+    <div className="flex min-h-[118px] w-full items-center justify-center rounded-[22px] border border-dashed border-[#d8e7ff] bg-white px-6 text-center">
+      <p className="text-[13px] font-semibold leading-6 tracking-[-0.03px] text-[#90a1b9]">{message}</p>
+    </div>
+  );
+}
+
+function MobileMeetingCardSkeleton({ compact = false }: { compact?: boolean }) {
+  return (
+    <article
+      className={classNames(
+        "h-[188px] animate-pulse rounded-[22px] border border-[#e5edf6] bg-white shadow-[0_14px_42px_rgba(15,23,42,0.05)]",
+        compact ? "w-[286px] shrink-0" : "w-full",
+      )}
+    />
+  );
+}
+
+function MobileMeetingListSkeleton() {
+  return (
+    <>
+      {Array.from({ length: 4 }).map((_, index) => (
+        <MobileMeetingCardSkeleton key={index} />
+      ))}
+    </>
+  );
+}
+
+function MoreIcon({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
+      <path d="M6.5 12h.01M12 12h.01M17.5 12h.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
   );
 }
 

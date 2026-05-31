@@ -1,8 +1,8 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
-import Link from "next/link";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { MoaRouteTransitionLink } from "@/components/moa-ui/MoaRouteTransitionLink";
 import type {
   CanvasHeaderProps,
 } from "@/components/canvas/CanvasHeader";
@@ -618,13 +618,13 @@ function LeftMeetingPanel({
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-20 after:w-px after:bg-[#cecccc]">
       <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
-        <Link
+        <MoaRouteTransitionLink
           href="/dashboard"
-          aria-label="대시보드로 이동"
-          className="inline-flex w-fit rounded-[8px] outline-none transition focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
+          aria-label="메인화면으로 이동"
+          className="-m-2 inline-flex w-fit rounded-[10px] p-2 outline-none transition hover:bg-[#f5f9ff] focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
         >
-          <MoaLogo size="figma" className="moa-dt-logo" />
-        </Link>
+          <MoaLogo size="figma" className="moa-dt-logo gap-[8px] text-[21px]" markClassName="h-[24px] w-[39px]" />
+        </MoaRouteTransitionLink>
         <div className="mt-[var(--canvas-left-title-gap)]">
           <div className="flex min-w-0 items-center gap-[7px]">
             {titleEditing ? (
@@ -644,7 +644,7 @@ function LeftMeetingPanel({
                   }}
                   disabled={titleSaving}
                   aria-label="회의 제목"
-                  className="min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
+                  className="min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
                 />
                 <button
                   type="button"
@@ -669,7 +669,7 @@ function LeftMeetingPanel({
               </div>
             ) : (
               <>
-                <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{currentMeetingTitle}</h2>
+                <h2 className="min-w-0 truncate text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818]">{currentMeetingTitle}</h2>
                 <button
                   type="button"
                   onClick={handleStartTitleEdit}
@@ -857,58 +857,60 @@ function CurrentStagePanel({
 
   return (
     <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
-      <div className="flex items-start gap-[12px]">
-        <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
-        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
-      </div>
-      <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
-        {description}
-      </p>
-      {buttonLabel && onButtonClick ? (
-        <button
-          type="button"
-          onClick={onButtonClick}
-          disabled={buttonDisabled}
-          className={`mt-[20px] ${panelButtonClasses.primary}`}
-        >
-          <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
-        </button>
-      ) : null}
-      {stage === "problem-definition" && hasProblemStructure ? (
-        <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
-          <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
-            <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
-            {regenerateProblemStructureButton}
-          </div>
-          <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
-            {([
-              ["explore", "1단계"],
-              ["structure", "2단계"],
-            ] as const).map(([phase, label]) => {
-              const active = problemDefinitionPhase === phase;
-              return (
-                <button
-                  key={phase}
-                  type="button"
-                  onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
-                  className={`h-[30px] rounded-full border text-center transition ${
-                    active
-                      ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
-                      : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
-                  }`}
-                >
-                  <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
-                    {label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {regenerateProblemDefinitionButton}
+      <div key={`${stage}:${problemDefinitionPhase}`} className="moa-canvas-stage-detail">
+        <div className="flex items-start gap-[12px]">
+          <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
+          <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
         </div>
-      ) : (
-        regenerateProblemDefinitionButton
-      )}
+        <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+          {description}
+        </p>
+        {buttonLabel && onButtonClick ? (
+          <button
+            type="button"
+            onClick={onButtonClick}
+            disabled={buttonDisabled}
+            className={`mt-[20px] ${panelButtonClasses.primary}`}
+          >
+            <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
+          </button>
+        ) : null}
+        {stage === "problem-definition" && hasProblemStructure ? (
+          <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
+            <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
+              <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
+              {regenerateProblemStructureButton}
+            </div>
+            <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
+              {([
+                ["explore", "1단계"],
+                ["structure", "2단계"],
+              ] as const).map(([phase, label]) => {
+                const active = problemDefinitionPhase === phase;
+                return (
+                  <button
+                    key={phase}
+                    type="button"
+                    onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
+                    className={`h-[30px] rounded-full border text-center transition ${
+                      active
+                        ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
+                        : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
+                    }`}
+                  >
+                    <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {regenerateProblemDefinitionButton}
+          </div>
+        ) : (
+          regenerateProblemDefinitionButton
+        )}
+      </div>
     </section>
   );
 }
