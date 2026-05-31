@@ -482,7 +482,14 @@ export interface CanvasPersonalNotesStateResponse {
 export interface CanvasRealtimeSyncPayload {
   sync_id: string;
   meeting_id: string;
-  sync_scope?: "full" | "node_positions";
+  sync_scope?:
+    | "full"
+    | "node_positions"
+    | "artifact_generation"
+    | "ideation_bubble_graph"
+    | "problem_groups"
+    | "problem_structure"
+    | "summary_document";
   meeting_goal?: string;
   meeting_goal_context?: string;
   updated_by: string;
