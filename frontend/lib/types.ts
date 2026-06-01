@@ -578,6 +578,10 @@ export interface CanvasFinalSolutionSummary {
   markdown: string;
   document_blocks?: CanvasSummaryDocumentBlock[];
   document_status?: "empty" | "ready" | "edited" | string;
+  revision?: number;
+  source_generation_id?: string;
+  based_on_transcript_revision?: number;
+  updated_at?: string;
   generated_at?: string;
   used_llm?: boolean;
   warning?: string;

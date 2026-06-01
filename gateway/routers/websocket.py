@@ -37,7 +37,7 @@ CANVAS_WORKSPACE_SYNC_FIELDS = {
 CANVAS_SCOPED_SYNC_FIELDS = {
     "artifact_generation": {"artifact_generation"},
     "ideation_bubble_graph": {"ideation_bubble_graph"},
-    "problem_groups": {"problem_groups", "artifact_generation"},
+    "problem_groups": {"problem_groups", "node_positions", "artifact_generation"},
     "problem_structure": {"problem_groups", "problem_structure", "node_positions", "artifact_generation"},
     "summary_document": {"final_solution_summary", "artifact_generation", "imported_state"},
     "meeting_goal": {"meeting_goal", "meeting_goal_context"},

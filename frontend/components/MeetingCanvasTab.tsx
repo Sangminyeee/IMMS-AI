@@ -1852,6 +1852,53 @@ export default function MeetingCanvasTab({
     [applyArtifactGenerationState, artifactGeneration, latestSharedWorkspaceRef],
   );
 
+  const commitSharedProblemDefinitionGeneration = useCallback(
+    async (payload: {
+      generationId: string;
+      status: "ready" | "failed";
+      error?: string;
+    }) => {
+      const result = await finishCanvasArtifactGeneration({
+        meeting_id: meetingId,
+        artifact_key: PROBLEM_DEFINITION_STEP1_ARTIFACT,
+        user_id: userEmail || userId,
+        generation_id: payload.generationId,
+        status: payload.status,
+        error: payload.error || "",
+      });
+      const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
+        result.workspace?.artifact_generation ||
+          setCanvasArtifactGenerationState(
+            latestSharedWorkspaceRef.current.artifactGeneration || artifactGeneration,
+            result.generation,
+          ),
+      );
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        artifactGeneration: nextArtifactGeneration,
+      };
+      setArtifactGeneration(nextArtifactGeneration);
+      if (sharedSyncEnabled) {
+        forceBroadcastSharedCanvas({
+          artifactGeneration: nextArtifactGeneration,
+        });
+      }
+      return {
+        applied: result.applied,
+        artifactGeneration: nextArtifactGeneration,
+      };
+    },
+    [
+      artifactGeneration,
+      forceBroadcastSharedCanvas,
+      latestSharedWorkspaceRef,
+      meetingId,
+      sharedSyncEnabled,
+      userEmail,
+      userId,
+    ],
+  );
+
   useCanvasPersistence({
     agendaOverrides,
     applyingRemoteSharedSyncRef,
@@ -2733,6 +2780,7 @@ export default function MeetingCanvasTab({
     setStage,
     sharedSyncEnabled,
     startSharedArtifactGeneration,
+    commitSharedProblemDefinitionGeneration,
     finishSharedArtifactGeneration,
     transcripts,
   });

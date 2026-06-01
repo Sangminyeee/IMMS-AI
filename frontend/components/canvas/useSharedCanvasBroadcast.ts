@@ -72,6 +72,11 @@ function resolveForcedSyncScope(overrides?: FullWorkspacePatchPayloadOverrides):
   const overrideKeys = Object.keys(overrides);
   const hasOnlyScopedKeys = overrideKeys.every((key) => SCOPED_SYNC_OVERRIDE_KEYS.has(key));
   if (!hasOnlyScopedKeys) return "full";
+  const changesProblemDomain = "problemGroups" in overrides || "problemStructure" in overrides;
+  const changesSummaryDomain = "finalSolutionSummary" in overrides;
+  const changesBubbleDomain = "ideationBubbleGraph" in overrides;
+  const changedDomainCount = [changesProblemDomain, changesSummaryDomain, changesBubbleDomain].filter(Boolean).length;
+  if (changedDomainCount > 1) return "full";
 
   if ("finalSolutionSummary" in overrides) return "summary_document";
   if ("problemStructure" in overrides) return "problem_structure";

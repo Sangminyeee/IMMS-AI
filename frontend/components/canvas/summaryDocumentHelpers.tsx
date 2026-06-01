@@ -730,6 +730,12 @@ export function normalizeFinalSolutionSummaryPayload(
     markdown: normalizedMarkdown,
     document_blocks: documentBlocks,
     document_status: raw.document_status || (normalizedMarkdown || documentBlocks.length > 0 ? "ready" : "empty"),
+    revision: Number.isFinite(Number(raw.revision)) ? Math.max(0, Math.trunc(Number(raw.revision))) : 0,
+    source_generation_id: raw.source_generation_id || "",
+    based_on_transcript_revision: Number.isFinite(Number(raw.based_on_transcript_revision))
+      ? Math.max(0, Math.trunc(Number(raw.based_on_transcript_revision)))
+      : 0,
+    updated_at: raw.updated_at || "",
     generated_at: raw.generated_at || "",
     used_llm: Boolean(raw.used_llm),
     warning: raw.warning || "",

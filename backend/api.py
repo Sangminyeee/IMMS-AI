@@ -739,6 +739,10 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
             "markdown": "",
             "document_blocks": [],
             "document_status": "empty",
+            "revision": 0,
+            "source_generation_id": "",
+            "based_on_transcript_revision": 0,
+            "updated_at": "",
             "sections": [],
             "structured": {
                 "meeting_overview": "",
@@ -859,6 +863,12 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
     document_status = _safe_text(raw.get("document_status") or raw.get("documentStatus"), "ready" if raw_markdown else "empty")
     if document_status not in {"empty", "ready", "edited"}:
         document_status = "ready" if raw_markdown else "empty"
+    revision = _safe_nonnegative_int(raw.get("revision"))
+    source_generation_id = _safe_text(raw.get("source_generation_id") or raw.get("sourceGenerationId"))
+    based_on_transcript_revision = _safe_nonnegative_int(
+        raw.get("based_on_transcript_revision") or raw.get("basedOnTranscriptRevision")
+    )
+    updated_at = _safe_text(raw.get("updated_at") or raw.get("updatedAt"))
     structured_fallback = {
         "meeting_overview": "",
         "attendee_summary": "",
@@ -940,6 +950,10 @@ def _normalize_canvas_final_solution_summary(raw: Any) -> dict[str, Any]:
         "markdown": markdown,
         "document_blocks": document_blocks,
         "document_status": document_status,
+        "revision": revision,
+        "source_generation_id": source_generation_id,
+        "based_on_transcript_revision": based_on_transcript_revision,
+        "updated_at": updated_at,
         "generated_at": _safe_text(raw.get("generated_at") or raw.get("generatedAt")),
         "used_llm": bool(raw.get("used_llm") or raw.get("usedLlm")),
         "warning": _safe_text(raw.get("warning")),
@@ -11382,6 +11396,69 @@ def _should_accept_problem_structure_patch(
     return True
 
 
+def _should_accept_artifact_scoped_workspace_patch(
+    current_map: dict[str, dict[str, Any]],
+    incoming_map: dict[str, dict[str, Any]],
+    artifact_key: str,
+) -> bool:
+    incoming = incoming_map.get(artifact_key)
+    if not incoming:
+        return True
+
+    current = current_map.get(artifact_key) or {}
+    current_version = _safe_nonnegative_int(current.get("version"))
+    incoming_version = _safe_nonnegative_int(incoming.get("version"))
+    if current_version > incoming_version:
+        return False
+
+    current_generation_id = _safe_text(current.get("generation_id"))
+    incoming_generation_id = _safe_text(incoming.get("generation_id"))
+    if (
+        current_version == incoming_version
+        and current_generation_id
+        and incoming_generation_id
+        and current_generation_id != incoming_generation_id
+        and _safe_text(incoming.get("status")) != "generating"
+    ):
+        return False
+
+    if (
+        current_version == incoming_version
+        and _safe_text(current.get("status")) == "ready"
+        and _safe_text(incoming.get("status")) != "ready"
+        and (not current_generation_id or not incoming_generation_id or current_generation_id == incoming_generation_id)
+    ):
+        return False
+
+    return True
+
+
+def _should_accept_ideation_bubble_graph_patch(
+    current: dict[str, Any],
+    incoming: dict[str, Any],
+) -> bool:
+    current_cycle = _safe_nonnegative_int(current.get("update_cycle"))
+    incoming_cycle = _safe_nonnegative_int(incoming.get("update_cycle"))
+    if current_cycle > incoming_cycle:
+        return False
+    if current_cycle < incoming_cycle:
+        return True
+
+    current_layout_revision = _safe_nonnegative_int(current.get("layout_revision"))
+    incoming_layout_revision = _safe_nonnegative_int(incoming.get("layout_revision"))
+    if current_layout_revision > incoming_layout_revision:
+        return False
+    if current_layout_revision < incoming_layout_revision:
+        return True
+
+    current_updated_at = _parse_canvas_artifact_generation_time(current.get("updated_at"))
+    incoming_updated_at = _parse_canvas_artifact_generation_time(incoming.get("updated_at"))
+    if current_updated_at is not None and incoming_updated_at is not None:
+        return incoming_updated_at >= current_updated_at
+
+    return True
+
+
 def _finish_canvas_artifact_generation_entry(
     current: dict[str, Any],
     artifact_key: str,
@@ -11418,10 +11495,21 @@ def _merge_canvas_artifact_generation_patch(
         incoming_version = _safe_nonnegative_int(incoming.get("version"))
         if current_version > incoming_version:
             continue
+        current_generation_id = _safe_text(current.get("generation_id"))
+        incoming_generation_id = _safe_text(incoming.get("generation_id"))
+        if (
+            current_version == incoming_version
+            and current_generation_id
+            and incoming_generation_id
+            and current_generation_id != incoming_generation_id
+            and _safe_text(incoming.get("status")) != "generating"
+        ):
+            continue
         if (
             current_version == incoming_version
             and _safe_text(current.get("status")) == "ready"
             and _safe_text(incoming.get("status")) != "ready"
+            and (not current_generation_id or not incoming_generation_id or current_generation_id == incoming_generation_id)
         ):
             continue
         merged[key] = copy.deepcopy(incoming)
@@ -14842,6 +14930,12 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
     workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
     provided_fields = set(getattr(payload, "model_fields_set", set()))
+    current_artifact_generation = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+    incoming_artifact_generation = (
+        _normalize_canvas_artifact_generation(payload.artifact_generation or {})
+        if "artifact_generation" in provided_fields
+        else {}
+    )
 
     if "meeting_goal" in provided_fields:
         workspace["meeting_goal"] = _safe_text(payload.meeting_goal)
@@ -14856,11 +14950,32 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "custom_groups" in provided_fields:
         workspace["custom_groups"] = _normalize_canvas_custom_groups(payload.custom_groups)
     if "problem_groups" in provided_fields:
-        workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
+        if _should_accept_artifact_scoped_workspace_patch(
+            current_artifact_generation,
+            incoming_artifact_generation,
+            "problem-definition:explore",
+        ):
+            workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
+        else:
+            print(
+                "[canvas workspace PATCH] ignored stale problem_groups",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "current": current_artifact_generation.get("problem-definition:explore"),
+                    "incoming": incoming_artifact_generation.get("problem-definition:explore"),
+                },
+            )
     if "problem_structure" in provided_fields:
         incoming_problem_structure = _normalize_canvas_problem_structure_state(payload.problem_structure)
         current_problem_structure = _normalize_canvas_problem_structure_state(workspace.get("problem_structure"))
-        if _should_accept_problem_structure_patch(current_problem_structure, incoming_problem_structure):
+        if (
+            _should_accept_artifact_scoped_workspace_patch(
+                current_artifact_generation,
+                incoming_artifact_generation,
+                "problem-definition:structure",
+            )
+            and _should_accept_problem_structure_patch(current_problem_structure, incoming_problem_structure)
+        ):
             workspace["problem_structure"] = incoming_problem_structure
         else:
             print(
@@ -14874,15 +14989,44 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "solution_topics" in provided_fields:
         workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
     if "final_solution_summary" in provided_fields:
-        workspace["final_solution_summary"] = _normalize_canvas_final_solution_summary(
-            payload.final_solution_summary
-        )
+        if _should_accept_artifact_scoped_workspace_patch(
+            current_artifact_generation,
+            incoming_artifact_generation,
+            "solution:summary",
+        ):
+            current_final_summary = _normalize_canvas_final_solution_summary(workspace.get("final_solution_summary"))
+            incoming_final_summary = _normalize_canvas_final_solution_summary(payload.final_solution_summary)
+            incoming_revision = _safe_nonnegative_int(incoming_final_summary.get("revision"))
+            current_revision = _safe_nonnegative_int(current_final_summary.get("revision"))
+            summary_artifact = incoming_artifact_generation.get("solution:summary") or {}
+            summary_artifact_version = _safe_nonnegative_int(summary_artifact.get("version"))
+            incoming_final_summary["revision"] = max(
+                incoming_revision,
+                summary_artifact_version,
+                current_revision + 1 if incoming_revision <= 0 else incoming_revision,
+            )
+            if summary_artifact.get("generation_id"):
+                incoming_final_summary["source_generation_id"] = _safe_text(summary_artifact.get("generation_id"))
+            if summary_artifact.get("input_transcript_revision") is not None:
+                incoming_final_summary["based_on_transcript_revision"] = _safe_nonnegative_int(
+                    summary_artifact.get("input_transcript_revision")
+                )
+            incoming_final_summary["updated_at"] = saved_at
+            workspace["final_solution_summary"] = incoming_final_summary
+        else:
+            print(
+                "[canvas workspace PATCH] ignored stale final_solution_summary",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "current": current_artifact_generation.get("solution:summary"),
+                    "incoming": incoming_artifact_generation.get("solution:summary"),
+                },
+            )
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
     if "artifact_generation" in provided_fields:
-        incoming_artifact_generation = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
         workspace["artifact_generation"] = _merge_canvas_artifact_generation_patch(
-            _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {}),
+            current_artifact_generation,
             incoming_artifact_generation,
         )
         with RT.lock:
@@ -14891,7 +15035,19 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
                 if _safe_text(generation.get("status")) != "generating":
                     lock_map.pop(artifact_key, None)
     if "ideation_bubble_graph" in provided_fields:
-        workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
+        incoming_bubble_graph = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
+        current_bubble_graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+        if _should_accept_ideation_bubble_graph_patch(current_bubble_graph, incoming_bubble_graph):
+            workspace["ideation_bubble_graph"] = incoming_bubble_graph
+        else:
+            print(
+                "[canvas workspace PATCH] ignored stale ideation_bubble_graph",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "current_cycle": _safe_nonnegative_int(current_bubble_graph.get("update_cycle")),
+                    "incoming_cycle": _safe_nonnegative_int(incoming_bubble_graph.get("update_cycle")),
+                },
+            )
     if "imported_state" in provided_fields:
         workspace["imported_state"] = (
             copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
