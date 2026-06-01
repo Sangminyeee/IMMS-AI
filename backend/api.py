@@ -2735,6 +2735,7 @@ class RuntimeStore:
     llm_io_logs: list[dict[str, Any]] = field(default_factory=list)
     canvas_last_placement: dict[str, Any] = field(default_factory=dict)
     canvas_workspace_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
+    canvas_artifact_generation_locks_by_meeting: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     canvas_llm_inflight_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
     canvas_idea_jobs_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
     canvas_problem_jobs_by_meeting: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -2777,6 +2778,7 @@ class RuntimeStore:
         self.llm_io_logs = []
         self.canvas_last_placement = {}
         self.canvas_workspace_by_meeting = {}
+        self.canvas_artifact_generation_locks_by_meeting = {}
         self.canvas_llm_inflight_by_meeting = {}
         self.canvas_idea_jobs_by_meeting = {}
         self.canvas_problem_jobs_by_meeting = {}
@@ -14638,7 +14640,7 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
     workspace["meeting_goal"] = _safe_text(payload.meeting_goal)
     workspace["meeting_goal_context"] = _safe_text(payload.meeting_goal_context)
-    workspace["stage"] = _normalize_canvas_stage(payload.stage)
+    workspace["stage"] = "ideation"
     workspace["agenda_overrides"] = _normalize_canvas_agenda_overrides(payload.agenda_overrides)
     workspace["canvas_items"] = _normalize_canvas_workspace_items(payload.canvas_items)
     workspace["custom_groups"] = _normalize_canvas_custom_groups(payload.custom_groups)
@@ -14685,39 +14687,51 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
 
     saved_at = _now_ts()
     previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
-    generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
-    current = generation_map.get(artifact_key) or {}
-    current_status = _safe_text(current.get("status"))
-    current_is_stale = _is_canvas_artifact_generation_stale(current, saved_at)
-    current_started_by = _safe_text(current.get("started_by"))
-    requested_by = _safe_text(payload.user_id)
-    current_started_by_requester = bool(requested_by) and current_started_by == requested_by
+    should_save_workspace = False
+    with RT.lock:
+        workspace_source = RT.canvas_workspace_by_meeting.get(normalized_meeting_id) or previous_workspace
+        workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace_source, saved_at)
+        generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+        lock_map = RT.canvas_artifact_generation_locks_by_meeting.setdefault(normalized_meeting_id, {})
+        locked_generation = copy.deepcopy(lock_map.get(artifact_key) or {})
+        if locked_generation and _is_canvas_artifact_generation_stale(locked_generation, saved_at):
+            lock_map.pop(artifact_key, None)
+            locked_generation = {}
 
-    if current_status == "generating" and not payload.force and not current_is_stale and not current_started_by_requester:
-        generation = copy.deepcopy(current)
-        acquired = False
-    else:
-        with RT.lock:
-            input_transcript_revision = _safe_nonnegative_int(getattr(RT, "transcript_version", 0))
-        generation = {
-            "artifact_key": artifact_key,
-            "status": "generating",
-            "generation_id": f"{artifact_key}:{uuid4().hex}",
-            "started_by": _safe_text(payload.user_id),
-            "started_at": saved_at,
-            "updated_at": saved_at,
-            "finished_at": "",
-            "error": "",
-            "version": int(current.get("version") or 0),
-            "input_transcript_revision": input_transcript_revision,
-        }
-        generation_map[artifact_key] = generation
-        workspace["artifact_generation"] = generation_map
-        with RT.lock:
+        current = locked_generation or generation_map.get(artifact_key) or {}
+        current_status = _safe_text(current.get("status"))
+        current_is_stale = _is_canvas_artifact_generation_stale(current, saved_at)
+
+        if current_status == "generating" and not payload.force and not current_is_stale:
+            generation = copy.deepcopy(current)
+            generation_map[artifact_key] = generation
+            workspace["artifact_generation"] = generation_map
             RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+            acquired = False
+            should_save_workspace = True
+        else:
+            input_transcript_revision = _safe_nonnegative_int(getattr(RT, "transcript_version", 0))
+            generation = {
+                "artifact_key": artifact_key,
+                "status": "generating",
+                "generation_id": f"{artifact_key}:{uuid4().hex}",
+                "started_by": _safe_text(payload.user_id),
+                "started_at": saved_at,
+                "updated_at": saved_at,
+                "finished_at": "",
+                "error": "",
+                "version": int(current.get("version") or 0),
+                "input_transcript_revision": input_transcript_revision,
+            }
+            generation_map[artifact_key] = generation
+            lock_map[artifact_key] = copy.deepcopy(generation)
+            workspace["artifact_generation"] = generation_map
+            acquired = True
+            should_save_workspace = True
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    if should_save_workspace:
         _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
-        acquired = True
 
     return {
         "ok": True,
@@ -14754,6 +14768,13 @@ def post_canvas_artifact_generation_finish(payload: CanvasArtifactGenerationFini
             "generation": copy.deepcopy(current),
             "workspace": _canvas_workspace_response(workspace),
         }
+
+    with RT.lock:
+        lock_map = RT.canvas_artifact_generation_locks_by_meeting.setdefault(normalized_meeting_id, {})
+        locked_generation = lock_map.get(artifact_key) or {}
+        locked_generation_id = _safe_text(locked_generation.get("generation_id"))
+        if not locked_generation_id or not requested_generation_id or locked_generation_id == requested_generation_id:
+            lock_map.pop(artifact_key, None)
 
     generation_id = requested_generation_id or current_generation_id or f"{artifact_key}:{uuid4().hex}"
     generation = _finish_canvas_artifact_generation_entry(
@@ -14827,7 +14848,7 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "meeting_goal_context" in provided_fields:
         workspace["meeting_goal_context"] = _safe_text(payload.meeting_goal_context)
     if "stage" in provided_fields:
-        workspace["stage"] = _normalize_canvas_stage(payload.stage)
+        workspace["stage"] = "ideation"
     if "agenda_overrides" in provided_fields:
         workspace["agenda_overrides"] = _normalize_canvas_agenda_overrides(payload.agenda_overrides)
     if "canvas_items" in provided_fields:
@@ -14859,10 +14880,16 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
     if "artifact_generation" in provided_fields:
+        incoming_artifact_generation = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
         workspace["artifact_generation"] = _merge_canvas_artifact_generation_patch(
             _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {}),
-            _normalize_canvas_artifact_generation(payload.artifact_generation or {}),
+            incoming_artifact_generation,
         )
+        with RT.lock:
+            lock_map = RT.canvas_artifact_generation_locks_by_meeting.setdefault(normalized_meeting_id, {})
+            for artifact_key, generation in incoming_artifact_generation.items():
+                if _safe_text(generation.get("status")) != "generating":
+                    lock_map.pop(artifact_key, None)
     if "ideation_bubble_graph" in provided_fields:
         workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     if "imported_state" in provided_fields:

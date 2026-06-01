@@ -418,9 +418,11 @@ export function useCanvasPersistence({
           canvasItems: latestSharedWorkspaceRef.current.canvasItems.length,
           nodePositions: summarizeNodePositionsForDebug(latestSharedWorkspaceRef.current.nodePositions),
         });
-        flushCanvasWorkspacePatch(
-          buildCurrentWorkspacePatchPayload(latestSharedWorkspaceRef.current),
-        );
+        const workspacePatch = {
+          ...buildCurrentWorkspacePatchPayload(latestSharedWorkspaceRef.current),
+          stage: undefined,
+        };
+        flushCanvasWorkspacePatch(workspacePatch);
       }
       if (latestPersonalNotesPayloadRef.current) {
         flushCanvasPersonalNotes(latestPersonalNotesPayloadRef.current);

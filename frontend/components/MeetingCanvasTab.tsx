@@ -364,7 +364,6 @@ type MeetingCanvasTabProps = {
   onNodePreviewSync: (payload: CanvasNodePreviewPayload) => void;
   incomingEditPresence: CanvasEditPresencePayload | null;
   onEditPresenceSync: (payload: CanvasEditPresencePayload) => void;
-  incomingCanvasStateRequestId: string;
   liveSpeechPreview: LiveSpeechPreview | null;
   isRecording?: boolean;
   recordingStartedAtMs?: number | null;
@@ -726,7 +725,6 @@ export default function MeetingCanvasTab({
   onNodePreviewSync,
   incomingEditPresence,
   onEditPresenceSync,
-  incomingCanvasStateRequestId,
   isRecording = false,
   recordingStartedAtMs = null,
   meetingTimerStartedAtMs = null,
@@ -905,7 +903,6 @@ export default function MeetingCanvasTab({
   const workspaceLoadedRef = useRef(false);
   const workspaceHydratingRef = useRef(false);
   const lastWorkspaceFieldSignaturesRef = useRef<WorkspaceFieldSignatures>(createWorkspaceFieldSignatures());
-  const sharedSyncTimerRef = useRef<number | null>(null);
   const {
     nodePreviewFlushTimerRef,
     liveNodePositionsRef,
@@ -1494,10 +1491,6 @@ export default function MeetingCanvasTab({
     setSummaryEvidenceOpenGroupIds(new Set());
     setSelectedProblemSourceNodeId("");
     setProblemDiscussionStatus("");
-    if (sharedSyncTimerRef.current) {
-      window.clearTimeout(sharedSyncTimerRef.current);
-      sharedSyncTimerRef.current = null;
-    }
     if (nodePreviewFlushTimerRef.current) {
       window.clearTimeout(nodePreviewFlushTimerRef.current);
       nodePreviewFlushTimerRef.current = null;
@@ -1753,14 +1746,12 @@ export default function MeetingCanvasTab({
     forceBroadcastSharedCanvas,
   } = useSharedCanvasBroadcast({
     agendaOverrides,
-    applyingRemoteSharedSyncRef,
     canvasItems,
     customGroups,
     finalSummaryDocument,
     artifactGeneration,
     ideationBubbleGraph,
     importedState: persistedSharedImportedState,
-    incomingCanvasStateRequestId,
     lastNodePreviewFlushAtRef,
     lastSharedSyncSignatureRef,
     meetingGoalContextDraft,
@@ -1773,7 +1764,6 @@ export default function MeetingCanvasTab({
     problemGroups,
     problemStructureStatePayload,
     sharedSyncEnabled,
-    sharedSyncTimerRef,
     stage,
     userId,
     workspaceHydratingRef,
@@ -2872,6 +2862,7 @@ export default function MeetingCanvasTab({
         setActivityMessage("다른 참가자가 문제정의를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
         return;
       }
+      autoProblemDefinitionRef.current = true;
       await handleGenerateProblemDefinition();
       setLeftPanelTab("detail");
       return;
@@ -2993,13 +2984,26 @@ export default function MeetingCanvasTab({
       autoProblemDefinitionRef.current = false;
       return;
     }
-    if (problemGroups.length > 0 || busy || agendaModels.length === 0 || autoProblemDefinitionRef.current) {
+    if (
+      problemGroups.length > 0 ||
+      busy ||
+      sharedProblemDefinitionGenerating ||
+      agendaModels.length === 0 ||
+      autoProblemDefinitionRef.current
+    ) {
       return;
     }
 
     autoProblemDefinitionRef.current = true;
     void handleGenerateProblemDefinition();
-  }, [agendaModels.length, busy, handleGenerateProblemDefinition, problemGroups.length, stage]);
+  }, [
+    agendaModels.length,
+    busy,
+    handleGenerateProblemDefinition,
+    problemGroups.length,
+    sharedProblemDefinitionGenerating,
+    stage,
+  ]);
 
   const handleStopRecordingClick = useCallback(async () => {
     await onStopRecording?.();
@@ -3451,7 +3455,7 @@ export default function MeetingCanvasTab({
     ];
 
     try {
-      const patchPayload = {
+      const fullPatchPayload = {
         ...buildCurrentWorkspacePatchPayload({
           stage: "ideation",
           problemGroups: nextProblemGroups,
@@ -3463,8 +3467,9 @@ export default function MeetingCanvasTab({
         }),
         llm_cache_reset_prefixes: llmCacheResetPrefixes,
       };
+      const patchPayload = { ...fullPatchPayload, stage: undefined };
       await saveCanvasWorkspacePatch(patchPayload);
-      writeSharedWorkspaceSessionCache(meetingId, patchPayload);
+      writeSharedWorkspaceSessionCache(meetingId, fullPatchPayload);
 
       if (resetProblem) {
         problemStructureRequestSeqRef.current += 1;
@@ -3520,7 +3525,6 @@ export default function MeetingCanvasTab({
       setStage("ideation");
       latestSharedWorkspaceRef.current = {
         ...latestSharedWorkspaceRef.current,
-        stage: "ideation",
         problemGroups: nextProblemGroups,
         problemStructure: nextProblemStructure,
         finalSolutionSummary: nextFinalSummaryDocument,
@@ -3530,7 +3534,6 @@ export default function MeetingCanvasTab({
       };
       if (sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
-          stage: "ideation",
           problemGroups: nextProblemGroups,
           problemStructure: nextProblemStructure,
           finalSolutionSummary: nextFinalSummaryDocument,

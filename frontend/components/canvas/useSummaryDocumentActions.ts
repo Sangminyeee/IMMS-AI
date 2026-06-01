@@ -346,7 +346,6 @@ export function useSummaryDocumentActions({
         setSummaryEvidenceOpenGroupIds(new Set());
         latestSharedWorkspaceRef.current = {
           ...latestSharedWorkspaceRef.current,
-          stage: "solution",
           finalSolutionSummary: nextFinalSummary,
           importedState: persistedSharedImportedState,
         };
@@ -357,14 +356,12 @@ export function useSummaryDocumentActions({
         );
         if (sharedSyncEnabled) {
           forceBroadcastSharedCanvas({
-            stage: "solution",
             finalSolutionSummary: nextFinalSummary,
             artifactGeneration: readyArtifactGeneration,
           });
           if (meetingId) {
             void saveCanvasWorkspacePatch({
               meeting_id: meetingId,
-              stage: "solution",
               final_solution_summary: nextFinalSummary,
               artifact_generation: readyArtifactGeneration,
               imported_state: persistedSharedImportedState,
@@ -463,7 +460,6 @@ export function useSummaryDocumentActions({
       if (meetingId) {
         await saveCanvasWorkspacePatch({
           meeting_id: meetingId,
-          stage: "solution",
           final_solution_summary: nextFinalSummary,
           imported_state: persistedSharedImportedState,
         });
@@ -477,14 +473,12 @@ export function useSummaryDocumentActions({
       setLocalEditPresenceTarget(null);
       latestSharedWorkspaceRef.current = {
         ...latestSharedWorkspaceRef.current,
-        stage: "solution",
         finalSolutionSummary: nextFinalSummary,
         importedState: persistedSharedImportedState,
       };
 
       if (sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
-          stage: "solution",
           finalSolutionSummary: nextFinalSummary,
         });
       }
@@ -608,7 +602,6 @@ export function useSummaryDocumentActions({
       setLocalEditPresenceTarget(null);
       latestSharedWorkspaceRef.current = {
         ...latestSharedWorkspaceRef.current,
-        stage: "solution",
         finalSolutionSummary: nextFinalSummary,
         importedState: persistedSharedImportedState,
       };
@@ -619,14 +612,12 @@ export function useSummaryDocumentActions({
       );
       if (sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
-          stage: "solution",
           finalSolutionSummary: nextFinalSummary,
           artifactGeneration: readyArtifactGeneration,
         });
         if (meetingId) {
           void saveCanvasWorkspacePatch({
             meeting_id: meetingId,
-            stage: "solution",
             final_solution_summary: nextFinalSummary,
             artifact_generation: readyArtifactGeneration,
             imported_state: persistedSharedImportedState,

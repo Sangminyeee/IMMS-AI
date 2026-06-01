@@ -511,6 +511,9 @@ export function useSharedCanvasIncomingSync({
         method: problemStructureMethod,
         mode: problemDefinitionMode,
       });
+      const nextNodePositions = incomingSharedCanvasSync.node_positions
+        ? normalizeCanvasNodePositionsForComputedIdeation(incomingSharedCanvasSync.node_positions)
+        : currentWorkspace.nodePositions;
       const nextArtifactGeneration = mergeIncomingArtifactGeneration(
         currentWorkspace.artifactGeneration,
         normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {}),
@@ -521,6 +524,7 @@ export function useSharedCanvasIncomingSync({
           stage,
           problemGroups: nextProblemGroups,
           problemStructure: nextProblemStructurePayload,
+          nodePositions: nextNodePositions,
           artifactGeneration: nextArtifactGeneration,
         },
         () => {
@@ -534,6 +538,10 @@ export function useSharedCanvasIncomingSync({
               basedOnTranscriptRevision: nextProblemStructure.basedOnTranscriptRevision,
               updatedAt: nextProblemStructure.updatedAt,
             });
+          }
+          if (incomingSharedCanvasSync.node_positions) {
+            liveNodePositionsRef.current = nextNodePositions;
+            setNodePositions(nextNodePositions);
           }
           setArtifactGeneration(nextArtifactGeneration);
           if (nextArtifactGeneration["problem-definition:structure"]?.status !== "generating") {

@@ -19,6 +19,29 @@ router = APIRouter()
 # 회의방별 연결 관리
 active_connections: Dict[str, List[Dict]] = {}
 latest_canvas_workspace_by_meeting: Dict[str, Dict[str, Any]] = {}
+CANVAS_WORKSPACE_SYNC_FIELDS = {
+    "meeting_goal",
+    "meeting_goal_context",
+    "agenda_overrides",
+    "canvas_items",
+    "custom_groups",
+    "problem_groups",
+    "problem_structure",
+    "solution_topics",
+    "final_solution_summary",
+    "node_positions",
+    "artifact_generation",
+    "ideation_bubble_graph",
+    "imported_state",
+}
+CANVAS_SCOPED_SYNC_FIELDS = {
+    "artifact_generation": {"artifact_generation"},
+    "ideation_bubble_graph": {"ideation_bubble_graph"},
+    "problem_groups": {"problem_groups", "artifact_generation"},
+    "problem_structure": {"problem_groups", "problem_structure", "node_positions", "artifact_generation"},
+    "summary_document": {"final_solution_summary", "artifact_generation", "imported_state"},
+    "meeting_goal": {"meeting_goal", "meeting_goal_context"},
+}
 latest_stt_summary_by_meeting: Dict[str, Dict[str, Any]] = {}
 
 # AI 백엔드 URL
@@ -1144,17 +1167,49 @@ async def queue_audio_for_fusion(meeting_id: str, candidate: dict[str, Any]):
 async def persist_canvas_workspace(meeting_id: str, workspace: dict[str, Any]):
     normalized_workspace = dict(workspace or {})
     normalized_workspace["meeting_id"] = meeting_id
+    normalized_workspace.pop("stage", None)
+    normalized_workspace.pop("sync_id", None)
+    normalized_workspace.pop("sync_scope", None)
+    normalized_workspace.pop("updated_by", None)
+    normalized_workspace.pop("updated_at", None)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{AI_BACKEND_URL}/api/canvas/workspace-state",
+                f"{AI_BACKEND_URL}/api/canvas/workspace-patch",
                 json=normalized_workspace,
             )
             if response.status_code >= 400:
                 print(f"❌ Failed to persist canvas workspace: {response.status_code} {response.text[:200]}")
     except Exception as e:
         print(f"❌ Failed to persist canvas workspace: {e}")
+
+
+def build_canvas_workspace_patch_for_scope(
+    meeting_id: str,
+    workspace: dict[str, Any],
+    sync_scope: str,
+) -> dict[str, Any]:
+    fields = CANVAS_WORKSPACE_SYNC_FIELDS if sync_scope == "full" else CANVAS_SCOPED_SYNC_FIELDS.get(sync_scope, set())
+    patch = {"meeting_id": meeting_id}
+    for field in fields:
+        if field in workspace:
+            patch[field] = copy.deepcopy(workspace.get(field))
+    return patch
+
+
+def merge_canvas_workspace_patch(
+    meeting_id: str,
+    current_workspace: dict[str, Any] | None,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    merged = copy.deepcopy(current_workspace) if isinstance(current_workspace, dict) else {}
+    merged["meeting_id"] = meeting_id
+    merged["stage"] = "ideation"
+    for field in CANVAS_WORKSPACE_SYNC_FIELDS:
+        if field in patch:
+            merged[field] = copy.deepcopy(patch.get(field))
+    return merged
 
 
 async def fetch_canvas_workspace(meeting_id: str) -> dict[str, Any] | None:
@@ -1337,7 +1392,7 @@ async def websocket_endpoint(
                 'meeting_id': meeting_id,
                 'updated_by': '__server__',
                 'updated_at': datetime.utcnow().isoformat(),
-                'stage': current_workspace.get('stage', 'ideation'),
+                'stage': 'ideation',
                 'agenda_overrides': current_workspace.get('agenda_overrides') or {},
                 'canvas_items': current_workspace.get('canvas_items') or [],
                 'custom_groups': current_workspace.get('custom_groups') or [],
@@ -1358,6 +1413,7 @@ async def websocket_endpoint(
                 },
                 'node_positions': current_workspace.get('node_positions') or {},
                 'artifact_generation': current_workspace.get('artifact_generation') or {},
+                'ideation_bubble_graph': current_workspace.get('ideation_bubble_graph') or {},
                 'imported_state': current_workspace.get('imported_state'),
                 'meeting_goal': current_workspace.get('meeting_goal') or '',
                 'meeting_goal_context': current_workspace.get('meeting_goal_context') or '',
@@ -1394,14 +1450,6 @@ async def websocket_endpoint(
         except Exception as e:
             print(f"❌ Failed to send initial STT flow summaries to {user_id}: {e}")
 
-    await broadcast_to_meeting(meeting_id, {
-        'type': 'canvas_state_request',
-        'meeting_id': meeting_id,
-        'requested_by': user_id,
-        'request_id': f"{meeting_id}:{user_id}:{int(datetime.utcnow().timestamp() * 1000)}",
-        'timestamp': datetime.utcnow().isoformat(),
-    }, exclude_user=user_id)
-    
     # 참가자 입장 알림
     await broadcast_to_meeting(meeting_id, {
         'type': 'user_joined',
@@ -1517,6 +1565,18 @@ async def websocket_endpoint(
                     continue
 
                 sync_scope = str(workspace.get('sync_scope') or 'full').strip()
+                if sync_scope not in {
+                    'full',
+                    'node_positions',
+                    'artifact_generation',
+                    'ideation_bubble_graph',
+                    'problem_groups',
+                    'problem_structure',
+                    'summary_document',
+                    'meeting_goal',
+                }:
+                    sync_scope = 'full'
+
                 if sync_scope == 'node_positions':
                     node_positions = copy.deepcopy(workspace.get('node_positions') or {})
                     stage = str(workspace.get('stage') or 'ideation').strip()
@@ -1528,7 +1588,6 @@ async def websocket_endpoint(
                         current_workspace = {'meeting_id': meeting_id}
                     current_workspace = copy.deepcopy(current_workspace)
                     current_workspace['meeting_id'] = meeting_id
-                    current_workspace['stage'] = stage
                     current_workspace['node_positions'] = node_positions
                     latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(current_workspace)
 
@@ -1551,17 +1610,35 @@ async def websocket_endpoint(
                     continue
 
                 workspace['meeting_id'] = meeting_id
-                latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
+                workspace['stage'] = 'ideation'
+                patch_workspace = build_canvas_workspace_patch_for_scope(meeting_id, workspace, sync_scope)
+                if sync_scope != 'full' and len(patch_workspace) <= 1:
+                    continue
+
+                current_workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+                shared_workspace = merge_canvas_workspace_patch(meeting_id, current_workspace, patch_workspace)
+                latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(shared_workspace)
+                broadcast_payload = {
+                    'sync_id': str(workspace.get('sync_id') or f"{sync_scope}-{int(datetime.utcnow().timestamp() * 1000)}"),
+                    'meeting_id': meeting_id,
+                    'sync_scope': sync_scope,
+                    'updated_by': user_id,
+                    'updated_at': datetime.utcnow().isoformat(),
+                    'stage': 'ideation',
+                }
+                for field in CANVAS_WORKSPACE_SYNC_FIELDS:
+                    if field in patch_workspace:
+                        broadcast_payload[field] = copy.deepcopy(patch_workspace.get(field))
                 sync_message = {
                     'type': 'canvas_sync',
-                    'data': workspace,
+                    'data': broadcast_payload,
                     'meeting_id': meeting_id,
                     'user_id': user_id,
                     'timestamp': datetime.utcnow().isoformat(),
                 }
 
                 await asyncio.gather(
-                    persist_canvas_workspace(meeting_id, workspace),
+                    persist_canvas_workspace(meeting_id, patch_workspace),
                     broadcast_to_meeting(meeting_id, sync_message, exclude_user=user_id),
                 )
 

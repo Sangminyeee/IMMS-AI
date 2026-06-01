@@ -277,12 +277,31 @@ async function clickFirstVisible(locator, timeoutMs) {
   return { clicked: false, disabled: false };
 }
 
+async function detectAuthState(page, timeoutMs) {
+  const deadline = Date.now() + Math.min(timeoutMs, 20_000);
+  while (Date.now() < deadline) {
+    const currentUrl = page.url();
+    const meetingVisible = await page.getByText("현재 단계").first().isVisible({ timeout: 300 }).catch(() => false);
+    if (meetingVisible) return "meeting";
+
+    const guestButtonVisible = await page
+      .getByRole("button", { name: /게스트로 시작하기|게스트 로그인|게스트/ })
+      .first()
+      .isVisible({ timeout: 300 })
+      .catch(() => false);
+    if (currentUrl.includes("/login") || guestButtonVisible) return "login";
+
+    await sleep(300);
+  }
+  return "unknown";
+}
+
 async function authenticateIfNeeded(page, options, record) {
   await page.waitForLoadState("domcontentloaded", { timeout: options.timeoutMs }).catch(() => {});
-  await sleep(700);
 
-  const loginVisible = page.url().includes("/login") || (await page.getByText("게스트로 시작하기").count().catch(() => 0)) > 0;
-  if (!loginVisible) return;
+  const authState = await detectAuthState(page, options.timeoutMs);
+  if (authState === "meeting") return;
+  if (authState !== "login") return;
 
   if (options.auth === "none") {
     throw new Error(`${record.label}: login page reached, but --auth=none`);
@@ -308,6 +327,7 @@ async function authenticateIfNeeded(page, options, record) {
   await page
     .waitForURL((nextUrl) => !nextUrl.pathname.includes("/login"), { timeout: options.timeoutMs })
     .catch(() => {});
+  await detectAuthState(page, options.timeoutMs);
 }
 
 async function openMeeting(page, options, record) {
@@ -318,6 +338,7 @@ async function openMeeting(page, options, record) {
   if (page.url() !== options.url) {
     record.actions.push("navigate back to meeting after auth");
     await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: options.timeoutMs });
+    await authenticateIfNeeded(page, options, record);
   }
 
   await page.getByText("현재 단계").first().waitFor({ timeout: options.timeoutMs });
@@ -406,10 +427,13 @@ function buildFindings(records, apiSummary) {
         message: `${record.label} final snapshot이 로딩 상태처럼 보입니다.`,
       });
     }
-    if (text.includes("다른 참가자가 문제정의를 생성 중입니다") && !text.includes("문제정의 · 1단계")) {
+    if (
+      text.includes("다른 참가자가 문제정의를 생성 중입니다") ||
+      (text.includes("문제 정의 그룹이 아직 없습니다") && text.includes("초기화 이후 도착한 이전 문제정의"))
+    ) {
       findings.push({
         level: "warning",
-        message: `${record.label} 이 생성중 메시지에 머물러 있을 수 있습니다.`,
+        message: `${record.label} 이 문제정의 생성 대기/무결과 상태에 머물러 있을 수 있습니다.`,
       });
     }
   }

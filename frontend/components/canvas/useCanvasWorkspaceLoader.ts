@@ -288,7 +288,6 @@ export function useCanvasWorkspaceLoader<
             : undefined;
 
         const sharedGroups = hydrateProblemGroups(saved.problem_groups || []);
-        const sharedStage = normalizeWorkspaceStage(saved.stage);
         const nextPersonalNotes = (savedPersonalNotes.personal_notes || []).map((note) =>
           toPersonalNote(note, meetingId),
         ) as TPersonalNote[];
@@ -312,7 +311,7 @@ export function useCanvasWorkspaceLoader<
           shouldUseLocalCanvas ? savedLocalCanvasState?.problem_structure : saved.problem_structure,
           nextGroups,
         );
-        const nextStage = savedLocalStage || sharedStage;
+        const nextStage = savedLocalStage || "ideation";
         const displayStage = captureStageOverride || nextStage;
         const displayProblemStructure =
           displayStage === "problem-definition" && captureProblemPhaseOverride

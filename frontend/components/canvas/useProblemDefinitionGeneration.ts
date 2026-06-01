@@ -267,7 +267,6 @@ export function useProblemDefinitionGeneration<
         setSelectedNodeId(nextSelectedGroupId ? `problem-${nextSelectedGroupId}` : "");
         latestSharedWorkspaceRef.current = {
           ...latestSharedWorkspaceRef.current,
-          stage: "problem-definition",
           problemGroups: nextGroups,
           nodePositions: nextNodePositionsSnapshot,
           importedState: persistedSharedImportedState,
@@ -280,7 +279,6 @@ export function useProblemDefinitionGeneration<
 
         if (sharedSyncEnabled) {
           forceBroadcastSharedCanvas({
-            stage: "problem-definition",
             problemGroups: nextGroups,
             nodePositions: nextNodePositionsSnapshot,
             artifactGeneration: readyArtifactGeneration,
@@ -288,7 +286,6 @@ export function useProblemDefinitionGeneration<
           if (meetingId) {
             void saveCanvasWorkspacePatch({
               meeting_id: meetingId,
-              stage: "problem-definition",
               problem_groups: serializeSharedProblemGroups(nextGroups),
               solution_topics: [],
               node_positions: nextNodePositionsSnapshot,
