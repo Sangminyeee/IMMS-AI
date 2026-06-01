@@ -49,7 +49,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
 
   return (
     <div
-      className="moa-dashboard-type moa-dashboard-route-enter relative h-screen w-full overflow-hidden bg-[var(--moa-bg)] text-[var(--moa-text)]"
+      className="moa-desktop-motion moa-dashboard-type moa-dashboard-route-enter relative h-screen w-full overflow-hidden bg-[var(--moa-bg)] text-[var(--moa-text)]"
       style={
         {
           "--dashboard-sidebar": "333px",
@@ -66,7 +66,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
             onClick={onLogout}
             aria-label="로그아웃"
             title="로그아웃"
-            className="relative h-[38px] w-[38px] overflow-hidden rounded-full bg-[var(--moa-logo-text)] text-[14px] font-bold text-white shadow-[0_10px_24px_rgba(0,0,0,0.12)]"
+            className="moa-action-icon relative h-[38px] w-[38px] overflow-hidden rounded-full bg-[var(--moa-logo-text)] text-[14px] font-bold text-white shadow-[0_10px_24px_rgba(0,0,0,0.12)]"
           >
             <span className="grid h-full w-full place-items-center">{(userEmail || "M").slice(0, 1).toUpperCase()}</span>
             <span className="absolute right-[1px] top-[2px] h-[8px] w-[8px] rounded-full bg-[#0542ff]" />
@@ -75,7 +75,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
             type="button"
             onClick={() => setMobileMenuOpen(true)}
             aria-label="메뉴 열기"
-            className="grid h-[38px] w-[38px] place-items-center rounded-full border border-[#d8e7ff] bg-white text-[#236cf3] shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
+            className="moa-action-icon grid h-[38px] w-[38px] place-items-center rounded-full border border-[#d8e7ff] bg-white text-[#236cf3] shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
           >
             <MenuIcon className="h-[18px] w-[18px]" />
           </button>
@@ -91,7 +91,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
 
           <button
             type="button"
-            className="mt-[42px] flex h-[60.995px] w-[281.257px] items-center rounded-[16.265px] bg-white pl-[16.94px] pr-[16.94px] text-left shadow-[0_0_3.389px_rgba(190,187,189,0.01),0_0_2.711px_rgba(190,187,189,0.04),0_0_2.711px_rgba(190,187,189,0.15),0_0_2.033px_rgba(190,187,189,0.26),0_0_1.355px_rgba(190,187,189,0.29)]"
+            className="moa-action-card mt-[42px] flex h-[60.995px] w-[281.257px] items-center rounded-[16.265px] bg-white pl-[16.94px] pr-[16.94px] text-left shadow-[0_0_3.389px_rgba(190,187,189,0.01),0_0_2.711px_rgba(190,187,189,0.04),0_0_2.711px_rgba(190,187,189,0.15),0_0_2.033px_rgba(190,187,189,0.26),0_0_1.355px_rgba(190,187,189,0.29)]"
           >
             <span className="h-[28.845px] w-[28.845px] shrink-0 rounded-full bg-[linear-gradient(270deg,var(--moa-primary-gradient-end)_0%,var(--moa-primary-gradient-start)_100%)] opacity-70" />
             <span className="ml-[8.24px] min-w-0">
@@ -116,7 +116,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
                   onClick={item.selected ? undefined : () => openPermissionDialog(item.label)}
                   aria-current={item.selected ? "page" : undefined}
                   className={classNames(
-                    "flex h-[39.308px] w-[281.257px] items-center rounded-[6.777px] pl-[23.04px] transition",
+                    "moa-action-row flex h-[39.308px] w-[281.257px] items-center rounded-[6.777px] pl-[23.04px] transition",
                     item.selected
                       ? "bg-[var(--moa-surface)] text-[#111111] shadow-[0_1.355px_1.694px_rgba(0,0,0,0.1)]"
                       : "text-[rgba(76,76,76,0.7)] hover:bg-white/70",
@@ -134,7 +134,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
           <button
             type="button"
             onClick={() => openPermissionDialog("설정")}
-            className="flex h-[39.308px] w-[281.257px] items-center rounded-[6.777px] pl-[23.72px] text-[rgba(76,76,76,0.7)] transition hover:bg-white/70"
+            className="moa-action-row flex h-[39.308px] w-[281.257px] items-center rounded-[6.777px] pl-[23.72px] text-[rgba(76,76,76,0.7)] transition hover:bg-white/70"
           >
             <SettingsIcon className="mr-[13.55px] h-[14.827px] w-[14.232px] shrink-0 text-current" />
             <span className="moa-dt-nav block">설정</span>
@@ -153,7 +153,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
           onClick={onLogout}
           aria-label="로그아웃"
           title="로그아웃"
-          className="relative h-[45.408px] w-[45.408px] overflow-hidden rounded-full bg-[var(--moa-logo-text)] text-[16px] font-bold text-white shadow-[0_10px_24px_rgba(0,0,0,0.14)] transition hover:scale-[1.02]"
+          className="moa-action-icon relative h-[45.408px] w-[45.408px] overflow-hidden rounded-full bg-[var(--moa-logo-text)] text-[16px] font-bold text-white shadow-[0_10px_24px_rgba(0,0,0,0.14)] transition hover:scale-[1.02]"
         >
           <span className="grid h-full w-full place-items-center">{(userEmail || "M").slice(0, 1).toUpperCase()}</span>
           <span className="absolute right-0 top-[2.71px] h-[9.488px] w-[9.488px] rounded-full bg-[#0542ff]" />
@@ -188,7 +188,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}
                 aria-label="메뉴 닫기"
-                className="grid h-9 w-9 place-items-center rounded-full bg-[#f3f8ff] text-[#526070]"
+                className="moa-action-icon grid h-9 w-9 place-items-center rounded-full bg-[#f3f8ff] text-[#526070]"
               >
                 <CloseIcon className="h-4 w-4" />
               </button>
@@ -204,7 +204,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
                     onClick={item.selected ? () => setMobileMenuOpen(false) : () => openPermissionDialog(item.label)}
                     aria-current={item.selected ? "page" : undefined}
                     className={classNames(
-                      "flex h-[46px] w-full items-center rounded-[16px] px-4 transition",
+                      "moa-action-row flex h-[46px] w-full items-center rounded-[16px] px-4 transition",
                       item.selected
                         ? "bg-[#f3f8ff] text-[#181818]"
                         : "text-[rgba(76,76,76,0.72)] hover:bg-[#f8fbff]",
@@ -220,7 +220,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
               <button
                 type="button"
                 onClick={() => openPermissionDialog("설정")}
-                className="flex h-[46px] w-full items-center rounded-[16px] px-4 text-[rgba(76,76,76,0.72)] transition hover:bg-[#f8fbff]"
+                className="moa-action-row flex h-[46px] w-full items-center rounded-[16px] px-4 text-[rgba(76,76,76,0.72)] transition hover:bg-[#f8fbff]"
               >
                 <SettingsIcon className="mr-3 h-[17px] w-[17px] shrink-0 text-current" />
                 <span className="block text-[14px] font-semibold leading-[1.4] tracking-[-0.035px]">설정</span>
@@ -230,7 +230,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
             <button
               type="button"
               onClick={onLogout}
-              className="mt-3 flex h-[46px] w-full items-center justify-center rounded-[16px] border border-[#d8e7ff] bg-white text-[#526070] transition hover:bg-[#f8fbff]"
+              className="moa-action-button mt-3 flex h-[46px] w-full items-center justify-center rounded-[16px] border border-[#d8e7ff] bg-white text-[#526070] transition hover:bg-[#f8fbff]"
             >
               <span className="block text-[14px] font-bold leading-[1.4] tracking-[-0.035px]">로그아웃</span>
             </button>
@@ -268,7 +268,7 @@ export function DashboardShell({ children, onLogout, userEmail }: DashboardShell
             <button
               type="button"
               onClick={closePermissionDialog}
-              className="moa-dashboard-primary-button mt-[24px] inline-flex h-[42px] min-w-[128px] items-center justify-center rounded-full px-6 text-[14px] font-bold leading-none text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)] transition hover:brightness-105"
+              className="moa-action-button moa-dashboard-primary-button mt-[24px] inline-flex h-[42px] min-w-[128px] items-center justify-center rounded-full px-6 text-[14px] font-bold leading-none text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)] transition hover:brightness-105"
             >
               <span className="block text-[14px] font-bold leading-none text-white">확인</span>
             </button>

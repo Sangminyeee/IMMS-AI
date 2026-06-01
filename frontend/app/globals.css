@@ -642,6 +642,86 @@ body {
   animation: moaDashboardListIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+.moa-desktop-motion {
+  --moa-motion-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --moa-motion-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --moa-motion-exit: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+.moa-action-card,
+.moa-action-row,
+.moa-action-icon,
+.moa-action-input,
+.moa-action-button {
+  transform: translate3d(0, 0, 0);
+}
+
+.moa-message-enter {
+  animation: moaMessageIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-state-callout {
+  animation: moaCalloutIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .moa-desktop-motion :where(button:not(:disabled), a[href], [role="button"]:not([aria-disabled="true"])) {
+    transition-duration: 220ms;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-desktop-motion :where(button:not(:disabled), a[href], [role="button"]:not([aria-disabled="true"])):active {
+    filter: brightness(0.98);
+    transform: translate3d(0, 1px, 0) scale(0.985);
+  }
+
+  .moa-action-button {
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+  }
+
+  .moa-action-card {
+    transition-duration: 280ms;
+    transition-property: border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+    will-change: transform;
+  }
+
+  .moa-action-card:hover {
+    filter: saturate(1.03);
+    transform: translate3d(0, -3px, 0);
+  }
+
+  .moa-action-row {
+    transition-duration: 220ms;
+    transition-property: background-color, border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-row:hover {
+    transform: translate3d(3px, 0, 0);
+  }
+
+  .moa-action-icon {
+    transition-duration: 200ms;
+    transition-property: background-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-icon:hover {
+    transform: translate3d(0, -1px, 0) scale(1.035);
+  }
+
+  .moa-action-input {
+    transition-duration: 220ms;
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-input:focus-within {
+    box-shadow: 0 0 0 3px rgba(1, 163, 255, 0.1);
+  }
+}
+
 .moa-canvas-stage-surface {
   will-change: opacity, filter;
 }
@@ -699,6 +779,30 @@ body {
   to {
     opacity: 1;
     filter: saturate(1);
+  }
+}
+
+@keyframes moaMessageIn {
+  from {
+    filter: saturate(0.96);
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.985);
+  }
+  to {
+    filter: saturate(1);
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaCalloutIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -2844,6 +2948,8 @@ th {
   .moa-canvas-stage-detail,
   .moa-mobile-stage-surface,
   .moa-dashboard-meeting-list-in,
+  .moa-message-enter,
+  .moa-state-callout,
   .moa-dashboard-route-enter,
   .moa-route-exit-overlay,
   .moa-route-exit-overlay::after,
@@ -2855,7 +2961,13 @@ th {
   .moa-dashboard-filter-button,
   .moa-dashboard-filter-button::before,
   .moa-dashboard-filter-check,
-  .moa-dashboard-meeting-list {
+  .moa-dashboard-meeting-list,
+  .moa-desktop-motion :where(button, a[href], [role="button"]),
+  .moa-action-card,
+  .moa-action-row,
+  .moa-action-icon,
+  .moa-action-input,
+  .moa-action-button {
     transition: none !important;
   }
 
@@ -2867,7 +2979,14 @@ th {
   .moa-mobile-stage-surface,
   .moa-dashboard-meeting-list,
   .moa-dashboard-meeting-list-out,
-  .moa-dashboard-meeting-list-in {
+  .moa-dashboard-meeting-list-in,
+  .moa-action-card,
+  .moa-action-row,
+  .moa-action-icon,
+  .moa-action-input,
+  .moa-action-button,
+  .moa-message-enter,
+  .moa-state-callout {
     filter: none !important;
     opacity: 1 !important;
     transform: none !important;

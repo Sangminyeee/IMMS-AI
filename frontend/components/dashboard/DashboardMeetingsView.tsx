@@ -260,7 +260,7 @@ export function DashboardMeetingsView({
         <button
           type="button"
           onClick={onCreateMeeting}
-          className="moa-dashboard-primary-button absolute right-[232px] top-[79px] inline-flex h-[43px] w-[143px] items-center justify-center rounded-[46.085px] px-[12px] text-white transition"
+          className="moa-action-button moa-dashboard-primary-button absolute right-[232px] top-[79px] inline-flex h-[43px] w-[143px] items-center justify-center rounded-[46.085px] px-[12px] text-white transition"
         >
           <PlusIcon className="h-[17.621px] w-[17.621px] shrink-0 text-white" />
           <span className="moa-dt-main-cta ml-[5px] block whitespace-nowrap text-white">새 회의 만들기</span>
@@ -289,7 +289,7 @@ export function DashboardMeetingsView({
             {loading ? (
               <UpcomingSkeleton />
             ) : upcomingMeetings.length === 0 ? (
-              <div className="flex h-[191.119px] w-[391.048px] shrink-0 snap-start items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
+              <div className="moa-action-card flex h-[191.119px] w-[391.048px] shrink-0 snap-start items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
                 <p className="text-[14px] font-semibold text-[var(--moa-disabled-text)]">예정된 회의가 없습니다.</p>
               </div>
             ) : (
@@ -333,7 +333,7 @@ export function DashboardMeetingsView({
         })}
       </div>
 
-      <label className="absolute right-[107.08px] top-[647.98px] flex h-[27.265px] w-[151.133px] items-center rounded-full border-[0.678px] border-[var(--moa-border-soft)] bg-white px-[10.844px] py-[8.133px] text-[var(--moa-text-body)]">
+      <label className="moa-action-input absolute right-[107.08px] top-[647.98px] flex h-[27.265px] w-[151.133px] items-center rounded-full border-[0.678px] border-[var(--moa-border-soft)] bg-white px-[10.844px] py-[8.133px] text-[var(--moa-text-body)]">
         <input
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
@@ -419,7 +419,7 @@ function MobileDashboardContent({
           <button
             type="button"
             onClick={onCreateMeeting}
-            className="mt-6 inline-flex h-[46px] items-center justify-center rounded-full bg-white px-5 text-[#0542ff] shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
+            className="moa-action-button mt-6 inline-flex h-[46px] items-center justify-center rounded-full bg-white px-5 text-[#0542ff] shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
           >
             <PlusIcon className="h-[18px] w-[18px] shrink-0 text-[#0542ff]" />
             <span className="ml-2 block text-[14px] font-bold leading-none tracking-[-0.035px] text-[#0542ff]">새 회의 만들기</span>
@@ -457,7 +457,7 @@ function MobileDashboardContent({
         <section className="mt-6">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="shrink-0 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">전체 회의 목록</h2>
-            <label className="flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-[#d8e7ff] bg-white px-3">
+            <label className="moa-action-input flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-[#d8e7ff] bg-white px-3">
               <input
                 value={searchQuery}
                 onChange={(event) => onSearchQueryChange(event.target.value)}
@@ -548,7 +548,7 @@ function MobileMeetingCard({
   return (
     <article
       className={classNames(
-        "relative rounded-[22px] border border-[#d8e7ff] bg-white p-4 shadow-[0_14px_42px_rgba(15,23,42,0.07)]",
+        "moa-action-card relative rounded-[22px] border border-[#d8e7ff] bg-white p-4 shadow-[0_14px_42px_rgba(15,23,42,0.07)]",
         compact ? "w-[286px] shrink-0" : "w-full",
       )}
     >
@@ -563,12 +563,12 @@ function MobileMeetingCard({
             type="button"
             onClick={() => setMenuOpen((current) => !current)}
             aria-label="회의 메뉴"
-            className="grid h-[30px] w-[30px] place-items-center rounded-full bg-[#f3f8ff] text-[#526070]"
+            className="moa-action-icon grid h-[30px] w-[30px] place-items-center rounded-full bg-[#f3f8ff] text-[#526070]"
           >
             <MoreIcon className="h-[16px] w-[16px]" />
           </button>
           {menuOpen ? (
-            <div className="absolute right-0 top-[34px] z-10 w-[116px] rounded-[14px] border border-[#e5edf6] bg-white p-1 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
+            <div className="moa-popover-menu absolute right-0 top-[34px] z-10 w-[116px] rounded-[14px] border border-[#e5edf6] bg-white p-1 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
               <button
                 type="button"
                 onClick={() => {
@@ -576,7 +576,7 @@ function MobileMeetingCard({
                   onDeleteMeeting(meeting);
                 }}
                 disabled={deleting}
-                className="flex h-[36px] w-full items-center justify-center rounded-[10px] text-[#ef4444] transition hover:bg-[#fff5f5] disabled:opacity-50"
+                className="moa-action-button flex h-[36px] w-full items-center justify-center rounded-[10px] text-[#ef4444] transition hover:bg-[#fff5f5] disabled:opacity-50"
               >
                 <span className="block text-[12px] font-bold leading-none tracking-[-0.03px]">
                   {deleting ? "삭제 중" : "삭제"}
@@ -599,7 +599,7 @@ function MobileMeetingCard({
           <button
             type="button"
             onClick={() => onOpenMeetingResult(meeting)}
-            className="moa-dashboard-primary-button inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 text-white"
+            className="moa-action-button moa-dashboard-primary-button inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 text-white"
           >
             <span className="block text-[13px] font-bold leading-none tracking-[-0.03px] text-white">결과 보기</span>
           </button>
@@ -608,7 +608,7 @@ function MobileMeetingCard({
           type="button"
           onClick={() => onJoinMeeting(meeting.id)}
           className={classNames(
-            "inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 transition",
+            "moa-action-button inline-flex h-[40px] flex-1 items-center justify-center rounded-full px-4 transition",
             completed
               ? "border border-[#d8e7ff] bg-white text-[#526070]"
               : "moa-dashboard-primary-button text-white",
@@ -674,7 +674,7 @@ function UpcomingMeetingCard({
   return (
     <article
       className={classNames(
-        "relative h-[191.119px] w-[391.048px] shrink-0 snap-start overflow-hidden rounded-[19.654px] bg-white",
+        "moa-action-card relative h-[191.119px] w-[391.048px] shrink-0 snap-start overflow-hidden rounded-[19.654px] bg-white",
         featured
           ? "border-[0.949px] border-[rgba(19,127,188,0.5)] shadow-[21.01px_92.849px_26.431px_rgba(138,204,255,0),13.555px_59.64px_24.398px_rgba(138,204,255,0.01),7.455px_33.209px_20.332px_rgba(138,204,255,0.05),3.389px_14.91px_14.91px_rgba(138,204,255,0.09),0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]"
           : "border-[0.678px] border-[#b5b5b5] shadow-[0_2.711px_5.422px_-1.355px_rgba(23,23,23,0.1),0_1.355px_2.711px_-1.355px_rgba(23,23,23,0.06)]",
@@ -691,7 +691,7 @@ function UpcomingMeetingCard({
         onClick={() => onJoinMeeting(meeting.id)}
         onPointerDown={(event) => event.stopPropagation()}
         className={classNames(
-          "absolute left-[264.04px] top-[133.24px] inline-flex h-[33.213px] w-[98.256px] items-center justify-center rounded-[54.896px] transition",
+          "moa-action-button absolute left-[264.04px] top-[133.24px] inline-flex h-[33.213px] w-[98.256px] items-center justify-center rounded-[54.896px] transition",
           featured || tone === "active"
             ? "moa-dashboard-primary-button border-0 text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)]"
             : "border-[0.949px] border-[var(--moa-dashboard-outline)] bg-white text-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)]",
@@ -722,7 +722,7 @@ function MeetingListRow({
   const tone = getMeetingStatusTone(meeting.status);
 
   return (
-    <div className="relative h-[43.375px] w-full overflow-hidden rounded-[19.654px] bg-[var(--moa-surface-muted)] transition hover:bg-[var(--moa-hover-muted)]">
+    <div className="moa-action-row relative h-[43.375px] w-full overflow-hidden rounded-[19.654px] bg-[var(--moa-surface-muted)] transition hover:bg-[var(--moa-hover-muted)]">
       <span
         className={classNames(
           "absolute left-[12.88px] top-[8.13px] inline-flex h-[27.787px] min-w-[45.408px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-border)] px-[8.7px] text-white",
@@ -751,7 +751,7 @@ function MeetingListRow({
           <button
             type="button"
             onClick={() => onOpenMeetingResult(meeting)}
-            className="inline-flex h-[27.78px] min-w-[70.973px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-result-button)] bg-[var(--moa-result-button)] px-[14.233px] text-white transition hover:bg-[var(--moa-result-button-hover)]"
+            className="moa-action-button inline-flex h-[27.78px] min-w-[70.973px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-result-button)] bg-[var(--moa-result-button)] px-[14.233px] text-white transition hover:bg-[var(--moa-result-button-hover)]"
           >
             <span className="moa-dt-row-action-text moa-dt-row-action-text-strong block whitespace-nowrap">결과 보기</span>
           </button>
@@ -759,7 +759,7 @@ function MeetingListRow({
         <button
           type="button"
           onClick={() => onJoinMeeting(meeting.id)}
-          className="group inline-flex h-[27.78px] min-w-[69.467px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-dashboard-action-border)] bg-white px-[14.233px] text-[var(--moa-dashboard-action-text)] transition hover:border-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)] hover:text-[var(--moa-dashboard-outline)]"
+          className="moa-action-button group inline-flex h-[27.78px] min-w-[69.467px] items-center justify-center rounded-full border-[0.678px] border-[var(--moa-dashboard-action-border)] bg-white px-[14.233px] text-[var(--moa-dashboard-action-text)] transition hover:border-[var(--moa-dashboard-outline)] hover:bg-[var(--moa-dashboard-outline-hover)] hover:text-[var(--moa-dashboard-outline)]"
         >
           <span className="moa-dt-row-action-text block whitespace-nowrap transition group-hover:text-[var(--moa-dashboard-outline)]">{getMeetingActionLabel(meeting.status)}</span>
         </button>
@@ -767,7 +767,7 @@ function MeetingListRow({
           type="button"
           onClick={() => onDeleteMeeting(meeting)}
           disabled={deleting}
-          className="group inline-flex h-[27.78px] min-w-[57px] items-center justify-center rounded-full border-[0.678px] border-[#d9e4f4] bg-white px-[11px] text-[#90a1b9] transition hover:border-[#ef4444]/30 hover:bg-[#fff5f5] hover:text-[#ef4444] disabled:cursor-not-allowed disabled:opacity-50"
+          className="moa-action-button group inline-flex h-[27.78px] min-w-[57px] items-center justify-center rounded-full border-[0.678px] border-[#d9e4f4] bg-white px-[11px] text-[#90a1b9] transition hover:border-[#ef4444]/30 hover:bg-[#fff5f5] hover:text-[#ef4444] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="moa-dt-row-action-text block whitespace-nowrap transition group-hover:text-[#ef4444]">
             {deleting ? "삭제 중" : "삭제"}
