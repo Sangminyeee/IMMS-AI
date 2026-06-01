@@ -247,7 +247,6 @@ function HomeContent() {
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
   const [incomingCanvasNodePreview, setIncomingCanvasNodePreview] = useState<CanvasNodePreviewPayload | null>(null);
   const [incomingCanvasEditPresence, setIncomingCanvasEditPresence] = useState<CanvasEditPresencePayload | null>(null);
-  const [incomingCanvasStateRequestId, setIncomingCanvasStateRequestId] = useState("");
   const [calibrationState, setCalibrationState] = useState<CalibrationState>("idle");
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(0);
   const [fusionSelectedUserId, setFusionSelectedUserId] = useState<string | null>(null);
@@ -410,7 +409,6 @@ function HomeContent() {
     setMeetingTimerStartedAtMs(null);
     setMeetingTimerEndedAtMs(null);
     clearIdeationBubbleFinalization();
-    setIncomingCanvasStateRequestId("");
 
     const loadMeeting = async () => {
       setLoadingMeeting(true);
@@ -855,13 +853,6 @@ function HomeContent() {
         updated_by: updatedBy,
         updated_at: readString(payload.updated_at, new Date().toISOString()),
       });
-    });
-
-    wsClient.on("canvas_state_request", (message) => {
-      const payload = getMessagePayload(message);
-      if (!isRecord(payload) || payload.meeting_id !== meetingId) return;
-      if (payload.requested_by === user.id) return;
-      setIncomingCanvasStateRequestId(String(payload.request_id || Date.now()));
     });
 
     wsClient.on("audio_selection", (message) => {
@@ -1320,7 +1311,6 @@ function HomeContent() {
         onNodePreviewSync={broadcastCanvasNodePreview}
         incomingEditPresence={incomingCanvasEditPresence}
         onEditPresenceSync={broadcastCanvasEditPresence}
-        incomingCanvasStateRequestId={incomingCanvasStateRequestId}
         liveSpeechPreview={liveSpeechPreview}
         isRecording={isRecording}
         recordingStartedAtMs={recordingStartedAtMs}

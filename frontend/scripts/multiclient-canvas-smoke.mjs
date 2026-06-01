@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const frontendRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(frontendRoot, "..");
+const requireFromScript = createRequire(import.meta.url);
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5173";
 const DEFAULT_CLIENTS = 5;
@@ -36,6 +38,16 @@ function parseArgs(argv) {
     }
   }
   return args;
+}
+
+function envOption(name) {
+  const envName = `npm_config_${name.replaceAll("-", "_")}`;
+  const value = process.env[envName];
+  return value === undefined || value === "" ? undefined : value;
+}
+
+function optionValue(args, name, envName, fallback = "") {
+  return args[name] ?? envOption(name) ?? process.env[envName] ?? fallback;
 }
 
 function toBool(value, fallback = false) {
@@ -77,39 +89,39 @@ Examples:
 
 function buildOptions() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help || args.h) {
+  if (args.help || args.h || envOption("help") || envOption("h")) {
     printHelp();
     process.exit(0);
   }
 
-  const baseUrl = String(args["base-url"] || process.env.MOA_TEST_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const meetingId = String(args["meeting-id"] || process.env.MOA_TEST_MEETING_ID || "").trim();
-  const url = String(args.url || process.env.MOA_TEST_MEETING_URL || "").trim();
+  const baseUrl = String(optionValue(args, "base-url", "MOA_TEST_BASE_URL", DEFAULT_BASE_URL)).replace(/\/+$/, "");
+  const meetingId = String(optionValue(args, "meeting-id", "MOA_TEST_MEETING_ID")).trim();
+  const url = String(optionValue(args, "url", "MOA_TEST_MEETING_URL")).trim();
   if (!url && !meetingId) {
     console.error("[error] --meeting-id 또는 --url 이 필요합니다.");
     printHelp();
     process.exit(1);
   }
 
-  const trigger = String(args.trigger || process.env.MOA_TEST_TRIGGER || "problem1").toLowerCase();
+  const trigger = String(optionValue(args, "trigger", "MOA_TEST_TRIGGER", "problem1")).toLowerCase();
   if (!["none", "problem1", "problem2", "both"].includes(trigger)) {
     console.error("[error] --trigger 는 none, problem1, problem2, both 중 하나여야 합니다.");
     process.exit(1);
   }
 
   return {
-    auth: String(args.auth || process.env.MOA_TEST_AUTH || "guest").toLowerCase(),
+    auth: String(optionValue(args, "auth", "MOA_TEST_AUTH", "guest")).toLowerCase(),
     baseUrl,
-    clients: Math.max(1, toInt(args.clients || process.env.MOA_TEST_CLIENTS, DEFAULT_CLIENTS)),
-    email: String(args.email || process.env.MOA_TEST_EMAIL || ""),
-    enterWatchers: toBool(args["enter-watchers"] || process.env.MOA_TEST_ENTER_WATCHERS, false),
-    headed: toBool(args.headed || process.env.MOA_TEST_HEADED, false),
-    holdMs: toInt(args["hold-ms"] || process.env.MOA_TEST_HOLD_MS, DEFAULT_HOLD_MS),
+    clients: Math.max(1, toInt(optionValue(args, "clients", "MOA_TEST_CLIENTS"), DEFAULT_CLIENTS)),
+    email: String(optionValue(args, "email", "MOA_TEST_EMAIL")),
+    enterWatchers: toBool(optionValue(args, "enter-watchers", "MOA_TEST_ENTER_WATCHERS", undefined), false),
+    headed: toBool(optionValue(args, "headed", "MOA_TEST_HEADED", undefined), false),
+    holdMs: toInt(optionValue(args, "hold-ms", "MOA_TEST_HOLD_MS"), DEFAULT_HOLD_MS),
     meetingId,
-    outputDir: path.resolve(String(args["output-dir"] || process.env.MOA_TEST_OUTPUT_DIR || DEFAULT_OUTPUT_DIR)),
-    password: String(args.password || process.env.MOA_TEST_PASSWORD || ""),
-    settleMs: toInt(args["settle-ms"] || process.env.MOA_TEST_SETTLE_MS, DEFAULT_SETTLE_MS),
-    timeoutMs: toInt(args["timeout-ms"] || process.env.MOA_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
+    outputDir: path.resolve(String(optionValue(args, "output-dir", "MOA_TEST_OUTPUT_DIR", DEFAULT_OUTPUT_DIR))),
+    password: String(optionValue(args, "password", "MOA_TEST_PASSWORD")),
+    settleMs: toInt(optionValue(args, "settle-ms", "MOA_TEST_SETTLE_MS"), DEFAULT_SETTLE_MS),
+    timeoutMs: toInt(optionValue(args, "timeout-ms", "MOA_TEST_TIMEOUT_MS"), DEFAULT_TIMEOUT_MS),
     trigger,
     url: url || `${baseUrl}/?meeting_id=${encodeURIComponent(meetingId)}`,
   };
@@ -122,15 +134,58 @@ function sleep(ms) {
 }
 
 async function loadChromium() {
+  const importErrors = [];
   try {
     const playwright = await import("playwright");
-    return playwright.chromium;
+    return playwright.chromium || playwright.default?.chromium;
   } catch (error) {
-    throw new Error(
-      "Playwright 패키지를 불러오지 못했습니다. `npm run smoke:multiclient-canvas -- --help` 또는 `npx --yes --package playwright node scripts/multiclient-canvas-smoke.mjs --help` 형태로 실행해 주세요.",
-      { cause: error },
-    );
+    importErrors.push(error);
   }
+
+  const candidates = [];
+  const addCandidate = (candidate) => {
+    if (!candidate || candidates.includes(candidate)) return;
+    candidates.push(candidate);
+  };
+
+  addCandidate(path.join(frontendRoot, "node_modules", "playwright"));
+  addCandidate(path.join(repoRoot, "node_modules", "playwright"));
+
+  for (const entry of String(process.env.PATH || "").split(path.delimiter)) {
+    const cleanEntry = entry.trim().replace(/^"|"$/g, "");
+    if (!cleanEntry || path.basename(cleanEntry).toLowerCase() !== ".bin") continue;
+    addCandidate(path.join(path.dirname(cleanEntry), "playwright"));
+  }
+
+  for (const packageRoot of candidates) {
+    const entryFile = path.join(packageRoot, "index.js");
+    try {
+      await fs.access(entryFile);
+    } catch {
+      continue;
+    }
+
+    try {
+      const playwright = requireFromScript(entryFile);
+      const chromium = playwright?.chromium || playwright?.default?.chromium;
+      if (chromium) return chromium;
+    } catch (error) {
+      importErrors.push(error);
+    }
+
+    try {
+      const playwright = await import(pathToFileURL(entryFile).href);
+      const chromium = playwright?.chromium || playwright?.default?.chromium;
+      if (chromium) return chromium;
+    } catch (error) {
+      importErrors.push(error);
+    }
+  }
+
+  throw new Error(
+    "Playwright 패키지를 불러오지 못했습니다. `npm install -D playwright` 후 다시 실행하거나 `npx --yes --package playwright -- node scripts/multiclient-canvas-smoke.mjs --help` 형태로 실행해 주세요.",
+    { cause: importErrors[0] },
+  );
 }
 
 function endpointFromUrl(url) {
@@ -222,12 +277,31 @@ async function clickFirstVisible(locator, timeoutMs) {
   return { clicked: false, disabled: false };
 }
 
+async function detectAuthState(page, timeoutMs) {
+  const deadline = Date.now() + Math.min(timeoutMs, 20_000);
+  while (Date.now() < deadline) {
+    const currentUrl = page.url();
+    const meetingVisible = await page.getByText("현재 단계").first().isVisible({ timeout: 300 }).catch(() => false);
+    if (meetingVisible) return "meeting";
+
+    const guestButtonVisible = await page
+      .getByRole("button", { name: /게스트로 시작하기|게스트 로그인|게스트/ })
+      .first()
+      .isVisible({ timeout: 300 })
+      .catch(() => false);
+    if (currentUrl.includes("/login") || guestButtonVisible) return "login";
+
+    await sleep(300);
+  }
+  return "unknown";
+}
+
 async function authenticateIfNeeded(page, options, record) {
   await page.waitForLoadState("domcontentloaded", { timeout: options.timeoutMs }).catch(() => {});
-  await sleep(700);
 
-  const loginVisible = page.url().includes("/login") || (await page.getByText("게스트로 시작하기").count().catch(() => 0)) > 0;
-  if (!loginVisible) return;
+  const authState = await detectAuthState(page, options.timeoutMs);
+  if (authState === "meeting") return;
+  if (authState !== "login") return;
 
   if (options.auth === "none") {
     throw new Error(`${record.label}: login page reached, but --auth=none`);
@@ -253,6 +327,7 @@ async function authenticateIfNeeded(page, options, record) {
   await page
     .waitForURL((nextUrl) => !nextUrl.pathname.includes("/login"), { timeout: options.timeoutMs })
     .catch(() => {});
+  await detectAuthState(page, options.timeoutMs);
 }
 
 async function openMeeting(page, options, record) {
@@ -263,6 +338,7 @@ async function openMeeting(page, options, record) {
   if (page.url() !== options.url) {
     record.actions.push("navigate back to meeting after auth");
     await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: options.timeoutMs });
+    await authenticateIfNeeded(page, options, record);
   }
 
   await page.getByText("현재 단계").first().waitFor({ timeout: options.timeoutMs });
@@ -351,10 +427,13 @@ function buildFindings(records, apiSummary) {
         message: `${record.label} final snapshot이 로딩 상태처럼 보입니다.`,
       });
     }
-    if (text.includes("다른 참가자가 문제정의를 생성 중입니다") && !text.includes("문제정의 · 1단계")) {
+    if (
+      text.includes("다른 참가자가 문제정의를 생성 중입니다") ||
+      (text.includes("문제 정의 그룹이 아직 없습니다") && text.includes("초기화 이후 도착한 이전 문제정의"))
+    ) {
       findings.push({
         level: "warning",
-        message: `${record.label} 이 생성중 메시지에 머물러 있을 수 있습니다.`,
+        message: `${record.label} 이 문제정의 생성 대기/무결과 상태에 머물러 있을 수 있습니다.`,
       });
     }
   }

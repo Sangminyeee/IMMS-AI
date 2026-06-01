@@ -103,6 +103,16 @@ type UseProblemDefinitionGenerationOptions<
     generation: CanvasArtifactGenerationState;
     artifactGeneration: CanvasArtifactGenerationMap;
   }>;
+  commitSharedProblemDefinitionGeneration: (
+    payload: {
+      generationId: string;
+      status: "ready" | "failed";
+      error?: string;
+    },
+  ) => Promise<{
+    applied: boolean;
+    artifactGeneration: CanvasArtifactGenerationMap;
+  }>;
   finishSharedArtifactGeneration: (
     artifactKey: CanvasArtifactGenerationKey,
     status: "ready" | "failed",
@@ -155,6 +165,7 @@ export function useProblemDefinitionGeneration<
   setStage,
   sharedSyncEnabled,
   startSharedArtifactGeneration,
+  commitSharedProblemDefinitionGeneration,
   finishSharedArtifactGeneration,
   transcripts,
 }: UseProblemDefinitionGenerationOptions<TGroup, TTranscript, TRationale, TStructureNode, TStructureGroup>) {
@@ -193,19 +204,28 @@ export function useProblemDefinitionGeneration<
             setSelectedNodeId("");
           }
           setActivityMessage("문제정의를 만들 STT 발화가 아직 없습니다.");
-          const failedArtifactGeneration = finishSharedArtifactGeneration(
-            PROBLEM_DEFINITION_STEP1_ARTIFACT,
-            "failed",
-            generationId,
-            "STT 발화 없음",
-          );
-          if (meetingId) {
-            void saveCanvasWorkspacePatch({
-              meeting_id: meetingId,
-              artifact_generation: failedArtifactGeneration,
-            }).catch((error) => {
-              console.error("Failed to save failed problem taxonomy generation state:", error);
+          try {
+            await commitSharedProblemDefinitionGeneration({
+              generationId,
+              status: "failed",
+              error: "STT 발화 없음",
             });
+          } catch (error) {
+            const failedArtifactGeneration = finishSharedArtifactGeneration(
+              PROBLEM_DEFINITION_STEP1_ARTIFACT,
+              "failed",
+              generationId,
+              "STT 발화 없음",
+            );
+            if (meetingId) {
+              void saveCanvasWorkspacePatch({
+                meeting_id: meetingId,
+                artifact_generation: failedArtifactGeneration,
+              }).catch((saveError) => {
+                console.error("Failed to save failed problem taxonomy generation state:", saveError);
+              });
+            }
+            console.error("Failed to commit failed problem taxonomy generation state:", error);
           }
           return;
         }
@@ -235,6 +255,12 @@ export function useProblemDefinitionGeneration<
           existing_groups: forceRegenerate ? [] : buildExistingGroupsPayload(problemGroups),
           max_groups: 6,
         });
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 문제정의 생성 결과를 무시했습니다.");
+          return;
+        }
         const nextGroups = hydrateProblemGroups(result.groups || [], []).map(
           (group) =>
             ({
@@ -244,6 +270,15 @@ export function useProblemDefinitionGeneration<
               status: "draft",
             }) as TGroup,
         );
+        const readyCommit = await commitSharedProblemDefinitionGeneration({
+          generationId,
+          status: "ready",
+        });
+        if (!readyCommit.applied) {
+          setActivityMessage("초기화 이후 도착한 이전 문제정의 생성 결과를 무시했습니다.");
+          return;
+        }
+        const readyArtifactGeneration = readyCommit.artifactGeneration;
 
         if (forceRegenerate) {
           setNodePositions(nextNodePositionsSnapshot);
@@ -261,20 +296,14 @@ export function useProblemDefinitionGeneration<
         setSelectedNodeId(nextSelectedGroupId ? `problem-${nextSelectedGroupId}` : "");
         latestSharedWorkspaceRef.current = {
           ...latestSharedWorkspaceRef.current,
-          stage: "problem-definition",
           problemGroups: nextGroups,
           nodePositions: nextNodePositionsSnapshot,
           importedState: persistedSharedImportedState,
+          artifactGeneration: readyArtifactGeneration,
         };
-        const readyArtifactGeneration = finishSharedArtifactGeneration(
-          PROBLEM_DEFINITION_STEP1_ARTIFACT,
-          "ready",
-          generationId,
-        );
 
         if (sharedSyncEnabled) {
           forceBroadcastSharedCanvas({
-            stage: "problem-definition",
             problemGroups: nextGroups,
             nodePositions: nextNodePositionsSnapshot,
             artifactGeneration: readyArtifactGeneration,
@@ -282,7 +311,6 @@ export function useProblemDefinitionGeneration<
           if (meetingId) {
             void saveCanvasWorkspacePatch({
               meeting_id: meetingId,
-              stage: "problem-definition",
               problem_groups: serializeSharedProblemGroups(nextGroups),
               solution_topics: [],
               node_positions: nextNodePositionsSnapshot,
@@ -306,19 +334,34 @@ export function useProblemDefinitionGeneration<
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const failedArtifactGeneration = finishSharedArtifactGeneration(
-          PROBLEM_DEFINITION_STEP1_ARTIFACT,
-          "failed",
-          generationId,
-          message,
-        );
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            artifact_generation: failedArtifactGeneration,
-          }).catch((saveError) => {
-            console.error("Failed to save failed problem taxonomy generation state:", saveError);
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 문제정의 실패 응답을 무시했습니다.");
+          return;
+        }
+        try {
+          await commitSharedProblemDefinitionGeneration({
+            generationId,
+            status: "failed",
+            error: message,
           });
+        } catch (commitError) {
+          const failedArtifactGeneration = finishSharedArtifactGeneration(
+            PROBLEM_DEFINITION_STEP1_ARTIFACT,
+            "failed",
+            generationId,
+            message,
+          );
+          if (meetingId) {
+            void saveCanvasWorkspacePatch({
+              meeting_id: meetingId,
+              artifact_generation: failedArtifactGeneration,
+            }).catch((saveError) => {
+              console.error("Failed to save failed problem taxonomy generation state:", saveError);
+            });
+          }
+          console.error("Failed to commit failed problem taxonomy generation state:", commitError);
         }
         setActivityMessage(`문제 정의 생성 실패: ${message}`);
       } finally {
@@ -329,6 +372,7 @@ export function useProblemDefinitionGeneration<
     [
       buildExistingGroupsPayload,
       buildUtterances,
+      commitSharedProblemDefinitionGeneration,
       forceBroadcastSharedCanvas,
       hydrateProblemGroups,
       latestSharedWorkspaceRef,

@@ -7,6 +7,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import Placeholder from "@tiptap/extension-placeholder";
 import type {
+  CanvasArtifactGenerationStatus,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentBlock,
@@ -62,6 +63,8 @@ type SolutionFinalDocumentPanelProps = {
   draftDirty: boolean;
   editMode: boolean;
   pending: boolean;
+  generationStatus: CanvasArtifactGenerationStatus;
+  generationError: string;
   saving: boolean;
   eligibleGroupCount: number;
   presentation: SolutionPresentationModel;
@@ -1013,6 +1016,8 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   draftDirty,
   editMode,
   pending,
+  generationStatus,
+  generationError,
   saving,
   eligibleGroupCount,
   presentation,
@@ -1035,6 +1040,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   const remoteSummaryEditPresence = remoteEditPresenceByKey[makeEditPresenceKey("summary_document", "final")] || null;
   const remoteSummaryEditor = remoteSummaryEditPresence?.updated_by || "다른 사용자";
   const editDisabled = pending || saving || Boolean(remoteSummaryEditPresence && !editMode);
+  const generationFailed = generationStatus === "failed";
 
   return (
     <section ref={paneRef} className="min-h-0 overflow-y-auto bg-white px-[30px] pb-[38px] pt-[42px]">
@@ -1101,6 +1107,13 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
         {remoteSummaryEditPresence && !editMode ? (
           <p className="mt-4 rounded-[8px] bg-[#eef6ff] px-3 py-2 text-[11px] font-medium leading-5 text-[#236cf3]">
             {remoteSummaryEditor}님이 결론을 수정 중입니다.
+          </p>
+        ) : null}
+
+        {generationFailed ? (
+          <p className="mt-4 rounded-[8px] border border-[#fecaca] bg-[#fff5f5] px-3 py-2 text-[11px] font-semibold leading-5 text-[#dc2626]">
+            요약 문서 생성에 실패했습니다. 다시 생성 버튼을 눌러 재시도할 수 있습니다.
+            {generationError ? ` (${generationError})` : ""}
           </p>
         ) : null}
 

@@ -28,6 +28,7 @@ import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAs
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ProblemDefinitionPhase = "explore" | "structure";
+export type CanvasDebugResetScope = "problem" | "summary" | "all";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
@@ -137,23 +138,6 @@ function MicIcon({ className = "" }: { className?: string }) {
     <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
       <path d="M12 4.2a3.2 3.2 0 0 0-3.2 3.2v4.4a3.2 3.2 0 1 0 6.4 0V7.4A3.2 3.2 0 0 0 12 4.2Z" stroke="currentColor" strokeWidth="1.7" />
       <path d="M6.8 11.6a5.2 5.2 0 0 0 10.4 0M12 16.8v3M9.2 20h5.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ArrowLeftIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M15 6 9 12l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SkipForwardIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M7 6.8v10.4L15 12 7 6.8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M17 7v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
@@ -751,6 +735,16 @@ function CurrentStagePanel({
   const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
   const hasProblemStructure = problem.problemStructureNodesCount > 0;
+  const problemDefinitionFailed = problem.problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problem.problemStructureGenerationStatus === "failed";
+  const currentProblemFailed =
+    stage === "problem-definition" && (isProblemExplore ? problemDefinitionFailed : problemStructureFailed);
+  const currentProblemError =
+    stage === "problem-definition"
+      ? isProblemExplore
+        ? problem.problemDefinitionGenerationError
+        : problem.problemStructureGenerationError
+      : "";
 
   let title = stageLabel(stage, problemDefinitionPhase);
   let description = (
@@ -773,7 +767,11 @@ function CurrentStagePanel({
         충분히 모이면 문제정의를 시작하세요.
       </>
     );
-    buttonLabel = "문제정의 시작하기";
+    buttonLabel = problem.problemDefinitionStagePending
+      ? "문제정의 생성 중"
+      : problemDefinitionFailed
+        ? "문제정의 다시 시작하기"
+        : "문제정의 시작하기";
     buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
     onButtonClick = () => header.handlers.onStageSelect("problem-definition");
   } else if (isProblemExplore) {
@@ -785,8 +783,12 @@ function CurrentStagePanel({
         남은 후보는 모두 다음 단계로 이동합니다.
       </>
     );
-    buttonLabel = problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기";
-    buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+    buttonLabel = problem.problemStructurePending
+      ? "구조화 생성 중"
+      : problemStructureFailed
+        ? "2단계 구조화 다시 시도"
+        : "2단계 · 구조화 시작하기";
+    buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
     onButtonClick = () => {
       void problemHandlers.onStartProblemStructure();
     };
@@ -832,7 +834,11 @@ function CurrentStagePanel({
           header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemDefinitionStagePending ? "1단계 재생성 중" : "1단계 재생성"}
+        {problem.problemDefinitionStagePending
+          ? "1단계 재생성 중"
+          : problemDefinitionFailed
+            ? "1단계 다시 생성"
+            : "1단계 재생성"}
       </span>
     </button>
   ) : null;
@@ -850,7 +856,11 @@ function CurrentStagePanel({
           header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0 ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemStructurePending ? "AI 묶는 중" : "AI 자동묶음"}
+        {problem.problemStructurePending
+          ? "AI 묶는 중"
+          : problemStructureFailed
+            ? "AI 묶기 재시도"
+            : "AI 자동묶음"}
       </span>
     </button>
   ) : null;
@@ -865,6 +875,12 @@ function CurrentStagePanel({
         <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
           {description}
         </p>
+        {currentProblemFailed ? (
+          <p className="mt-[10px] rounded-[10px] border border-[#fecaca] bg-[#fff5f5] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#dc2626]">
+            생성에 실패했습니다. 다시 생성 버튼으로 재시도할 수 있습니다.
+            {currentProblemError ? ` (${currentProblemError})` : ""}
+          </p>
+        ) : null}
         {buttonLabel && onButtonClick ? (
           <button
             type="button"
@@ -923,6 +939,8 @@ function RightAiPanel({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
@@ -931,6 +949,8 @@ function RightAiPanel({
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 }) {
   const {
     open: quickAskOpen,
@@ -945,7 +965,9 @@ function RightAiPanel({
   const quickAskHasMessages = quickAskMessages.length > 0;
   const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
   const [shareCopied, setShareCopied] = useState(false);
+  const [debugResetOpen, setDebugResetOpen] = useState(false);
   const shareCopiedResetTimerRef = useRef<number | null>(null);
+  const showDebugReset = header.view.stage === "ideation" && Boolean(onDebugResetWorkspace);
 
   useEffect(() => () => {
     if (shareCopiedResetTimerRef.current !== null) {
@@ -966,9 +988,15 @@ function RightAiPanel({
     }, 1600);
   };
 
+  const handleDebugReset = async (scope: CanvasDebugResetScope) => {
+    if (!onDebugResetWorkspace || debugResetBusy) return;
+    setDebugResetOpen(false);
+    await onDebugResetWorkspace(scope);
+  };
+
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
-      <header className="relative z-10 flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
+      <header className="relative z-[80] flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
         <div className="flex items-center">
           {visibleParticipants.map((participant, index) => (
             <span
@@ -989,17 +1017,55 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
-          aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
-          onClick={() => void handleShareClick()}
-        >
-          <ShareIcon className="h-[13px] w-[13px] shrink-0" />
-          <span className={panelButtonTextClasses.share} aria-live="polite">
-            {shareCopied ? "복사완료" : "공유"}
-          </span>
-        </button>
+        <div className="relative flex items-center gap-[8px]">
+          {showDebugReset ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={debugResetOpen}
+                aria-label="디버그 초기화 메뉴"
+                disabled={debugResetBusy}
+                onClick={() => setDebugResetOpen((current) => !current)}
+                className="inline-flex h-[32.4px] items-center justify-center rounded-[67.5px] border border-[rgba(1,163,255,0.33)] bg-white px-[12px] text-[#236cf3] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="moa-font-pretendard text-[10px] font-bold leading-[1.4] tracking-[-0.025px] text-current">
+                  초기화
+                </span>
+              </button>
+              {debugResetOpen ? (
+                <div className="absolute right-[76px] top-[calc(100%+8px)] z-[90] w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
+                  {([
+                    ["problem", "문제정의 초기화"],
+                    ["summary", "요약 초기화"],
+                    ["all", "문제정의+요약"],
+                  ] as const).map(([scope, label]) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      className="block h-[30px] w-full rounded-[10px] px-[10px] text-left transition hover:bg-[#f4fbff]"
+                      onClick={() => void handleDebugReset(scope)}
+                    >
+                      <span className="moa-font-pretendard text-[11px] font-semibold leading-[1.4] tracking-[-0.028px] text-[#526070]">
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          <button
+            type="button"
+            className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
+            aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
+            onClick={() => void handleShareClick()}
+          >
+            <ShareIcon className="h-[13px] w-[13px] shrink-0" />
+            <span className={panelButtonTextClasses.share} aria-live="polite">
+              {shareCopied ? "복사완료" : "공유"}
+            </span>
+          </button>
+        </div>
       </header>
 
       <section className="relative z-10 shrink-0 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[21px]">
@@ -1111,6 +1177,8 @@ export type CanvasWorkspacePanelsProps = {
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
@@ -1132,6 +1200,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: CanvasWorkspacePanelsProps) {
   return (
     <div
@@ -1170,6 +1240,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
         onShareMeetingLink={onShareMeetingLink}
+        onDebugResetWorkspace={onDebugResetWorkspace}
+        debugResetBusy={debugResetBusy}
       />
     </div>
   );

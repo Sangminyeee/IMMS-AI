@@ -12,7 +12,12 @@ import {
 import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMoaPresence, useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { classNames } from "@/lib/classNames";
-import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
+import type {
+  CanvasArtifactGenerationStatus,
+  CanvasEditPresencePayload,
+  CanvasFinalSolutionSummary,
+  CanvasSummaryDocumentBlock,
+} from "@/lib/types";
 import {
   CanvasStageEmptyOverlay,
   CanvasStatusToast,
@@ -70,6 +75,8 @@ export type CanvasSurfaceSolutionState = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   summaryDocumentEditMode: boolean;
   summaryDocumentPending: boolean;
+  summaryDocumentGenerationStatus: CanvasArtifactGenerationStatus;
+  summaryDocumentGenerationError: string;
   summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
 };
@@ -78,10 +85,14 @@ export type CanvasSurfaceProblemState = {
   problemGroupsCount: number;
   problemStructureNodesCount: number;
   problemDefinitionStagePending: boolean;
+  problemDefinitionGenerationStatus: CanvasArtifactGenerationStatus;
+  problemDefinitionGenerationError: string;
   problemStructureSetupOpen: boolean;
   problemStructureDraftMethod: ProblemStructureMethod;
   problemStructureDraftMode: ProblemDefinitionMode;
   problemStructurePending: boolean;
+  problemStructureGenerationStatus: CanvasArtifactGenerationStatus;
+  problemStructureGenerationError: string;
   problemDefinitionPhase: ProblemDefinitionPhase;
   problemStructureMethod: ProblemStructureMethod;
   problemDefinitionMode: ProblemDefinitionMode;
@@ -232,6 +243,8 @@ export const CanvasSurface = memo(function CanvasSurface({
     remoteEditPresenceByKey,
     summaryDocumentEditMode,
     summaryDocumentPending,
+    summaryDocumentGenerationStatus,
+    summaryDocumentGenerationError,
     summaryDocumentSaving,
     solutionRightPaneRef,
   } = solution;
@@ -239,10 +252,14 @@ export const CanvasSurface = memo(function CanvasSurface({
     problemGroupsCount,
     problemStructureNodesCount,
     problemDefinitionStagePending,
+    problemDefinitionGenerationStatus,
+    problemDefinitionGenerationError,
     problemStructureSetupOpen,
     problemStructureDraftMethod,
     problemStructureDraftMode,
     problemStructurePending,
+    problemStructureGenerationStatus,
+    problemStructureGenerationError,
     problemDefinitionPhase,
     activeProblemGroupingRationale,
     activeProblemGroupingRationaleTitle,
@@ -279,6 +296,9 @@ export const CanvasSurface = memo(function CanvasSurface({
   } = problemHandlers;
   const hasFinalProblemStructureGroups = summaryEligibleStructureGroups.length > 0;
   const showMissingFinalProblemStructureOverlay = stage === "solution" && !hasFinalProblemStructureGroups;
+  const problemDefinitionFailed = problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problemStructureGenerationStatus === "failed";
+  const summaryDocumentFailed = summaryDocumentGenerationStatus === "failed";
   const showProblemGenerationOverlay = problemDefinitionStagePending && problemGroupsCount === 0;
   const showSummaryGenerationOverlay = summaryDocumentPending && hasFinalProblemStructureGroups;
   const showProblemEmptyOverlay = stage === "problem-definition" && problemGroupsCount === 0;
@@ -315,13 +335,16 @@ export const CanvasSurface = memo(function CanvasSurface({
       stageTransitionTimerRef.current = null;
     }
 
-    setStageTransitionPhase("in");
-    stageTransitionTimerRef.current = setTimeout(() => {
-      setStageTransitionPhase("idle");
-      stageTransitionTimerRef.current = null;
-    }, CANVAS_STAGE_TRANSITION_MS);
+    const transitionFrame = window.requestAnimationFrame(() => {
+      setStageTransitionPhase("in");
+      stageTransitionTimerRef.current = setTimeout(() => {
+        setStageTransitionPhase("idle");
+        stageTransitionTimerRef.current = null;
+      }, CANVAS_STAGE_TRANSITION_MS);
+    });
 
     return () => {
+      window.cancelAnimationFrame(transitionFrame);
       if (stageTransitionTimerRef.current) {
         clearTimeout(stageTransitionTimerRef.current);
         stageTransitionTimerRef.current = null;
@@ -395,6 +418,8 @@ export const CanvasSurface = memo(function CanvasSurface({
             draftDirty={summaryDocumentDraftDirty}
             editMode={summaryDocumentEditMode}
             pending={summaryDocumentPending}
+            generationStatus={summaryDocumentGenerationStatus}
+            generationError={summaryDocumentGenerationError}
             saving={summaryDocumentSaving}
             onToggleEvidence={onToggleSummaryEvidence}
             onSetEditMode={onSetSummaryDocumentEditMode}
@@ -419,7 +444,13 @@ export const CanvasSurface = memo(function CanvasSurface({
         <CanvasStageEmptyOverlay
           eyebrow="Problem Definition"
           exiting={problemEmptyPresence.isExiting}
-          message={busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
+          message={
+            problemDefinitionFailed
+              ? `문제정의 1단계 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
+              : busy
+                ? "문제 정의 그룹을 생성하는 중입니다."
+                : "문제 정의 그룹이 아직 없습니다."
+          }
           tone="problem"
         />
       ) : null}
@@ -429,11 +460,24 @@ export const CanvasSurface = memo(function CanvasSurface({
           eyebrow="Summary Stage"
           exiting={summaryEmptyPresence.isExiting}
           message={
-            !showMissingFinalProblemStructureOverlay
+            summaryDocumentFailed && hasFinalProblemStructureGroups
+              ? `요약 문서 생성에 실패했습니다.${summaryDocumentGenerationError ? ` ${summaryDocumentGenerationError}` : ""}`
+              : !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
               : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
           }
           tone="summary"
+        />
+      ) : null}
+
+      {stage === "problem-definition" &&
+      problemDefinitionPhase === "structure" &&
+      problemStructureFailed &&
+      problemStructureNodesCount === 0 ? (
+        <CanvasStageEmptyOverlay
+          eyebrow="Problem Structure"
+          message={`문제정의 2단계 구조화에 실패했습니다.${problemStructureGenerationError ? ` ${problemStructureGenerationError}` : ""}`}
+          tone="problem"
         />
       ) : null}
 
