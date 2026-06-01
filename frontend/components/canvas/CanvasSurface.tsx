@@ -9,7 +9,17 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useMoaPresence, useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { classNames } from "@/lib/classNames";
 import type {
@@ -153,9 +163,20 @@ export type CanvasSurfaceProps = {
 
 const EMPTY_EDGES: Edge[] = [];
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
-const CANVAS_STAGE_TRANSITION_MS = 460;
+const CANVAS_STAGE_FADE_OUT_MS = 260;
+const CANVAS_STAGE_FADE_IN_MS = 740;
 
-type CanvasStageTransitionPhase = "idle" | "in";
+type CanvasStageTransitionPhase = "idle" | "out" | "in";
+
+type CanvasSurfaceStageSnapshot = {
+  key: string;
+  stage: CanvasStage;
+  problemDefinitionPhase: ProblemDefinitionPhase;
+  nodes: Node[];
+  problemSplitLeftEdges: Edge[];
+  solution: CanvasSurfaceSolutionState;
+  hasFinalProblemStructureGroups: boolean;
+};
 
 function ProblemGroupingRationaleOverlay({
   exiting = false,
@@ -321,124 +342,187 @@ export const CanvasSurface = memo(function CanvasSurface({
   const problemStructureSetupPresence = useMoaPresence(showProblemStructureSetup);
   const problemToolbarPresence = useMoaPresence(showProblemToolbar);
   const stageSurfaceKey = stage === "problem-definition" ? `${stage}:${problemDefinitionPhase}` : stage;
-  const previousStageSurfaceKeyRef = useRef(stageSurfaceKey);
-  const stageTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentStageSurfaceSnapshot = useMemo<CanvasSurfaceStageSnapshot>(
+    () => ({
+      key: stageSurfaceKey,
+      stage,
+      problemDefinitionPhase,
+      nodes,
+      problemSplitLeftEdges,
+      solution,
+      hasFinalProblemStructureGroups,
+    }),
+    [
+      hasFinalProblemStructureGroups,
+      nodes,
+      problemDefinitionPhase,
+      problemSplitLeftEdges,
+      solution,
+      stage,
+      stageSurfaceKey,
+    ],
+  );
+  const requestedStageSurfaceKeyRef = useRef(stageSurfaceKey);
+  const displayedStageSurfaceSnapshotRef = useRef<CanvasSurfaceStageSnapshot>(currentStageSurfaceSnapshot);
+  const stageTransitionTimersRef = useRef<{
+    switchTimer: ReturnType<typeof setTimeout> | null;
+    idleTimer: ReturnType<typeof setTimeout> | null;
+  }>({ switchTimer: null, idleTimer: null });
   const [stageTransitionPhase, setStageTransitionPhase] = useState<CanvasStageTransitionPhase>("idle");
+  const [transitionStageSurfaceSnapshot, setTransitionStageSurfaceSnapshot] =
+    useState<CanvasSurfaceStageSnapshot | null>(null);
+  const renderedStageSurfaceSnapshot = transitionStageSurfaceSnapshot || currentStageSurfaceSnapshot;
 
-  useEffect(() => {
-    if (previousStageSurfaceKeyRef.current === stageSurfaceKey) return undefined;
+  useLayoutEffect(() => {
+    if (requestedStageSurfaceKeyRef.current === stageSurfaceKey) return;
 
-    previousStageSurfaceKeyRef.current = stageSurfaceKey;
+    requestedStageSurfaceKeyRef.current = stageSurfaceKey;
 
-    if (stageTransitionTimerRef.current) {
-      clearTimeout(stageTransitionTimerRef.current);
-      stageTransitionTimerRef.current = null;
+    if (stageTransitionTimersRef.current.switchTimer) {
+      clearTimeout(stageTransitionTimersRef.current.switchTimer);
+      stageTransitionTimersRef.current.switchTimer = null;
+    }
+    if (stageTransitionTimersRef.current.idleTimer) {
+      clearTimeout(stageTransitionTimersRef.current.idleTimer);
+      stageTransitionTimersRef.current.idleTimer = null;
     }
 
-    const transitionFrame = window.requestAnimationFrame(() => {
+    setTransitionStageSurfaceSnapshot(displayedStageSurfaceSnapshotRef.current);
+    setStageTransitionPhase("out");
+    stageTransitionTimersRef.current.switchTimer = setTimeout(() => {
+      setTransitionStageSurfaceSnapshot(null);
       setStageTransitionPhase("in");
-      stageTransitionTimerRef.current = setTimeout(() => {
+      stageTransitionTimersRef.current.switchTimer = null;
+      stageTransitionTimersRef.current.idleTimer = setTimeout(() => {
         setStageTransitionPhase("idle");
-        stageTransitionTimerRef.current = null;
-      }, CANVAS_STAGE_TRANSITION_MS);
-    });
+        stageTransitionTimersRef.current.idleTimer = null;
+      }, CANVAS_STAGE_FADE_IN_MS);
+    }, CANVAS_STAGE_FADE_OUT_MS);
+  }, [currentStageSurfaceSnapshot, stageSurfaceKey]);
 
+  useLayoutEffect(() => {
+    displayedStageSurfaceSnapshotRef.current = renderedStageSurfaceSnapshot;
+  });
+
+  useEffect(() => {
     return () => {
-      window.cancelAnimationFrame(transitionFrame);
-      if (stageTransitionTimerRef.current) {
-        clearTimeout(stageTransitionTimerRef.current);
-        stageTransitionTimerRef.current = null;
+      if (stageTransitionTimersRef.current.switchTimer) {
+        clearTimeout(stageTransitionTimersRef.current.switchTimer);
+        stageTransitionTimersRef.current.switchTimer = null;
+      }
+      if (stageTransitionTimersRef.current.idleTimer) {
+        clearTimeout(stageTransitionTimersRef.current.idleTimer);
+        stageTransitionTimersRef.current.idleTimer = null;
       }
     };
-  }, [stageSurfaceKey]);
+  }, []);
+
+  function renderStageSurfaceContent(snapshot: CanvasSurfaceStageSnapshot) {
+    const snapshotSolution = snapshot.solution;
+
+    if (snapshot.stage === "ideation" || snapshot.stage === "problem-definition") {
+      return (
+        <ReactFlow<Node, Edge>
+          nodes={snapshot.nodes}
+          edges={snapshot.stage === "problem-definition" ? snapshot.problemSplitLeftEdges : EMPTY_EDGES}
+          onInit={onFlowInit}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
+          onNodesChange={onNodesChange}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={onNodeDragStop}
+          nodesConnectable={false}
+          panOnDrag
+          autoPanOnNodeDrag={false}
+          noPanClassName="nopan"
+          nodesDraggable={snapshot.stage === "problem-definition"}
+          minZoom={0.45}
+          maxZoom={1.6}
+          proOptions={REACT_FLOW_PRO_OPTIONS}
+        >
+          {snapshot.stage === "ideation" ? (
+            <Background
+              id="ideation-grid"
+              bgColor="#fbfbfb"
+              color="#e9eef5"
+              gap={18}
+              size={1}
+              variant={BackgroundVariant.Lines}
+            />
+          ) : null}
+          {snapshot.stage === "problem-definition" ? (
+            <Background
+              id="problem-definition-grid"
+              bgColor={snapshot.problemDefinitionPhase === "structure" ? "#f8f8f8" : "#f5f6f8"}
+              color={snapshot.problemDefinitionPhase === "structure" ? "#edf1f6" : "#d7dce5"}
+              gap={28}
+              size={1}
+              variant={snapshot.problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+            />
+          ) : null}
+        </ReactFlow>
+      );
+    }
+
+    if (snapshot.hasFinalProblemStructureGroups) {
+      return (
+        <SolutionCanvasView
+          meetingTitle={snapshotSolution.meetingTitle}
+          meetingGoal={snapshotSolution.meetingGoal}
+          participants={snapshotSolution.participants}
+          groups={snapshotSolution.summaryEligibleStructureGroups}
+          sectionByGroupId={snapshotSolution.summaryDocumentSectionByGroupId}
+          nodeById={snapshotSolution.problemStructureNodeById}
+          evidenceOpenGroupIds={snapshotSolution.summaryEvidenceOpenGroupIds}
+          remoteEditPresenceByKey={snapshotSolution.remoteEditPresenceByKey}
+          paneRef={snapshotSolution.solutionRightPaneRef}
+          document={snapshotSolution.finalSummaryDocument}
+          draftBlocks={snapshotSolution.summaryDocumentDraftBlocks}
+          draftMarkdown={snapshotSolution.summaryDocumentDraftMarkdown}
+          draftDirty={snapshotSolution.summaryDocumentDraftDirty}
+          editMode={snapshotSolution.summaryDocumentEditMode}
+          pending={snapshotSolution.summaryDocumentPending}
+          generationStatus={snapshotSolution.summaryDocumentGenerationStatus}
+          generationError={snapshotSolution.summaryDocumentGenerationError}
+          saving={snapshotSolution.summaryDocumentSaving}
+          onToggleEvidence={onToggleSummaryEvidence}
+          onSetEditMode={onSetSummaryDocumentEditMode}
+          onRegenerate={onRegenerateSummaryDocument}
+          onRefreshCache={onRefreshSummaryCache}
+          onCopy={onCopyFinalSolutionMarkdown}
+          onSave={onSaveSummaryDocument}
+          onBlocksChange={onSummaryDocumentBlocksChange}
+          onMarkdownChange={onSummaryDocumentMarkdownChange}
+          renderPreview={renderSummaryMarkdownPreview}
+        />
+      );
+    }
+
+    return <div className="h-full min-h-0 bg-[#f8f8f8]" />;
+  }
 
   return (
-    <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
+    <section
+      ref={canvasSurfaceRef}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]"
+      style={
+        {
+          "--moa-canvas-stage-fade-out-ms": `${CANVAS_STAGE_FADE_OUT_MS}ms`,
+          "--moa-canvas-stage-fade-in-ms": `${CANVAS_STAGE_FADE_IN_MS}ms`,
+        } as CSSProperties
+      }
+    >
       <div
         className={classNames(
           "moa-canvas-stage-surface relative min-h-0 w-full flex-1",
+          stageTransitionPhase === "out" && "moa-canvas-stage-surface-out",
           stageTransitionPhase === "in" && "moa-canvas-stage-surface-in",
+          stageTransitionPhase !== "idle" && "moa-canvas-stage-surface-transitioning",
         )}
       >
-        {stage === "ideation" || stage === "problem-definition" ? (
-          <ReactFlow<Node, Edge>
-            nodes={nodes}
-            edges={stage === "problem-definition" ? problemSplitLeftEdges : EMPTY_EDGES}
-            onInit={onFlowInit}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            onNodesChange={onNodesChange}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDrag={onNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            nodesConnectable={false}
-            panOnDrag
-            autoPanOnNodeDrag={false}
-            noPanClassName="nopan"
-            nodesDraggable={stage === "problem-definition"}
-            minZoom={0.45}
-            maxZoom={1.6}
-            proOptions={REACT_FLOW_PRO_OPTIONS}
-          >
-            {stage === "ideation" ? (
-              <Background
-                id="ideation-grid"
-                bgColor="#fbfbfb"
-                color="#e9eef5"
-                gap={18}
-                size={1}
-                variant={BackgroundVariant.Lines}
-              />
-            ) : null}
-            {stage === "problem-definition" ? (
-              <Background
-                id="problem-definition-grid"
-                bgColor={problemDefinitionPhase === "structure" ? "#f8f8f8" : "#f5f6f8"}
-                color={problemDefinitionPhase === "structure" ? "#edf1f6" : "#d7dce5"}
-                gap={28}
-                size={1}
-                variant={problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
-              />
-            ) : null}
-          </ReactFlow>
-        ) : hasFinalProblemStructureGroups ? (
-          <SolutionCanvasView
-            meetingTitle={meetingTitle}
-            meetingGoal={meetingGoal}
-            participants={participants}
-            groups={summaryEligibleStructureGroups}
-            sectionByGroupId={summaryDocumentSectionByGroupId}
-            nodeById={problemStructureNodeById}
-            evidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
-            remoteEditPresenceByKey={remoteEditPresenceByKey}
-            paneRef={solutionRightPaneRef}
-            document={finalSummaryDocument}
-            draftBlocks={summaryDocumentDraftBlocks}
-            draftMarkdown={summaryDocumentDraftMarkdown}
-            draftDirty={summaryDocumentDraftDirty}
-            editMode={summaryDocumentEditMode}
-            pending={summaryDocumentPending}
-            generationStatus={summaryDocumentGenerationStatus}
-            generationError={summaryDocumentGenerationError}
-            saving={summaryDocumentSaving}
-            onToggleEvidence={onToggleSummaryEvidence}
-            onSetEditMode={onSetSummaryDocumentEditMode}
-            onRegenerate={onRegenerateSummaryDocument}
-            onRefreshCache={onRefreshSummaryCache}
-            onCopy={onCopyFinalSolutionMarkdown}
-            onSave={onSaveSummaryDocument}
-            onBlocksChange={onSummaryDocumentBlocksChange}
-            onMarkdownChange={onSummaryDocumentMarkdownChange}
-            renderPreview={renderSummaryMarkdownPreview}
-          />
-        ) : (
-          <div className="h-full min-h-0 bg-[#f8f8f8]" />
-        )}
+        {renderStageSurfaceContent(renderedStageSurfaceSnapshot)}
       </div>
-
-      {stageTransitionPhase === "in" ? (
-        <div key={stageSurfaceKey} aria-hidden="true" className="moa-canvas-stage-transition-veil" />
-      ) : null}
 
       {problemEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay

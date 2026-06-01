@@ -317,7 +317,7 @@ function ProblemExploreIconButton({
       disabled={disabled}
       onClick={onClick}
       onPointerDown={(event) => event.stopPropagation()}
-      className="nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full text-[#808080] transition hover:bg-[#eef8ff] hover:text-[#236cf3] disabled:cursor-wait disabled:opacity-45"
+      className="moa-node-control nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full text-[#808080] transition hover:bg-[#eef8ff] hover:text-[#236cf3] disabled:cursor-wait disabled:opacity-45"
     >
       {children}
     </button>
@@ -378,7 +378,7 @@ function ProblemExploreInlineEditActions({
           onCancel();
         }}
         onPointerDown={(event) => event.stopPropagation()}
-        className="nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#f2f4f8] text-[#737982] transition hover:bg-[#e7edf7]"
+        className="moa-node-control nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#f2f4f8] text-[#737982] transition hover:bg-[#e7edf7]"
         aria-label="수정 취소"
       >
         <XIcon className="h-[11px] w-[11px]" />
@@ -390,7 +390,7 @@ function ProblemExploreInlineEditActions({
           onSave();
         }}
         onPointerDown={(event) => event.stopPropagation()}
-        className="nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#236cf3] text-white transition hover:brightness-105"
+        className="moa-node-control nodrag nopan grid h-[18px] w-[18px] place-items-center rounded-full bg-[#236cf3] text-white transition hover:brightness-105"
         aria-label="수정 저장"
       >
         <CheckIcon className="h-[11px] w-[11px]" />
@@ -477,9 +477,9 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
   return (
     <article
       data-problem-group-drop-id={group.group_id}
-      className={`nopan relative flex min-h-[116px] w-[249px] flex-col rounded-[4px] border bg-[#f9f9f9] px-[10px] pb-[8px] pt-[9px] text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition ${
+      className={`moa-node-card moa-node-enter nopan relative flex min-h-[116px] w-[249px] flex-col rounded-[4px] border bg-[#f9f9f9] px-[10px] pb-[8px] pt-[9px] text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_2px_rgba(0,0,0,0.02)] transition ${
         selected ? "border-[#01a3ff] ring-2 ring-[#01a3ff]/15" : "border-[#cecccc]"
-      } ${dropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""}`}
+      } ${dropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""} ${editing ? "moa-node-editing" : ""}`}
       {...dropHandlers}
     >
       <div className="flex items-center justify-between gap-2">
@@ -492,7 +492,9 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
             onSave={() => handlers.onSaveProblemGroupEdit(group.group_id)}
           />
         ) : remoteEditing ? (
-          <span className="rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">수정중</span>
+          <span className="moa-state-callout rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">
+            수정중
+          </span>
         ) : null}
       </div>
       {editing ? (
@@ -500,14 +502,14 @@ function ProblemExploreCard<TGroup extends ProblemExploreGroupNodeModel>({
           <ProblemExploreInlineTitleInput
             draftTopic={draftTopic}
             onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
-            className="nodrag nopan mt-[10px] block h-[16px] w-full rounded-[3px] bg-transparent px-0 text-[11px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
+            className="moa-node-input nodrag nopan mt-[10px] block h-[16px] w-full rounded-[3px] bg-transparent px-0 text-[11px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
           />
           <ProblemExploreInlineTextarea
             value={draftConclusion}
             onChange={handlers.onProblemGroupDraftConclusionChange}
             placeholder="내용 없음"
             maxHeight={44}
-            className="nodrag nopan mt-[4px] block min-h-[24px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[8.5px] font-medium leading-[12px] tracking-[-0.02px] text-[#4d4d4d] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
+            className="moa-node-input nodrag nopan mt-[4px] block min-h-[24px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[8.5px] font-medium leading-[12px] tracking-[-0.02px] text-[#4d4d4d] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
           />
         </>
       ) : (
@@ -608,7 +610,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
 
   return (
     <div
-      className="nopan grid overflow-hidden rounded-[8px] border border-[#cecccc] bg-white text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_4px_rgba(0,0,0,0.06)]"
+      className="moa-node-board moa-node-enter nopan grid overflow-hidden rounded-[8px] border border-[#cecccc] bg-white text-left font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] shadow-[0_1px_4px_rgba(0,0,0,0.06)]"
       style={{ width, height, gridTemplateColumns: `${PROBLEM_EXPLORE_BOARD_LEFT_WIDTH}px 1fr` }}
     >
       <aside
@@ -633,7 +635,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
               <ProblemExploreInlineTitleInput
                 draftTopic={problemGroupDraftTopic}
                 onDraftTopicChange={handlers.onProblemGroupDraftTopicChange}
-                className="nodrag nopan block min-h-[32px] w-full rounded-[3px] bg-transparent px-0 text-[12px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
+                className="moa-node-input nodrag nopan block min-h-[32px] w-full rounded-[3px] bg-transparent px-0 text-[12px] font-bold leading-[16px] tracking-[-0.03px] text-[#111] outline-none transition focus:bg-[#eef8ff]"
               />
               <p className="mt-[7px] text-[11px] font-medium leading-[16px] tracking-[-0.03px] text-[#4d4d4d]">
                 {descendants.length} cards
@@ -644,7 +646,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
               onChange={handlers.onProblemGroupDraftConclusionChange}
               placeholder="내용 없음"
               maxHeight={142}
-              className="nodrag nopan mt-[14px] block min-h-[32px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[10px] font-medium leading-[16px] text-[#737982] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
+              className="moa-node-input nodrag nopan mt-[14px] block min-h-[32px] w-full resize-none rounded-[3px] bg-transparent p-0 text-[10px] font-medium leading-[16px] text-[#737982] outline-none transition placeholder:text-[#9aa3af] focus:bg-[#eef8ff]"
             />
           </>
         ) : (
@@ -659,7 +661,9 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 </p>
               </div>
               {rootRemoteEditing ? (
-                <span className="shrink-0 rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">수정중</span>
+                <span className="moa-state-callout shrink-0 rounded-full bg-[#fff7ed] px-2 py-0.5 text-[9px] font-bold text-[#c2410c]">
+                  수정중
+                </span>
               ) : null}
               <div className="flex shrink-0 items-center gap-[4px]">
                 <ProblemExploreIconButton
@@ -700,7 +704,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 handlers.onGenerateProblemChildren(root);
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan absolute bottom-[23px] left-[17px] flex h-[27px] w-[207px] items-center justify-center rounded-[5.195px] border-[0.649px] border-[#01a3ff] bg-[rgba(1,163,255,0.03)] text-[10px] font-semibold leading-[15.584px] tracking-[-0.25px] text-[#01a3ff] transition hover:bg-white hover:text-[#0780f8] disabled:cursor-wait disabled:border-[#d8d8d8] disabled:bg-[#f7f7f7] disabled:text-[#90a1b9]"
+              className="moa-node-control nodrag nopan absolute bottom-[23px] left-[17px] flex h-[27px] w-[207px] items-center justify-center rounded-[5.195px] border-[0.649px] border-[#01a3ff] bg-[rgba(1,163,255,0.03)] text-[10px] font-semibold leading-[15.584px] tracking-[-0.25px] text-[#01a3ff] transition hover:bg-white hover:text-[#0780f8] disabled:cursor-wait disabled:border-[#d8d8d8] disabled:bg-[#f7f7f7] disabled:text-[#90a1b9]"
             >
               <AddIcon className="mr-[7px] h-[10px] w-[10px]" />
               {problemChildGenerationPendingId === root.group_id ? "생성 중" : "세부 내용 추가"}
@@ -773,7 +777,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 setRequestedPageIndex((currentPage) => Math.max(0, currentPage - 1));
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
+              className="moa-node-control nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
             >
               <ChevronLeftIcon className="h-[13px] w-[13px]" />
             </button>
@@ -789,7 +793,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 setRequestedPageIndex((currentPage) => Math.min(totalPages - 1, currentPage + 1));
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
+              className="moa-node-control nodrag nopan grid h-[22px] w-[22px] place-items-center rounded-full text-[#236cf3] transition hover:bg-[#eef8ff] disabled:cursor-default disabled:text-[#c7d4e6]"
             >
               <ChevronRightIcon className="h-[13px] w-[13px]" />
             </button>

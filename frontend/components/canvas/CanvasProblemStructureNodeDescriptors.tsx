@@ -147,7 +147,7 @@ function problemStructureStatusButtonTone(status: ProblemStructureStatus) {
 
 function renderProblemStructureEditPresenceBadge(label = "수정중") {
   return (
-    <span className="inline-flex items-center rounded-full border border-[#f1d7a7] bg-[#fff8e8] px-2 py-0.5 text-[10px] font-semibold text-[#9a5d00]">
+    <span className="moa-state-callout inline-flex items-center rounded-full border border-[#f1d7a7] bg-[#fff8e8] px-2 py-0.5 text-[10px] font-semibold text-[#9a5d00]">
       {label}
     </span>
   );
@@ -182,7 +182,7 @@ function ProblemStructureNodeStatusButton({
           setOpen((current) => !current);
         }}
         onPointerDown={(event) => event.stopPropagation()}
-        className={`nodrag nopan inline-flex h-[18px] min-w-[46px] items-center justify-center rounded-full border-[0.8px] border-white px-[8px] text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] transition duration-150 hover:-translate-y-px hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7acbff] ${problemStructureStatusButtonTone(
+        className={`moa-node-control nodrag nopan inline-flex h-[18px] min-w-[46px] items-center justify-center rounded-full border-[0.8px] border-white px-[8px] text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] transition duration-150 hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7acbff] ${problemStructureStatusButtonTone(
           status,
         )}`}
       >
@@ -194,7 +194,7 @@ function ProblemStructureNodeStatusButton({
       {open ? (
         <div
           role="menu"
-          className="nodrag nopan absolute left-[-4px] top-[22px] z-30 flex w-[76px] flex-col gap-[3px] rounded-[9px] border border-[#d9e8f3] bg-white p-[5px] shadow-[0_8px_20px_rgba(15,23,42,0.12)]"
+          className="moa-node-menu nodrag nopan absolute left-[-4px] top-[22px] z-30 flex w-[76px] flex-col gap-[3px] rounded-[9px] border border-[#d9e8f3] bg-white p-[5px] shadow-[0_8px_20px_rgba(15,23,42,0.12)]"
           onPointerDown={(event) => event.stopPropagation()}
         >
           {PROBLEM_STRUCTURE_STATUS_OPTIONS.map((option) => (
@@ -208,7 +208,7 @@ function ProblemStructureNodeStatusButton({
                 onChange(option.status);
                 setOpen(false);
               }}
-              className={`flex h-[24px] items-center justify-between rounded-[6px] px-[3px] transition ${
+              className={`moa-node-control flex h-[24px] items-center justify-between rounded-[6px] px-[3px] transition ${
                 option.status === status ? "bg-[#eef8ff]" : "bg-white hover:bg-[#f7f7f7]"
               }`}
             >
@@ -376,7 +376,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
         ]),
         label: (
           <section
-            className={`nopan group/column box-border flex h-full w-full flex-col rounded-[8.442px] border-[0.8px] border-[#cecccc] bg-white px-3 py-[13px] text-left font-['Pretendard','Inter',sans-serif] text-[#111] ${
+            className={`moa-node-board moa-node-enter nopan group/column box-border flex h-full w-full flex-col rounded-[8.442px] border-[0.8px] border-[#cecccc] bg-white px-3 py-[13px] text-left font-['Pretendard','Inter',sans-serif] text-[#111] ${
               isColumnDropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""
             }`}
             onDragOver={(event) => onProblemStructureGroupDragOver(event, columnDropGroupId)}
@@ -390,7 +390,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                     onChange={(event) => onProblemStructureGroupDraftTitleChange(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
                     aria-label="구조화 그룹 제목"
-                    className="nodrag nopan block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
+                    className="moa-node-input nodrag nopan block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
                   />
                 ) : (
                   <strong className="block whitespace-normal break-keep text-[14.286px] font-bold leading-[16px] text-[#111]">
@@ -412,7 +412,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       onClick={onCancelProblemStructureGroupEdit}
                       onPointerDown={(event) => event.stopPropagation()}
                       aria-label="구조화 그룹 수정 취소"
-                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#cecccc] bg-white text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
+                      className="moa-node-control nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#cecccc] bg-white text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
                     >
                       <XIcon className="h-[15px] w-[15px]" />
                     </button>
@@ -421,7 +421,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       onClick={() => onSaveProblemStructureGroupEdit(column.id)}
                       onPointerDown={(event) => event.stopPropagation()}
                       aria-label="구조화 그룹 저장"
-                      className="nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
+                      className="moa-node-control nodrag nopan flex h-7 w-7 items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
                     >
                       <CheckIcon className="h-[15px] w-[15px]" />
                     </button>
@@ -432,18 +432,18 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       type="button"
                       aria-label="구조화 그룹 메뉴"
                       onPointerDown={(event) => event.stopPropagation()}
-                      className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
+                      className="moa-node-control nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7]"
                     >
                       <MoreHorizontalIcon className="h-[18px] w-[18px]" />
                     </button>
                     {!isUngrouped ? (
-                      <div className="absolute right-0 top-7 z-10 hidden items-center gap-1 rounded-full border border-[#cecccc] bg-white px-1.5 py-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] group-hover/column:flex">
+                      <div className="moa-node-menu absolute right-0 top-7 z-10 hidden items-center gap-1 rounded-full border border-[#cecccc] bg-white px-1.5 py-1 shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] group-hover/column:flex">
                         <button
                           type="button"
                           onClick={() => onStartProblemStructureGroupEdit(column)}
                           onPointerDown={(event) => event.stopPropagation()}
                           aria-label="구조화 그룹 수정"
-                          className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7] hover:text-[#01a3ff]"
+                          className="moa-node-control nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#f7f7f7] hover:text-[#01a3ff]"
                         >
                           <PencilIcon className="h-[15px] w-[15px]" />
                         </button>
@@ -452,7 +452,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                           onClick={() => onDeleteProblemStructureGroup(column.id)}
                           onPointerDown={(event) => event.stopPropagation()}
                           aria-label="구조화 그룹 삭제"
-                          className="nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#fff1f2] hover:text-[#e11d48]"
+                          className="moa-node-control nodrag nopan flex h-6 w-6 items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-[#fff1f2] hover:text-[#e11d48]"
                         >
                           <TrashIcon className="h-[15px] w-[15px]" />
                         </button>
@@ -494,13 +494,13 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       onDragEnd={onProblemStructureNodeDragEnd}
                       onDragOver={(event) => onProblemStructureNodeDragOver(event, node.id)}
                       onDrop={(event) => onProblemStructureNodeDrop(event, node.id)}
-                      className={`nodrag nopan relative h-[116.234px] rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-[#f7f7f7] px-[10px] pb-[31px] pt-[10px] text-[#111] transition ${
+                      className={`moa-node-card moa-node-enter nodrag nopan relative h-[116.234px] rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-[#f7f7f7] px-[10px] pb-[31px] pt-[10px] text-[#111] transition ${
                         isNodeEditing ? "cursor-default" : "cursor-grab active:cursor-grabbing"
                       } ${
                         isNodeDropTarget
                           ? "ring-2 ring-[#01a3ff]/35 ring-offset-1"
                           : "hover:border-[#01a3ff]/35"
-                      } ${isDraggingNode ? "opacity-60" : ""}`}
+                      } ${isDraggingNode ? "moa-node-dragging opacity-60" : ""} ${isNodeEditing ? "moa-node-editing" : ""}`}
                     >
                       <div className="mb-[7px] flex h-[18px] items-center justify-between gap-[6px]">
                         <div className="flex min-w-0 items-center gap-[6px]">
@@ -528,7 +528,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                           onPointerDown={(event) => event.stopPropagation()}
                           aria-label="구조화 노드 제목"
                           rows={2}
-                          className="nodrag nopan block h-[39px] w-full resize-none rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 py-1 text-[11.688px] font-bold leading-[16px] text-[#111] outline-none"
+                          className="moa-node-input nodrag nopan block h-[39px] w-full resize-none rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 py-1 text-[11.688px] font-bold leading-[16px] text-[#111] outline-none"
                         />
                       ) : (
                         <strong className="block truncate text-[11.688px] font-bold leading-[16px] text-[#111]">
@@ -560,7 +560,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                             onClick={onCancelProblemStructureNodeEdit}
                             onPointerDown={(event) => event.stopPropagation()}
                             aria-label="구조화 노드 수정 취소"
-                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-white"
+                            className="moa-node-control nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full text-[#4d4d4d] transition hover:bg-white"
                           >
                             <XIcon className="h-[15px] w-[15px]" />
                           </button>
@@ -569,7 +569,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                             onClick={() => onSaveProblemStructureNodeEdit(node.id)}
                             onPointerDown={(event) => event.stopPropagation()}
                             aria-label="구조화 노드 저장"
-                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
+                            className="moa-node-control nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
                           >
                             <CheckIcon className="h-[14px] w-[14px]" />
                           </button>
@@ -581,7 +581,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                             onClick={() => onStartProblemStructureNodeEdit(node)}
                             onPointerDown={(event) => event.stopPropagation()}
                             aria-label="구조화 노드 수정"
-                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#01a3ff]"
+                            className="moa-node-control nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#01a3ff]"
                           >
                             <PencilIcon className="h-[15px] w-[15px]" />
                           </button>
@@ -590,7 +590,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                             onClick={() => onRemoveProblemStructureNode(node.id)}
                             onPointerDown={(event) => event.stopPropagation()}
                             aria-label="구조화 노드 제외"
-                            className="nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#e11d48]"
+                            className="moa-node-control nodrag nopan flex h-[20px] w-[20px] items-center justify-center rounded-full transition hover:bg-white hover:text-[#e11d48]"
                           >
                             <TrashIcon className="h-[15px] w-[15px]" />
                           </button>

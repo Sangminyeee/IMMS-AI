@@ -35,6 +35,8 @@ const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
   backgroundImage: "url('/figma-assets/AI-background.png')",
 };
 const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
+  "--moa-canvas-stage-transition-ms": "1000ms",
+  "--moa-canvas-stage-fade-in-ms": "740ms",
   "--canvas-left-panel": "clamp(328px, 17.083vw, 437px)",
   "--canvas-right-panel": "clamp(340px, 17.708vw, 453px)",
   "--canvas-left-pad": "clamp(38px, 1.979vw, 51px)",
@@ -73,17 +75,17 @@ const panelButtonClasses = {
   share:
     "moa-action-button flex h-[32.4px] items-center justify-center gap-[8.1px] overflow-hidden rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition-[width,background-color] hover:bg-[#3f3f43]",
   stageBase:
-    "moa-action-button flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
   stageActive:
-    "border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
+    "border-[0.781px] border-[#01a3ff] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
   stageInactive:
     "border-[0.8px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] hover:border-[#01a3ff] hover:bg-[#f4fbff]",
   stageNumber:
     "grid h-[20.521px] w-[20.521px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold leading-[15.39px]",
   primary:
-    "moa-action-button flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
   secondary:
-    "moa-action-button flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
   aiInput:
     "moa-action-input -ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
   aiSend:
@@ -241,6 +243,7 @@ function StageSteps({
           <button
             key={item}
             type="button"
+            data-stage-active={active ? "true" : "false"}
             onClick={() => onStageSelect(item)}
             className={`${panelButtonClasses.stageBase} ${active ? panelButtonClasses.stageActive : panelButtonClasses.stageInactive}`}
           >
@@ -849,7 +852,7 @@ function CurrentStagePanel({
         void problemHandlers.onRegenerateProblemStructure();
       }}
       disabled={header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0}
-      className="moa-action-button inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
+      className="moa-action-button moa-canvas-stage-control inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
     >
       <span
         className={`moa-font-pretendard whitespace-nowrap text-[11px] font-semibold leading-[1.4] tracking-[-0.027px] text-[#236cf3] ${
@@ -907,10 +910,11 @@ function CurrentStagePanel({
                   <button
                     key={phase}
                     type="button"
+                    data-stage-active={active ? "true" : "false"}
                     onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
-                    className={`moa-action-button h-[30px] rounded-full border text-center transition ${
+                    className={`moa-action-button moa-canvas-stage-control h-[30px] rounded-full border text-center transition ${
                       active
-                        ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
+                        ? "border-[#01a3ff] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
                         : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
                     }`}
                   >
