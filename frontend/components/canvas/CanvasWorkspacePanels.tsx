@@ -1,8 +1,8 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
-import Link from "next/link";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { MoaRouteTransitionLink } from "@/components/moa-ui/MoaRouteTransitionLink";
 import type {
   CanvasHeaderProps,
 } from "@/components/canvas/CanvasHeader";
@@ -28,12 +28,15 @@ import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAs
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ProblemDefinitionPhase = "explore" | "structure";
+export type CanvasDebugResetScope = "problem" | "summary" | "all";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
   backgroundImage: "url('/figma-assets/AI-background.png')",
 };
 const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
+  "--moa-canvas-stage-transition-ms": "1000ms",
+  "--moa-canvas-stage-fade-in-ms": "740ms",
   "--canvas-left-panel": "clamp(328px, 17.083vw, 437px)",
   "--canvas-right-panel": "clamp(340px, 17.708vw, 453px)",
   "--canvas-left-pad": "clamp(38px, 1.979vw, 51px)",
@@ -68,25 +71,25 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
 
 const panelButtonClasses = {
   save:
-    "ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-[34.535px] bg-[#eff0f6] px-[6.907px] py-[6.907px] transition hover:bg-[#e3e5ee]",
+    "moa-action-button ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-[34.535px] bg-[#eff0f6] px-[6.907px] py-[6.907px] transition hover:bg-[#e3e5ee]",
   share:
-    "flex h-[32.4px] items-center justify-center gap-[8.1px] overflow-hidden rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition-[width,background-color] hover:bg-[#3f3f43]",
+    "moa-action-button flex h-[32.4px] items-center justify-center gap-[8.1px] overflow-hidden rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition-[width,background-color] hover:bg-[#3f3f43]",
   stageBase:
-    "flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
   stageActive:
-    "border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
+    "border-[0.781px] border-[#01a3ff] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
   stageInactive:
     "border-[0.8px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] hover:border-[#01a3ff] hover:bg-[#f4fbff]",
   stageNumber:
     "grid h-[20.521px] w-[20.521px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold leading-[15.39px]",
   primary:
-    "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
   secondary:
-    "flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
   aiInput:
-    "-ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
+    "moa-action-input -ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
   aiSend:
-    "ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-[575.735px] border-[0.666px] border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+    "moa-action-button ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-[575.735px] border-[0.666px] border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
 };
 
 const panelButtonTextClasses = {
@@ -137,23 +140,6 @@ function MicIcon({ className = "" }: { className?: string }) {
     <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
       <path d="M12 4.2a3.2 3.2 0 0 0-3.2 3.2v4.4a3.2 3.2 0 1 0 6.4 0V7.4A3.2 3.2 0 0 0 12 4.2Z" stroke="currentColor" strokeWidth="1.7" />
       <path d="M6.8 11.6a5.2 5.2 0 0 0 10.4 0M12 16.8v3M9.2 20h5.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ArrowLeftIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M15 6 9 12l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SkipForwardIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M7 6.8v10.4L15 12 7 6.8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M17 7v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
@@ -257,6 +243,7 @@ function StageSteps({
           <button
             key={item}
             type="button"
+            data-stage-active={active ? "true" : "false"}
             onClick={() => onStageSelect(item)}
             className={`${panelButtonClasses.stageBase} ${active ? panelButtonClasses.stageActive : panelButtonClasses.stageInactive}`}
           >
@@ -325,7 +312,7 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       <button
         type="button"
         onClick={meetingGoalEditorOpen ? onCancelMeetingGoalEdit : onOpenMeetingGoalEditor}
-        className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
+        className="moa-action-button pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
       >
         <span className="moa-font-pretendard truncate text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636]">
           {meetingGoalDraft.trim() || "회의 목표 입력"}
@@ -337,7 +324,7 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       </div>
 
       {meetingGoalEditorOpen ? (
-        <div className="pointer-events-auto mt-3 w-[min(520px,calc(100vw-64px))] rounded-[16px] border border-black/10 bg-white p-4 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+        <div className="moa-popover-panel pointer-events-auto mt-3 w-[min(520px,calc(100vw-64px))] rounded-[16px] border border-black/10 bg-white p-4 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
           <p className="text-[15px] font-bold text-[#111]">회의 목표 설정</p>
           <input
             value={meetingGoalEditorDraft}
@@ -350,22 +337,22 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
               }
             }}
             placeholder="회의 목표"
-            className="mt-3 h-[40px] w-full rounded-[10px] border border-[#cecccc] bg-white px-3 text-[13px] text-[#111] outline-none focus:border-[#01a3ff]"
+            className="moa-action-input mt-3 h-[40px] w-full rounded-[10px] border border-[#cecccc] bg-white px-3 text-[13px] text-[#111] outline-none focus:border-[#01a3ff]"
           />
           <textarea
             value={meetingGoalContextEditorDraft}
             onChange={(event) => onMeetingGoalContextEditorDraftChange(event.target.value)}
             placeholder="관련 맥락"
-            className="mt-2 min-h-[78px] w-full resize-none rounded-[10px] border border-[#cecccc] bg-white px-3 py-2 text-[13px] leading-5 text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
+            className="moa-action-input mt-2 min-h-[78px] w-full resize-none rounded-[10px] border border-[#cecccc] bg-white px-3 py-2 text-[13px] leading-5 text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
           />
           <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[#90a1b9]">
             {meetingGoalContextDraft.trim() ? `현재 맥락: ${meetingGoalContextDraft.trim()}` : "목표와 맥락은 AI 분석의 참고 정보로 사용됩니다."}
           </p>
           <div className="mt-3 flex justify-end gap-2">
-            <button type="button" onClick={onCancelMeetingGoalEdit} className="rounded-full bg-[#eff0f6] px-4 py-2">
+            <button type="button" onClick={onCancelMeetingGoalEdit} className="moa-action-button rounded-full bg-[#eff0f6] px-4 py-2">
               <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] text-[#505050]">취소</span>
             </button>
-            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
+            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="moa-action-button rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
               <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white">
                 {meetingGoalSaving ? "저장 중" : "저장"}
               </span>
@@ -385,7 +372,7 @@ function CenterTransportControls({ header }: { header: CanvasHeaderProps }) {
         type="button"
         onClick={handlers.onRecordingToggle}
         aria-label={view.isRecording ? "녹음 중지" : "녹음 시작"}
-        className="pointer-events-auto grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition hover:scale-[1.02]"
+        className="moa-action-icon pointer-events-auto grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition hover:scale-[1.02]"
       >
         <span className="grid h-[var(--canvas-transport-inner)] w-[var(--canvas-transport-inner)] place-items-center rounded-full border border-white/30 bg-[linear-gradient(180deg,#01a3ff_0%,#236cf3_100%)] shadow-[0_-3.44px_2.29px_rgba(255,255,255,0.29),0_1.66px_5.1px_rgba(1,231,255,0.3)]">
           {view.isRecording ? <RecordingWaveIcon className="h-[var(--canvas-transport-wave)] w-[var(--canvas-transport-wave)]" /> : <MicIcon className="h-[var(--canvas-transport-mic)] w-[var(--canvas-transport-mic)]" />}
@@ -420,14 +407,14 @@ function PersonalNoteComposerPanel({
             value={composerTitle}
             onChange={(event) => handlers.onTitleChange(event.target.value)}
             placeholder="메모 제목"
-            className="h-[var(--canvas-input-height)] w-full rounded-[8.66px] border border-[#cecccc] bg-white px-[8px] text-[12px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-black/50 focus:border-[#01a3ff]"
+            className="moa-action-input h-[var(--canvas-input-height)] w-full rounded-[8.66px] border border-[#cecccc] bg-white px-[8px] text-[12px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-black/50 focus:border-[#01a3ff]"
           />
           <textarea
             ref={composerBodyRef}
             value={composerBody}
             onChange={(event) => handlers.onBodyChange(event.target.value)}
             placeholder="메모 내용"
-            className="h-[var(--canvas-textarea-height)] w-full resize-none rounded-[11.55px] border border-[#cecccc] bg-white px-[8px] py-[9px] text-[12px] leading-[20px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-[#4d4d4d]/50 focus:border-[#01a3ff]"
+            className="moa-action-input h-[var(--canvas-textarea-height)] w-full resize-none rounded-[11.55px] border border-[#cecccc] bg-white px-[8px] py-[9px] text-[12px] leading-[20px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-[#4d4d4d]/50 focus:border-[#01a3ff]"
           />
           <button
             type="button"
@@ -480,7 +467,7 @@ function PersonalNoteCard({
         handlers.onDragStart(note.id);
       }}
       onDragEnd={handlers.onDragEnd}
-      className={`min-h-[72px] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
+      className={`moa-action-card min-h-[72px] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         {isEditing ? (
@@ -488,7 +475,7 @@ function PersonalNoteCard({
             value={draftTitle}
             onChange={(event) => handlers.onDraftTitleChange(event.target.value)}
             autoFocus
-            className="-mx-1 min-w-0 flex-1 rounded-[4px] bg-transparent px-1 py-0 text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448] outline-none transition focus:bg-[#f8fbff]"
+            className="moa-action-input -mx-1 min-w-0 flex-1 rounded-[4px] bg-transparent px-1 py-0 text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448] outline-none transition focus:bg-[#f8fbff]"
           />
         ) : (
           <h4 className="min-w-0 truncate text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448]">{note.title}</h4>
@@ -501,7 +488,7 @@ function PersonalNoteCard({
                 onClick={handlers.onCancelEdit}
                 aria-label="메모 수정 취소"
                 title="취소"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050]"
               >
                 <XIcon className="h-[12px] w-[12px]" />
               </button>
@@ -510,7 +497,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onSaveEdit(note.id)}
                 aria-label="메모 저장"
                 title="저장"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
               >
                 <CheckIcon className="h-[13px] w-[13px]" />
               </button>
@@ -522,7 +509,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onStartEdit(note)}
                 aria-label="메모 수정"
                 title="수정"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
               >
                 <PencilIcon className="h-[13px] w-[13px]" />
               </button>
@@ -531,7 +518,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onDelete(note.id)}
                 aria-label="메모 삭제"
                 title="삭제"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#fff4f4] hover:text-[#ef4e4e]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#fff4f4] hover:text-[#ef4e4e]"
               >
                 <TrashIcon className="h-[13px] w-[13px]" />
               </button>
@@ -546,7 +533,7 @@ function PersonalNoteCard({
           onChange={(event) => handlers.onDraftBodyChange(event.target.value)}
           placeholder="내용 없음"
           rows={1}
-          className="mt-[12px] block min-h-[18px] w-full resize-none overflow-hidden rounded-[4px] bg-transparent p-0 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none transition placeholder:text-[#a3aab5] focus:bg-[#f8fbff]"
+          className="moa-action-input mt-[12px] block min-h-[18px] w-full resize-none overflow-hidden rounded-[4px] bg-transparent p-0 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none transition placeholder:text-[#a3aab5] focus:bg-[#f8fbff]"
         />
       ) : bodyText ? (
         <p className="mt-[12px] whitespace-pre-wrap break-words text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982]">
@@ -618,13 +605,13 @@ function LeftMeetingPanel({
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-20 after:w-px after:bg-[#cecccc]">
       <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
-        <Link
+        <MoaRouteTransitionLink
           href="/dashboard"
-          aria-label="대시보드로 이동"
-          className="inline-flex w-fit rounded-[8px] outline-none transition focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
+          aria-label="메인화면으로 이동"
+          className="moa-action-button -m-2 inline-flex w-fit rounded-[10px] p-2 outline-none transition hover:bg-[#f5f9ff] focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
         >
-          <MoaLogo size="figma" className="moa-dt-logo" />
-        </Link>
+          <MoaLogo size="figma" className="moa-dt-logo gap-[8px] text-[21px]" markClassName="h-[24px] w-[39px]" />
+        </MoaRouteTransitionLink>
         <div className="mt-[var(--canvas-left-title-gap)]">
           <div className="flex min-w-0 items-center gap-[7px]">
             {titleEditing ? (
@@ -644,7 +631,7 @@ function LeftMeetingPanel({
                   }}
                   disabled={titleSaving}
                   aria-label="회의 제목"
-                  className="min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
+                  className="moa-action-input min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
                 />
                 <button
                   type="button"
@@ -652,7 +639,7 @@ function LeftMeetingPanel({
                   disabled={titleSaving}
                   aria-label="회의 제목 저장"
                   title="저장"
-                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
                 >
                   <CheckIcon className="h-[13px] w-[13px]" />
                 </button>
@@ -662,20 +649,20 @@ function LeftMeetingPanel({
                   disabled={titleSaving}
                   aria-label="회의 제목 수정 취소"
                   title="취소"
-                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <XIcon className="h-[12px] w-[12px]" />
                 </button>
               </div>
             ) : (
               <>
-                <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{currentMeetingTitle}</h2>
+                <h2 className="min-w-0 truncate text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818]">{currentMeetingTitle}</h2>
                 <button
                   type="button"
                   onClick={handleStartTitleEdit}
                   aria-label="회의 제목 수정"
                   title="수정"
-                  className="grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full text-[#737982] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full text-[#737982] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
                 >
                   <PencilIcon className="h-[12px] w-[12px]" />
                 </button>
@@ -751,6 +738,16 @@ function CurrentStagePanel({
   const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
   const hasProblemStructure = problem.problemStructureNodesCount > 0;
+  const problemDefinitionFailed = problem.problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problem.problemStructureGenerationStatus === "failed";
+  const currentProblemFailed =
+    stage === "problem-definition" && (isProblemExplore ? problemDefinitionFailed : problemStructureFailed);
+  const currentProblemError =
+    stage === "problem-definition"
+      ? isProblemExplore
+        ? problem.problemDefinitionGenerationError
+        : problem.problemStructureGenerationError
+      : "";
 
   let title = stageLabel(stage, problemDefinitionPhase);
   let description = (
@@ -773,7 +770,11 @@ function CurrentStagePanel({
         충분히 모이면 문제정의를 시작하세요.
       </>
     );
-    buttonLabel = "문제정의 시작하기";
+    buttonLabel = problem.problemDefinitionStagePending
+      ? "문제정의 생성 중"
+      : problemDefinitionFailed
+        ? "문제정의 다시 시작하기"
+        : "문제정의 시작하기";
     buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
     onButtonClick = () => header.handlers.onStageSelect("problem-definition");
   } else if (isProblemExplore) {
@@ -785,8 +786,12 @@ function CurrentStagePanel({
         남은 후보는 모두 다음 단계로 이동합니다.
       </>
     );
-    buttonLabel = problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기";
-    buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+    buttonLabel = problem.problemStructurePending
+      ? "구조화 생성 중"
+      : problemStructureFailed
+        ? "2단계 구조화 다시 시도"
+        : "2단계 · 구조화 시작하기";
+    buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
     onButtonClick = () => {
       void problemHandlers.onStartProblemStructure();
     };
@@ -832,7 +837,11 @@ function CurrentStagePanel({
           header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemDefinitionStagePending ? "1단계 재생성 중" : "1단계 재생성"}
+        {problem.problemDefinitionStagePending
+          ? "1단계 재생성 중"
+          : problemDefinitionFailed
+            ? "1단계 다시 생성"
+            : "1단계 재생성"}
       </span>
     </button>
   ) : null;
@@ -843,72 +852,85 @@ function CurrentStagePanel({
         void problemHandlers.onRegenerateProblemStructure();
       }}
       disabled={header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0}
-      className="inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
+      className="moa-action-button moa-canvas-stage-control inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
     >
       <span
         className={`moa-font-pretendard whitespace-nowrap text-[11px] font-semibold leading-[1.4] tracking-[-0.027px] text-[#236cf3] ${
           header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0 ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemStructurePending ? "AI 묶는 중" : "AI 자동묶음"}
+        {problem.problemStructurePending
+          ? "AI 묶는 중"
+          : problemStructureFailed
+            ? "AI 묶기 재시도"
+            : "AI 자동묶음"}
       </span>
     </button>
   ) : null;
 
   return (
     <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
-      <div className="flex items-start gap-[12px]">
-        <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
-        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
-      </div>
-      <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
-        {description}
-      </p>
-      {buttonLabel && onButtonClick ? (
-        <button
-          type="button"
-          onClick={onButtonClick}
-          disabled={buttonDisabled}
-          className={`mt-[20px] ${panelButtonClasses.primary}`}
-        >
-          <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
-        </button>
-      ) : null}
-      {stage === "problem-definition" && hasProblemStructure ? (
-        <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
-          <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
-            <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
-            {regenerateProblemStructureButton}
-          </div>
-          <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
-            {([
-              ["explore", "1단계"],
-              ["structure", "2단계"],
-            ] as const).map(([phase, label]) => {
-              const active = problemDefinitionPhase === phase;
-              return (
-                <button
-                  key={phase}
-                  type="button"
-                  onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
-                  className={`h-[30px] rounded-full border text-center transition ${
-                    active
-                      ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
-                      : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
-                  }`}
-                >
-                  <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
-                    {label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {regenerateProblemDefinitionButton}
+      <div key={`${stage}:${problemDefinitionPhase}`} className="moa-canvas-stage-detail">
+        <div className="flex items-start gap-[12px]">
+          <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
+          <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
         </div>
-      ) : (
-        regenerateProblemDefinitionButton
-      )}
+        <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+          {description}
+        </p>
+        {currentProblemFailed ? (
+          <p className="moa-state-callout mt-[10px] rounded-[10px] border border-[#fecaca] bg-[#fff5f5] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#dc2626]">
+            생성에 실패했습니다. 다시 생성 버튼으로 재시도할 수 있습니다.
+            {currentProblemError ? ` (${currentProblemError})` : ""}
+          </p>
+        ) : null}
+        {buttonLabel && onButtonClick ? (
+          <button
+            type="button"
+            onClick={onButtonClick}
+            disabled={buttonDisabled}
+            className={`mt-[20px] ${panelButtonClasses.primary}`}
+          >
+            <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
+          </button>
+        ) : null}
+        {stage === "problem-definition" && hasProblemStructure ? (
+          <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
+            <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
+              <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
+              {regenerateProblemStructureButton}
+            </div>
+            <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
+              {([
+                ["explore", "1단계"],
+                ["structure", "2단계"],
+              ] as const).map(([phase, label]) => {
+                const active = problemDefinitionPhase === phase;
+                return (
+                  <button
+                    key={phase}
+                    type="button"
+                    data-stage-active={active ? "true" : "false"}
+                    onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
+                    className={`moa-action-button moa-canvas-stage-control h-[30px] rounded-full border text-center transition ${
+                      active
+                        ? "border-[#01a3ff] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
+                        : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
+                    }`}
+                  >
+                    <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {regenerateProblemDefinitionButton}
+          </div>
+        ) : (
+          regenerateProblemDefinitionButton
+        )}
+      </div>
     </section>
   );
 }
@@ -921,6 +943,8 @@ function RightAiPanel({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
@@ -929,6 +953,8 @@ function RightAiPanel({
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 }) {
   const {
     open: quickAskOpen,
@@ -943,7 +969,9 @@ function RightAiPanel({
   const quickAskHasMessages = quickAskMessages.length > 0;
   const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
   const [shareCopied, setShareCopied] = useState(false);
+  const [debugResetOpen, setDebugResetOpen] = useState(false);
   const shareCopiedResetTimerRef = useRef<number | null>(null);
+  const showDebugReset = header.view.stage === "ideation" && Boolean(onDebugResetWorkspace);
 
   useEffect(() => () => {
     if (shareCopiedResetTimerRef.current !== null) {
@@ -964,9 +992,15 @@ function RightAiPanel({
     }, 1600);
   };
 
+  const handleDebugReset = async (scope: CanvasDebugResetScope) => {
+    if (!onDebugResetWorkspace || debugResetBusy) return;
+    setDebugResetOpen(false);
+    await onDebugResetWorkspace(scope);
+  };
+
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
-      <header className="relative z-10 flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
+      <header className="relative z-[80] flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
         <div className="flex items-center">
           {visibleParticipants.map((participant, index) => (
             <span
@@ -987,17 +1021,55 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
-          aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
-          onClick={() => void handleShareClick()}
-        >
-          <ShareIcon className="h-[13px] w-[13px] shrink-0" />
-          <span className={panelButtonTextClasses.share} aria-live="polite">
-            {shareCopied ? "복사완료" : "공유"}
-          </span>
-        </button>
+        <div className="relative flex items-center gap-[8px]">
+          {showDebugReset ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={debugResetOpen}
+                aria-label="디버그 초기화 메뉴"
+                disabled={debugResetBusy}
+                onClick={() => setDebugResetOpen((current) => !current)}
+                className="moa-action-button inline-flex h-[32.4px] items-center justify-center rounded-[67.5px] border border-[rgba(1,163,255,0.33)] bg-white px-[12px] text-[#236cf3] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="moa-font-pretendard text-[10px] font-bold leading-[1.4] tracking-[-0.025px] text-current">
+                  초기화
+                </span>
+              </button>
+              {debugResetOpen ? (
+                <div className="moa-popover-menu absolute right-[76px] top-[calc(100%+8px)] z-[90] w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
+                  {([
+                    ["problem", "문제정의 초기화"],
+                    ["summary", "요약 초기화"],
+                    ["all", "문제정의+요약"],
+                  ] as const).map(([scope, label]) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      className="moa-action-row block h-[30px] w-full rounded-[10px] px-[10px] text-left transition hover:bg-[#f4fbff]"
+                      onClick={() => void handleDebugReset(scope)}
+                    >
+                      <span className="moa-font-pretendard text-[11px] font-semibold leading-[1.4] tracking-[-0.028px] text-[#526070]">
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          <button
+            type="button"
+            className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
+            aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
+            onClick={() => void handleShareClick()}
+          >
+            <ShareIcon className="h-[13px] w-[13px] shrink-0" />
+            <span className={panelButtonTextClasses.share} aria-live="polite">
+              {shareCopied ? "복사완료" : "공유"}
+            </span>
+          </button>
+        </div>
       </header>
 
       <section className="relative z-10 shrink-0 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[21px]">
@@ -1041,7 +1113,7 @@ function RightAiPanel({
             className="imms-overlay-scroll relative z-10 mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto text-left"
           >
             {recentMessages.map((message) => (
-              <div key={message.id} className={`rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
+              <div key={message.id} className={`moa-message-enter rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
                 {message.text}
               </div>
             ))}
@@ -1109,6 +1181,8 @@ export type CanvasWorkspacePanelsProps = {
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
@@ -1130,10 +1204,12 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: CanvasWorkspacePanelsProps) {
   return (
     <div
-      className="grid h-full min-h-0 grid-cols-1 overflow-hidden bg-[#f8f8f8] xl:grid-cols-[var(--canvas-left-panel)_minmax(0,1fr)_var(--canvas-right-panel)]"
+      className="moa-desktop-motion grid h-full min-h-0 grid-cols-1 overflow-hidden bg-[#f8f8f8] xl:grid-cols-[var(--canvas-left-panel)_minmax(0,1fr)_var(--canvas-right-panel)]"
       style={canvasShellStyle}
     >
       <LeftMeetingPanel
@@ -1168,6 +1244,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
         onShareMeetingLink={onShareMeetingLink}
+        onDebugResetWorkspace={onDebugResetWorkspace}
+        debugResetBusy={debugResetBusy}
       />
     </div>
   );

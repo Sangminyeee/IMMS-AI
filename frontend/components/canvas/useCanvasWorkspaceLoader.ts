@@ -32,6 +32,7 @@ import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
   hydrateProblemStructureState,
+  type ProblemStructureArtifactMeta,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -131,6 +132,7 @@ type UseCanvasWorkspaceLoaderOptions<
   setProblemStructureDraftMethod: Dispatch<SetStateAction<ProblemStructureMethod>>;
   setProblemStructureDraftMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
+  setProblemStructureArtifactMeta: Dispatch<SetStateAction<ProblemStructureArtifactMeta>>;
   setProblemStructureMethod: Dispatch<SetStateAction<ProblemStructureMethod>>;
   setProblemStructureNodes: Dispatch<SetStateAction<ProblemStructureNodeViewModel[]>>;
   setProblemStructurePending: Dispatch<SetStateAction<boolean>>;
@@ -189,6 +191,7 @@ export function useCanvasWorkspaceLoader<
   setProblemStructureDraftMethod,
   setProblemStructureDraftMode,
   setProblemStructureGroups,
+  setProblemStructureArtifactMeta,
   setProblemStructureMethod,
   setProblemStructureNodes,
   setProblemStructurePending,
@@ -219,6 +222,12 @@ export function useCanvasWorkspaceLoader<
     setProblemStructureSetupOpen(false);
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
+    setProblemStructureArtifactMeta({
+      revision: 0,
+      sourceGenerationId: "",
+      basedOnTranscriptRevision: 0,
+      updatedAt: "",
+    });
     setProblemStructurePending(false);
     resetProblemStructureEditorState();
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
@@ -241,6 +250,12 @@ export function useCanvasWorkspaceLoader<
     setProblemStructureSetupOpen(false);
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
+    setProblemStructureArtifactMeta({
+      revision: 0,
+      sourceGenerationId: "",
+      basedOnTranscriptRevision: 0,
+      updatedAt: "",
+    });
     setProblemStructurePending(false);
     resetProblemStructureEditorState();
     setProblemDefinitionStagePending(false);
@@ -273,7 +288,6 @@ export function useCanvasWorkspaceLoader<
             : undefined;
 
         const sharedGroups = hydrateProblemGroups(saved.problem_groups || []);
-        const sharedStage = normalizeWorkspaceStage(saved.stage);
         const nextPersonalNotes = (savedPersonalNotes.personal_notes || []).map((note) =>
           toPersonalNote(note, meetingId),
         ) as TPersonalNote[];
@@ -297,7 +311,7 @@ export function useCanvasWorkspaceLoader<
           shouldUseLocalCanvas ? savedLocalCanvasState?.problem_structure : saved.problem_structure,
           nextGroups,
         );
-        const nextStage = savedLocalStage || sharedStage;
+        const nextStage = savedLocalStage || "ideation";
         const displayStage = captureStageOverride || nextStage;
         const displayProblemStructure =
           displayStage === "problem-definition" && captureProblemPhaseOverride
@@ -355,6 +369,12 @@ export function useCanvasWorkspaceLoader<
         setProblemStructureSetupOpen(false);
         setProblemStructureNodes(displayProblemStructure.nodes);
         setProblemStructureGroups(displayProblemStructure.groups);
+        setProblemStructureArtifactMeta({
+          revision: displayProblemStructure.revision,
+          sourceGenerationId: displayProblemStructure.sourceGenerationId,
+          basedOnTranscriptRevision: displayProblemStructure.basedOnTranscriptRevision,
+          updatedAt: displayProblemStructure.updatedAt,
+        });
         setProblemStructurePending(false);
         resetProblemStructureEditorState();
         analysisSignatureAtImportRef.current = nextImportedState
@@ -443,6 +463,12 @@ export function useCanvasWorkspaceLoader<
         setProblemStructureSetupOpen(false);
         setProblemStructureNodes([]);
         setProblemStructureGroups([]);
+        setProblemStructureArtifactMeta({
+          revision: 0,
+          sourceGenerationId: "",
+          basedOnTranscriptRevision: 0,
+          updatedAt: "",
+        });
         setProblemStructurePending(false);
         resetProblemStructureEditorState();
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
@@ -530,6 +556,7 @@ export function useCanvasWorkspaceLoader<
     setProblemGroups,
     setProblemStructureDraftMethod,
     setProblemStructureDraftMode,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureMethod,
     setProblemStructureNodes,

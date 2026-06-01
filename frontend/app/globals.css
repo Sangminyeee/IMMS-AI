@@ -423,6 +423,33 @@ body {
   font-family: inherit;
 }
 
+.moa-dashboard-route-enter {
+  animation: moaDashboardRouteEnter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-route-exit-overlay {
+  animation: moaRouteExitOverlayIn 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(239, 248, 255, 0.94) 0%, rgba(255, 255, 255, 0.96) 47%, #ffffff 100%),
+    linear-gradient(90deg, rgba(8, 158, 245, 0.08), rgba(5, 66, 255, 0.1));
+  backdrop-filter: blur(5px);
+  will-change: opacity, filter;
+}
+
+.moa-route-exit-overlay::after {
+  animation: moaRouteExitLine 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  background: var(--moa-dashboard-button-gradient);
+  border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(5, 66, 255, 0.2);
+  content: "";
+  height: 3px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(180px, 38vw);
+}
+
 .moa-dt-logo {
   color: #0651fe;
   font-family: var(--font-logo);
@@ -550,6 +577,436 @@ body {
   font-size: 11.5px;
 }
 
+.moa-dashboard-filter-button {
+  isolation: isolate;
+  overflow: hidden;
+  position: relative;
+  transition-duration: 240ms;
+  transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.moa-dashboard-filter-button::before {
+  background: linear-gradient(126deg, #2cb1fe 25%, #0542ff 82%);
+  content: "";
+  inset: 0;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
+}
+
+.moa-dashboard-filter-button > * {
+  position: relative;
+  z-index: 1;
+}
+
+.moa-dashboard-filter-button-active {
+  transform: translate3d(0, -1px, 0);
+}
+
+.moa-dashboard-filter-button-active::before {
+  opacity: 1;
+}
+
+.moa-dashboard-filter-check {
+  display: inline-block;
+  overflow: hidden;
+  width: 0;
+  transform: scale(0.72);
+  transition-duration: 220ms;
+  transition-property: opacity, transform, width;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.moa-dashboard-filter-button-active .moa-dashboard-filter-check {
+  width: 0.72rem;
+  transform: scale(1);
+}
+
+.moa-dashboard-meeting-list {
+  transform: translate3d(0, 0, 0);
+  transition-duration: 180ms;
+  transition-property: filter, opacity, transform;
+  transition-timing-function: ease-out;
+  will-change: opacity, transform;
+}
+
+.moa-dashboard-meeting-list-out {
+  filter: blur(1px);
+  opacity: 0;
+  transform: translate3d(0, 8px, 0);
+}
+
+.moa-dashboard-meeting-list-in {
+  animation: moaDashboardListIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-desktop-motion {
+  --moa-motion-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --moa-motion-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --moa-motion-exit: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+.moa-action-card,
+.moa-action-row,
+.moa-action-icon,
+.moa-action-input,
+.moa-action-button,
+.moa-node-card,
+.moa-node-board,
+.moa-node-control,
+.moa-node-input {
+  transform: translate3d(0, 0, 0);
+}
+
+.moa-message-enter {
+  animation: moaMessageIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-state-callout {
+  animation: moaCalloutIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-node-enter {
+  animation: moaNodeIn 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .moa-desktop-motion :where(button:not(:disabled), a[href], [role="button"]:not([aria-disabled="true"])) {
+    transition-duration: 220ms;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-desktop-motion :where(button:not(:disabled), a[href], [role="button"]:not([aria-disabled="true"])):active {
+    filter: brightness(0.98);
+    transform: translate3d(0, 1px, 0) scale(0.985);
+  }
+
+  .moa-action-button {
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+  }
+
+  .moa-action-card {
+    transition-duration: 280ms;
+    transition-property: border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+    will-change: transform;
+  }
+
+  .moa-action-card:hover {
+    filter: saturate(1.03);
+    transform: translate3d(0, -3px, 0);
+  }
+
+  .moa-action-row {
+    transition-duration: 220ms;
+    transition-property: background-color, border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-row:hover {
+    transform: translate3d(3px, 0, 0);
+  }
+
+  .moa-action-icon {
+    transition-duration: 200ms;
+    transition-property: background-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-icon:hover {
+    transform: translate3d(0, -1px, 0) scale(1.035);
+  }
+
+  .moa-action-input {
+    transition-duration: 220ms;
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-action-input:focus-within {
+    box-shadow: 0 0 0 3px rgba(1, 163, 255, 0.1);
+  }
+
+  .moa-canvas-stage-control {
+    isolation: isolate;
+    overflow: hidden;
+    position: relative;
+    transition-duration: var(--moa-canvas-stage-transition-ms, 1000ms);
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform, width;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-canvas-stage-control::before {
+    background: linear-gradient(90deg, #54c1ff 32.705%, #2f70e9 157.88%);
+    content: "";
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    transition-duration: var(--moa-canvas-stage-transition-ms, 1000ms);
+    transition-property: opacity;
+    transition-timing-function: var(--moa-motion-standard);
+    z-index: 0;
+  }
+
+  .moa-canvas-stage-control[data-stage-active="true"]::before {
+    opacity: 1;
+  }
+
+  .moa-canvas-stage-control :where(span, svg) {
+    position: relative;
+    transition-duration: var(--moa-canvas-stage-transition-ms, 1000ms);
+    transition-property: background-color, color, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+    z-index: 1;
+  }
+
+  .moa-node-board {
+    transition-duration: 280ms;
+    transition-property: border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-node-board:hover {
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .moa-node-card {
+    transition-duration: 260ms;
+    transition-property: background-color, border-color, box-shadow, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+    will-change: transform;
+  }
+
+  .moa-node-card:hover {
+    filter: saturate(1.03);
+    transform: translate3d(0, -2px, 0);
+  }
+
+  .moa-node-card.moa-node-dragging,
+  .moa-node-card.moa-node-editing {
+    transform: translate3d(0, 0, 0);
+  }
+
+  .moa-node-control {
+    transition-duration: 190ms;
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-node-control:not(:disabled):hover {
+    transform: translate3d(0, -1px, 0) scale(1.035);
+  }
+
+  .moa-node-control:not(:disabled):active {
+    transform: translate3d(0, 1px, 0) scale(0.975);
+  }
+
+  .moa-node-input {
+    transition-duration: 180ms;
+    transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+    transition-timing-function: var(--moa-motion-standard);
+  }
+
+  .moa-node-input:focus {
+    box-shadow: 0 0 0 3px rgba(1, 163, 255, 0.1);
+  }
+
+  .moa-node-menu {
+    animation: moaNodeMenuIn 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    transform-origin: top right;
+  }
+}
+
+.moa-canvas-stage-surface {
+  will-change: opacity, filter;
+}
+
+.moa-canvas-stage-surface-transitioning {
+  pointer-events: none;
+}
+
+.moa-canvas-stage-surface-out {
+  animation: moaCanvasStageSurfaceOut var(--moa-canvas-stage-fade-out-ms, 260ms) cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.moa-canvas-stage-surface-in {
+  animation: moaCanvasStageSurfaceIn var(--moa-canvas-stage-fade-in-ms, 740ms) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-canvas-stage-transition-veil {
+  animation: moaCanvasStageVeilOut 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  background: rgba(255, 255, 255, 0.72);
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 7;
+}
+
+.moa-canvas-stage-detail {
+  animation: moaCanvasStageDetailIn var(--moa-canvas-stage-fade-in-ms, 740ms) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.moa-mobile-stage-surface {
+  animation: moaMobileStageSurfaceIn 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, filter;
+}
+
+@keyframes moaCanvasStageSurfaceIn {
+  from {
+    filter: saturate(0.96);
+    opacity: 0.12;
+  }
+  to {
+    filter: saturate(1);
+    opacity: 1;
+  }
+}
+
+@keyframes moaCanvasStageSurfaceOut {
+  from {
+    filter: saturate(1);
+    opacity: 1;
+  }
+  to {
+    filter: saturate(0.96);
+    opacity: 0.12;
+  }
+}
+
+@keyframes moaCanvasStageVeilOut {
+  from {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.28;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes moaMobileStageSurfaceIn {
+  from {
+    opacity: 0;
+    filter: saturate(0.94);
+  }
+  to {
+    opacity: 1;
+    filter: saturate(1);
+  }
+}
+
+@keyframes moaMessageIn {
+  from {
+    filter: saturate(0.96);
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.985);
+  }
+  to {
+    filter: saturate(1);
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaCalloutIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes moaNodeIn {
+  from {
+    filter: saturate(0.96);
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.985);
+  }
+  to {
+    filter: saturate(1);
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaNodeMenuIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -4px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaCanvasStageDetailIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes moaDashboardListIn {
+  from {
+    filter: blur(1px);
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    filter: blur(0);
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes moaDashboardRouteEnter {
+  from {
+    filter: saturate(0.96);
+    opacity: 0;
+  }
+  to {
+    filter: saturate(1);
+    opacity: 1;
+  }
+}
+
+@keyframes moaRouteExitOverlayIn {
+  from {
+    filter: saturate(1);
+    opacity: 0;
+  }
+  to {
+    filter: saturate(0.98);
+    opacity: 1;
+  }
+}
+
+@keyframes moaRouteExitLine {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scaleX(0.22);
+  }
+  58% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) scaleX(1);
+  }
+}
+
 .moa-dt-search-input {
   font-family: var(--font-inter), var(--font-body);
   font-size: 10.844px;
@@ -635,6 +1092,15 @@ select {
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
   cursor: pointer;
+  transition-duration: 160ms;
+  transition-property: background-color, border-color, box-shadow, color, filter, opacity, transform;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+button:not(:disabled):not([data-no-press="true"]):active,
+[role="button"]:not([aria-disabled="true"]):not([data-no-press="true"]):active {
+  filter: brightness(0.98);
+  transform: translate3d(0, 1px, 0) scale(0.985);
 }
 
 button:disabled,
@@ -671,6 +1137,237 @@ button:disabled,
 .auth-route-copy,
 .auth-route-panel {
   animation: authRouteIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mobile-auth-backdrop {
+  animation: mobileAuthBackdropIn 280ms ease-out both;
+}
+
+.mobile-auth-backdrop[data-closing="true"] {
+  animation: mobileAuthBackdropOut 620ms ease both;
+}
+
+.mobile-auth-sheet {
+  animation: mobileAuthSheetIn 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+.mobile-auth-sheet[data-closing="true"] {
+  animation: mobileAuthSheetOut 620ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.moa-popover-backdrop {
+  animation: moaBackdropIn 220ms ease-out both;
+}
+
+.moa-popover-backdrop[data-exiting="true"] {
+  animation: moaBackdropOut 260ms ease-in both;
+}
+
+.moa-popover-panel {
+  animation: moaPanelIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: center;
+  will-change: opacity, transform;
+}
+
+.moa-popover-panel[data-exiting="true"] {
+  animation: moaPanelOut 240ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.moa-popover-menu {
+  animation: moaMenuIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top right;
+  will-change: opacity, transform;
+}
+
+.moa-popover-menu[data-exiting="true"] {
+  animation: moaMenuOut 240ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.moa-popover-sheet {
+  animation: moaSheetIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
+}
+
+.moa-popover-sheet[data-exiting="true"] {
+  animation: moaSheetOut 320ms cubic-bezier(0.7, 0, 0.84, 0) both;
+}
+
+.moa-popover-fullscreen {
+  animation: moaFullscreenIn 260ms ease-out both;
+}
+
+.moa-popover-fullscreen[data-exiting="true"] {
+  animation: moaFullscreenOut 240ms ease-in both;
+}
+
+.moa-toast-pop {
+  animation: moaToastPopIn 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
+}
+
+.moa-toast-pop[data-exiting="true"] {
+  animation: moaToastPopOut 300ms ease-in both;
+}
+
+@keyframes moaBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes moaBackdropOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes moaPanelIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaPanelOut {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.97);
+  }
+}
+
+@keyframes moaMenuIn {
+  from {
+    opacity: 0;
+    transform: translate3d(12px, -8px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaMenuOut {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(12px, -8px, 0) scale(0.97);
+  }
+}
+
+@keyframes moaSheetIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 32px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes moaSheetOut {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 32px, 0);
+  }
+}
+
+@keyframes moaFullscreenIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes moaFullscreenOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes moaToastPopIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes moaToastPopOut {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.98);
+  }
+}
+
+@keyframes mobileAuthBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mobileAuthBackdropOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes mobileAuthSheetIn {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mobileAuthSheetOut {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
 }
 
 @media (min-width: 1024px) {
@@ -2110,6 +2807,31 @@ th {
   letter-spacing: 0.03em;
 }
 
+.moa-mobile-summary-table {
+  width: 100%;
+}
+
+.moa-mobile-summary-table th,
+.moa-mobile-summary-table td {
+  min-width: 0;
+  padding: 10px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: -0.03px;
+  text-transform: none;
+}
+
+.moa-mobile-summary-table th {
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.moa-mobile-summary-table th *,
+.moa-mobile-summary-table td * {
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .evidenceList {
   display: flex;
   flex-direction: column;
@@ -2355,8 +3077,95 @@ th {
   .runDot,
   .focusFlash,
   .auth-route-copy,
-  .auth-route-panel {
+  .auth-route-panel,
+  .moa-popover-backdrop,
+  .moa-popover-panel,
+  .moa-popover-menu,
+  .moa-popover-sheet,
+  .moa-popover-fullscreen,
+  .moa-toast-pop,
+  .moa-canvas-stage-surface-in,
+  .moa-canvas-stage-surface-out,
+  .moa-canvas-stage-transition-veil,
+  .moa-canvas-stage-detail,
+  .moa-mobile-stage-surface,
+  .moa-dashboard-meeting-list-in,
+  .moa-message-enter,
+  .moa-state-callout,
+  .moa-node-enter,
+  .moa-node-menu,
+  .moa-dashboard-route-enter,
+  .moa-route-exit-overlay,
+  .moa-route-exit-overlay::after,
+  .mobile-auth-backdrop,
+  .mobile-auth-sheet {
     animation: none !important;
+  }
+
+  .moa-dashboard-filter-button,
+  .moa-dashboard-filter-button::before,
+  .moa-dashboard-filter-check,
+  .moa-dashboard-meeting-list,
+  .moa-desktop-motion :where(button, a[href], [role="button"]),
+  .moa-canvas-stage-control,
+  .moa-canvas-stage-control::before,
+  .moa-canvas-stage-control :where(span, svg),
+  .moa-action-card,
+  .moa-action-row,
+  .moa-action-icon,
+  .moa-action-input,
+  .moa-action-button,
+  .moa-node-board,
+  .moa-node-card,
+  .moa-node-control,
+  .moa-node-input {
+    transition: none !important;
+  }
+
+  .moa-dashboard-filter-button-active,
+  .moa-canvas-stage-surface,
+  .moa-canvas-stage-surface-in,
+  .moa-canvas-stage-surface-out,
+  .moa-canvas-stage-transition-veil,
+  .moa-canvas-stage-detail,
+  .moa-mobile-stage-surface,
+  .moa-dashboard-meeting-list,
+  .moa-dashboard-meeting-list-out,
+  .moa-dashboard-meeting-list-in,
+  .moa-canvas-stage-control,
+  .moa-canvas-stage-control::before,
+  .moa-canvas-stage-control :where(span, svg),
+  .moa-action-card,
+  .moa-action-row,
+  .moa-action-icon,
+  .moa-action-input,
+  .moa-action-button,
+  .moa-message-enter,
+  .moa-state-callout,
+  .moa-node-board,
+  .moa-node-card,
+  .moa-node-control,
+  .moa-node-input,
+  .moa-node-enter,
+  .moa-node-menu {
+    filter: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .moa-route-exit-overlay {
+    display: none !important;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    transition: none !important;
+  }
+
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    filter: none !important;
+    transform: none !important;
   }
 
   .panelFoldHeader::after {

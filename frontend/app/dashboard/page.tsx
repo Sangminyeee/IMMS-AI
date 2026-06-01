@@ -8,7 +8,9 @@ import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { formatDashboardDateTime, getMeetingStatusLabel } from "@/components/dashboard/dashboardUtils";
 import type { DashboardMeeting, MeetingStatusFilter } from "@/components/dashboard/types";
 import { buildPrintableSummaryDocumentHtml } from "@/components/canvas/summaryDocumentHelpers";
+import { useRequireAuth } from "@/components/auth/useRequireAuth";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCanvasWorkspaceState, saveCanvasWorkspacePatch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -151,7 +153,8 @@ function formatMeetingDuration(startedAt?: string, endedAt?: string) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { loading: authLoading, signOut } = useAuth();
+  const { user } = useRequireAuth();
 
   const [meetings, setMeetings] = useState<DashboardMeeting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,10 +174,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
-    if (!authLoading && !user) {
-      console.log("❌ Dashboard - No user, redirecting to /login");
-      router.push("/login");
-    }
   }, [user, authLoading, router]);
 
   useEffect(() => {
@@ -418,6 +417,33 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
+  const selectedResultDialogMeeting = selectedResultPresence.presentValue;
+  const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
+  const selectedResultError = selectedResultDialogMeeting ? resultErrors[selectedResultDialogMeeting.id] : "";
+  const selectedResultRebuildMessage = selectedResultDialogMeeting ? resultRebuildMessages[selectedResultDialogMeeting.id] : "";
+  const selectedResultSavedAt = selectedResultDialogMeeting ? resultSavedAt[selectedResultDialogMeeting.id] : "";
+  const selectedResultLoading = selectedResultDialogMeeting ? resultLoadingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultRebuilding = selectedResultDialogMeeting ? resultRebuildingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
+  const selectedResultCount = getFinalResultCount(selectedResultSummary);
+  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
+  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
+  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
+  const selectedResultDocumentHtml = selectedResultMarkdown
+    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
+    : "";
+  const selectedResultStatusLabel = selectedResultLoading
+    ? "확인 중"
+    : selectedResultRebuilding
+      ? "재구성 중"
+      : selectedResultHasFinalResult
+        ? "저장됨"
+        : "없음";
+  const selectedResultDuration = selectedResultDialogMeeting
+    ? formatMeetingDuration(selectedResultDialogMeeting.started_at, selectedResultDialogMeeting.ended_at)
+    : "";
+
   if (authLoading) {
     console.log("⏳ Dashboard - Auth loading...");
     return (
@@ -442,31 +468,6 @@ export default function DashboardPage() {
   }
 
   console.log("🎨 Dashboard - Rendering UI with", meetings.length, "meetings");
-
-  const selectedResultSummary = selectedResultMeeting ? resultSummaries[selectedResultMeeting.id] : null;
-  const selectedResultError = selectedResultMeeting ? resultErrors[selectedResultMeeting.id] : "";
-  const selectedResultRebuildMessage = selectedResultMeeting ? resultRebuildMessages[selectedResultMeeting.id] : "";
-  const selectedResultSavedAt = selectedResultMeeting ? resultSavedAt[selectedResultMeeting.id] : "";
-  const selectedResultLoading = selectedResultMeeting ? resultLoadingMeetingId === selectedResultMeeting.id : false;
-  const selectedResultRebuilding = selectedResultMeeting ? resultRebuildingMeetingId === selectedResultMeeting.id : false;
-  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
-  const selectedResultCount = getFinalResultCount(selectedResultSummary);
-  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
-  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
-  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
-  const selectedResultDocumentHtml = selectedResultMarkdown
-    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
-    : "";
-  const selectedResultStatusLabel = selectedResultLoading
-    ? "확인 중"
-    : selectedResultRebuilding
-      ? "재구성 중"
-    : selectedResultHasFinalResult
-      ? "저장됨"
-      : "없음";
-  const selectedResultDuration = selectedResultMeeting
-    ? formatMeetingDuration(selectedResultMeeting.started_at, selectedResultMeeting.ended_at)
-    : "";
 
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
@@ -495,9 +496,9 @@ export default function DashboardPage() {
         }}
       />
 
-      {selectedResultMeeting ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f172a]/42 p-[clamp(14px,2vw,28px)] backdrop-blur-[3px]">
-          <div className="moa-font-pretendard flex max-h-[92vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-[30px] border border-[#dbe7f5] bg-[#f8f8f8] shadow-[0_30px_90px_rgba(15,23,42,0.18)]">
+      {selectedResultPresence.shouldRender && selectedResultDialogMeeting ? (
+        <div className="moa-popover-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#0f172a]/42 p-[clamp(14px,2vw,28px)] backdrop-blur-[3px]" data-exiting={selectedResultPresence.isExiting}>
+          <div className="moa-popover-panel moa-font-pretendard flex max-h-[92vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-[30px] border border-[#dbe7f5] bg-[#f8f8f8] shadow-[0_30px_90px_rgba(15,23,42,0.18)]" data-exiting={selectedResultPresence.isExiting}>
             <div className="relative overflow-hidden border-b border-[#e1e7f2] bg-white px-[clamp(22px,3vw,42px)] py-[clamp(20px,3vh,30px)]">
               <div className="moa-dashboard-primary-button absolute inset-x-0 top-0 h-[5px]" />
               <div className="flex flex-wrap items-start justify-between gap-5">
@@ -511,24 +512,24 @@ export default function DashboardPage() {
                     </span>
                     <span className="inline-flex h-[30px] items-center rounded-full border border-[#e1e7f2] bg-white px-3">
                       <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
-                        {getMeetingStatusLabel(selectedResultMeeting.status)}
+                        {getMeetingStatusLabel(selectedResultDialogMeeting.status)}
                       </span>
                     </span>
                   </div>
                   <h2 className="mt-5 truncate text-[clamp(24px,2.4vw,32px)] font-bold leading-[1.35] tracking-[-0.8px] text-[#181818]">
-                    {selectedResultMeeting.title}
+                    {selectedResultDialogMeeting.title}
                   </h2>
                   <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">
-                    <span>생성 {formatDashboardDateTime(selectedResultMeeting.created_at)}</span>
+                    <span>생성 {formatDashboardDateTime(selectedResultDialogMeeting.created_at)}</span>
                     {selectedResultDuration ? <span>진행 {selectedResultDuration}</span> : null}
-                    <span>종료 {formatDashboardDateTime(selectedResultMeeting.ended_at)}</span>
+                    <span>종료 {formatDashboardDateTime(selectedResultDialogMeeting.ended_at)}</span>
                     <span>결과 저장 {formatDashboardDateTime(selectedResultSavedAt)}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => handleJoinMeeting(selectedResultMeeting.id)}
+                    onClick={() => handleJoinMeeting(selectedResultDialogMeeting.id)}
                     className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff]"
                   >
                     <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
@@ -596,14 +597,14 @@ export default function DashboardPage() {
                   <div className="mt-6 flex flex-wrap gap-3">
                     <button
                       type="button"
-                      onClick={() => void handleOpenMeetingResult(selectedResultMeeting)}
+                      onClick={() => void handleOpenMeetingResult(selectedResultDialogMeeting)}
                       className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff]"
                     >
                       <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">다시 시도</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => void handleRebuildFinalResult(selectedResultMeeting)}
+                      onClick={() => void handleRebuildFinalResult(selectedResultDialogMeeting)}
                       disabled={selectedResultRebuilding}
                       className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff] disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -630,7 +631,7 @@ export default function DashboardPage() {
                   <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
                     <button
                       type="button"
-                      onClick={() => void handleRebuildFinalResult(selectedResultMeeting)}
+                      onClick={() => void handleRebuildFinalResult(selectedResultDialogMeeting)}
                       disabled={selectedResultRebuilding}
                       className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff] disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -640,7 +641,7 @@ export default function DashboardPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleJoinMeeting(selectedResultMeeting.id)}
+                      onClick={() => handleJoinMeeting(selectedResultDialogMeeting.id)}
                       className="moa-dashboard-primary-button inline-flex h-[40px] items-center justify-center rounded-full px-6 shadow-[0_12px_28px_rgba(5,66,255,0.18)] transition"
                     >
                       <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">회의 화면으로 이동</span>

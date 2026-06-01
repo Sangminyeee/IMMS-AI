@@ -171,12 +171,12 @@ export default function RegisterPage() {
 
         {error ? <div className="rounded-[12px] border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div> : null}
 
-        <MoaButton type="submit" disabled={loading} fullWidth size="lg" className="!mt-[28px] !h-[38px] !rounded-[10px] !text-[13px]">
+        <MoaButton type="submit" disabled={loading} fullWidth size="lg" className="!mt-[24px] !h-[48px] !rounded-[14px] !text-[15px]">
           {loading ? "가입 중..." : "회원가입"}
         </MoaButton>
       </form>
 
-      <p className="mt-4 text-center text-[12px] leading-[17px] text-[var(--moa-muted)]">
+      <p className="mt-5 text-center text-[13px] font-medium leading-[18px] tracking-[-0.03px] text-[var(--moa-muted)]">
         이미 계정이 있으신가요?{" "}
         <AuthTransitionLink href="/login" className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-hover)]">
           로그인

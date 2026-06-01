@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAuth } from "@/contexts/AuthContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
@@ -14,6 +13,8 @@ import type {
   MeetingState,
 } from "@/lib/types";
 import MeetingCanvasTab, { type MeetingAgenda as CanvasAgenda, type MeetingTranscript as CanvasTranscript } from "@/components/MeetingCanvasTab";
+import { useRequireAuth } from "@/components/auth/useRequireAuth";
+import { useMoaRouteTransition } from "@/components/moa-ui/MoaRouteTransitionLink";
 
 interface Transcript {
   id: string;
@@ -225,8 +226,9 @@ function getSpeechDetectionDecision(
 function HomeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading } = useAuth();
+  const { user, checkingAuth } = useRequireAuth();
   const meetingId = searchParams.get("meeting_id");
+  const dashboardRouteTransition = useMoaRouteTransition({ href: "/dashboard" });
 
   const [meetingTitle, setMeetingTitle] = useState("회의 워크스페이스");
   const [meetingStatus, setMeetingStatus] = useState("");
@@ -245,7 +247,6 @@ function HomeContent() {
   const [incomingCanvasSync, setIncomingCanvasSync] = useState<CanvasRealtimeSyncPayload | null>(null);
   const [incomingCanvasNodePreview, setIncomingCanvasNodePreview] = useState<CanvasNodePreviewPayload | null>(null);
   const [incomingCanvasEditPresence, setIncomingCanvasEditPresence] = useState<CanvasEditPresencePayload | null>(null);
-  const [incomingCanvasStateRequestId, setIncomingCanvasStateRequestId] = useState("");
   const [calibrationState, setCalibrationState] = useState<CalibrationState>("idle");
   const [calibrationSecondsLeft, setCalibrationSecondsLeft] = useState(0);
   const [fusionSelectedUserId, setFusionSelectedUserId] = useState<string | null>(null);
@@ -393,14 +394,10 @@ function HomeContent() {
   }, []);
 
   useEffect(() => {
-    if (!authLoading) {
-      if (!user) {
-        router.push("/login");
-      } else if (!meetingId) {
-        router.push("/dashboard");
-      }
+    if (!checkingAuth && user && !meetingId) {
+      router.replace("/dashboard");
     }
-  }, [user, authLoading, meetingId, router]);
+  }, [user, checkingAuth, meetingId, router]);
 
   useEffect(() => {
     if (!user || !meetingId) return;
@@ -412,7 +409,6 @@ function HomeContent() {
     setMeetingTimerStartedAtMs(null);
     setMeetingTimerEndedAtMs(null);
     clearIdeationBubbleFinalization();
-    setIncomingCanvasStateRequestId("");
 
     const loadMeeting = async () => {
       setLoadingMeeting(true);
@@ -859,13 +855,6 @@ function HomeContent() {
       });
     });
 
-    wsClient.on("canvas_state_request", (message) => {
-      const payload = getMessagePayload(message);
-      if (!isRecord(payload) || payload.meeting_id !== meetingId) return;
-      if (payload.requested_by === user.id) return;
-      setIncomingCanvasStateRequestId(String(payload.request_id || Date.now()));
-    });
-
     wsClient.on("audio_selection", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload) || payload.meeting_id !== meetingId) return;
@@ -1232,7 +1221,7 @@ function HomeContent() {
         status: "completed",
       });
       wsClientRef.current?.disconnect();
-      router.push("/dashboard");
+      dashboardRouteTransition.startRouteTransition();
     } catch (error) {
       console.error("Failed to end meeting:", error);
       alert("회의 종료에 실패했습니다.");
@@ -1283,7 +1272,7 @@ function HomeContent() {
     }
   }, [meetingId, meetingTitle]);
 
-  if (authLoading || !user || !meetingId || loadingMeeting) {
+  if (checkingAuth || !user || !meetingId || loadingMeeting) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#eaf0f7]">
         <div className="rounded-[28px] border border-white/70 bg-white/85 px-8 py-7 text-center shadow-[0_24px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl">
@@ -1322,7 +1311,6 @@ function HomeContent() {
         onNodePreviewSync={broadcastCanvasNodePreview}
         incomingEditPresence={incomingCanvasEditPresence}
         onEditPresenceSync={broadcastCanvasEditPresence}
-        incomingCanvasStateRequestId={incomingCanvasStateRequestId}
         liveSpeechPreview={liveSpeechPreview}
         isRecording={isRecording}
         recordingStartedAtMs={recordingStartedAtMs}
@@ -1345,6 +1333,7 @@ function HomeContent() {
             : "WebSocket 연결 안 됨")
         }
       />
+      {dashboardRouteTransition.exiting ? <div aria-hidden="true" className="moa-route-exit-overlay fixed inset-0 z-[9999] pointer-events-none" /> : null}
     </div>
   );
 }

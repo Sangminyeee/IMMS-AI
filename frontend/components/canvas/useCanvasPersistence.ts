@@ -109,6 +109,7 @@ type UseCanvasPersistenceOptions = {
   personalNotes: PersonalNoteModel[];
   problemDefinitionStagePending: boolean;
   problemGroups: ProblemGroupModel[];
+  problemStructurePending: boolean;
   problemStructureStatePayload: CanvasProblemStructureState;
   sharedSyncEnabled: boolean;
   stage: CanvasStage;
@@ -142,6 +143,7 @@ export function useCanvasPersistence({
   personalNotes,
   problemDefinitionStagePending,
   problemGroups,
+  problemStructurePending,
   problemStructureStatePayload,
   sharedSyncEnabled,
   stage,
@@ -218,7 +220,11 @@ export function useCanvasPersistence({
       patch.problem_groups = nextProblemGroupsPayload;
       hasChanges = true;
     }
-    if (sharedSyncEnabled && nextSignatures.problem_structure !== previousSignatures.problem_structure) {
+    if (
+      sharedSyncEnabled &&
+      !problemStructurePending &&
+      nextSignatures.problem_structure !== previousSignatures.problem_structure
+    ) {
       patch.problem_structure = problemStructureStatePayload;
       hasChanges = true;
     }
@@ -231,7 +237,11 @@ export function useCanvasPersistence({
       patch.final_solution_summary = buildFinalSolutionSummaryPayload(finalSummaryDocument);
       hasChanges = true;
     }
-    if (sharedSyncEnabled && nextSignatures.artifact_generation !== previousSignatures.artifact_generation) {
+    if (
+      sharedSyncEnabled &&
+      !problemStructurePending &&
+      nextSignatures.artifact_generation !== previousSignatures.artifact_generation
+    ) {
       patch.artifact_generation = normalizeCanvasArtifactGeneration(artifactGeneration);
       hasChanges = true;
     }
@@ -296,6 +306,7 @@ export function useCanvasPersistence({
     persistedSharedImportedState,
     problemDefinitionStagePending,
     problemGroups,
+    problemStructurePending,
     problemStructureStatePayload,
     sharedSyncEnabled,
     stage,
@@ -407,9 +418,11 @@ export function useCanvasPersistence({
           canvasItems: latestSharedWorkspaceRef.current.canvasItems.length,
           nodePositions: summarizeNodePositionsForDebug(latestSharedWorkspaceRef.current.nodePositions),
         });
-        flushCanvasWorkspacePatch(
-          buildCurrentWorkspacePatchPayload(latestSharedWorkspaceRef.current),
-        );
+        const workspacePatch = {
+          ...buildCurrentWorkspacePatchPayload(latestSharedWorkspaceRef.current),
+          stage: undefined,
+        };
+        flushCanvasWorkspacePatch(workspacePatch);
       }
       if (latestPersonalNotesPayloadRef.current) {
         flushCanvasPersonalNotes(latestPersonalNotesPayloadRef.current);

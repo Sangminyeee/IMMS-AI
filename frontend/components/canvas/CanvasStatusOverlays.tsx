@@ -4,12 +4,14 @@ import { memo, useEffect, useState } from "react";
 
 type CanvasStageEmptyOverlayProps = {
   eyebrow: string;
+  exiting?: boolean;
   message: string;
   tone: "problem" | "summary";
 };
 
 export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
   eyebrow,
+  exiting = false,
   message,
   tone,
 }: CanvasStageEmptyOverlayProps) {
@@ -19,8 +21,8 @@ export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
       : "text-sm font-semibold uppercase tracking-[0.16em] text-[#236cf3]";
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
-      <div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 text-center shadow-lg shadow-slate-200/70">
+    <div className="moa-popover-backdrop pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-white/70 backdrop-blur-[1px]" data-exiting={exiting}>
+      <div className="moa-popover-panel rounded-2xl border border-slate-200 bg-white px-6 py-5 text-center shadow-lg shadow-slate-200/70" data-exiting={exiting}>
         <p className={eyebrowClassName}>{eyebrow}</p>
         <p className="mt-2 text-base text-slate-700">
           {message}
@@ -30,10 +32,10 @@ export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
   );
 });
 
-export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinitionPreparingOverlay() {
+export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinitionPreparingOverlay({ exiting = false }: { exiting?: boolean }) {
   return (
-    <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
-      <div className="w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]">
+    <div className="moa-popover-backdrop absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]" data-exiting={exiting}>
+      <div className="moa-popover-panel w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]" data-exiting={exiting}>
         <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[#eef8ff] text-4xl">
           ⏳
         </div>
@@ -51,10 +53,10 @@ export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinition
   );
 });
 
-export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendingOverlay() {
+export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendingOverlay({ exiting = false }: { exiting?: boolean }) {
   return (
-    <div className="absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]">
-      <div className="w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]">
+    <div className="moa-popover-backdrop absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]" data-exiting={exiting}>
+      <div className="moa-popover-panel w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]" data-exiting={exiting}>
         <div className="mx-auto flex w-full max-w-[320px] items-center justify-center gap-5">
           <div className="grid grid-cols-2 gap-3">
             {[0, 1, 2, 3].map((item) => (
@@ -90,7 +92,7 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
 export const CanvasGenerationBanner = memo(function CanvasGenerationBanner({ message }: { message: string }) {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-[24px] z-[7] flex justify-center px-4" aria-live="polite">
-      <div className="max-w-[min(720px,calc(100%-32px))] rounded-full border border-[#b9dcff] bg-white/95 px-4 py-2 text-center text-[12px] font-semibold leading-5 text-[#236cf3] shadow-[0_8px_24px_rgba(35,108,243,0.12)] backdrop-blur">
+      <div key={message} className="moa-toast-pop max-w-[min(720px,calc(100%-32px))] rounded-full border border-[#b9dcff] bg-white/95 px-4 py-2 text-center text-[12px] font-semibold leading-5 text-[#236cf3] shadow-[0_8px_24px_rgba(35,108,243,0.12)] backdrop-blur">
         {message}
       </div>
     </div>
@@ -110,12 +112,12 @@ export const CanvasStatusToast = memo(function CanvasStatusToast({ message }: { 
 
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 bottom-[clamp(84px,12vh,112px)] z-10 flex justify-center px-4 transition-opacity duration-700 ease-out ${
-        visible ? "opacity-100" : "opacity-0"
+      className={`pointer-events-none absolute inset-x-0 bottom-[clamp(84px,12vh,112px)] z-10 flex justify-center px-4 transition-[opacity,transform] duration-700 ease-out ${
+        visible ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"
       }`}
       aria-live="polite"
     >
-      <div className="max-w-[min(640px,calc(100%-32px))] rounded-full border border-black/10 bg-white/95 px-4 py-2 text-center text-xs leading-5 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] backdrop-blur-sm">
+      <div key={message} className="moa-toast-pop max-w-[min(640px,calc(100%-32px))] rounded-full border border-black/10 bg-white/95 px-4 py-2 text-center text-xs leading-5 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)] backdrop-blur-sm">
         {message}
       </div>
     </div>

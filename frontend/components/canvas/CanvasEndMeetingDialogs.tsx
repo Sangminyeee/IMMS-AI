@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { useMoaPresence, useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 
 type CanvasEndMeetingDialogPreview = {
   finalCount: number;
@@ -65,12 +66,19 @@ export function CanvasEndMeetingDialogs({
     onBackToConfirm,
     onSaveAndEnd,
   } = handlers;
+  const confirmPresence = useMoaPresenceValue(confirmOpen ? { preview } : null);
+  const summaryPreviewPresence = useMoaPresenceValue(
+    summaryPreviewMarkdown ? { html: summaryPreviewHtml, markdown: summaryPreviewMarkdown } : null,
+  );
+  const finalReportQrPresence = useMoaPresence(finalReportQrOpen);
+  const visiblePreview = confirmPresence.presentValue?.preview ?? preview;
+  const visibleSummaryPreviewHtml = summaryPreviewPresence.presentValue?.html || summaryPreviewHtml;
 
   return (
     <>
-      {confirmOpen ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[#0f172a]/42 p-5 backdrop-blur-[3px]">
-          <div className="moa-font-pretendard w-full max-w-[592px] overflow-hidden rounded-[28px] border border-[#dbe7f5] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.18)]">
+      {confirmPresence.shouldRender ? (
+        <div className="moa-popover-backdrop fixed inset-0 z-[80] flex items-center justify-center bg-[#0f172a]/42 p-5 backdrop-blur-[3px]" data-exiting={confirmPresence.isExiting}>
+          <div className="moa-popover-panel moa-font-pretendard w-full max-w-[592px] overflow-hidden rounded-[28px] border border-[#dbe7f5] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.18)]" data-exiting={confirmPresence.isExiting}>
             <div className="relative overflow-hidden border-b border-[#e7edf6] px-8 pb-7 pt-7">
               <div className="moa-dashboard-primary-button absolute inset-x-0 top-0 h-[5px]" />
               <div className="flex items-center justify-between gap-4">
@@ -82,10 +90,10 @@ export function CanvasEndMeetingDialogs({
                 </span>
               </div>
               <h2 className="mt-8 text-[26px] font-bold leading-[1.35] tracking-[-0.65px] text-[#181818]">
-                {(preview?.finalCount || 0) > 0 ? "회의를 종료할까요?" : "최종 정리 문서 없이 종료할까요?"}
+                {(visiblePreview?.finalCount || 0) > 0 ? "회의를 종료할까요?" : "최종 정리 문서 없이 종료할까요?"}
               </h2>
               <p className="mt-3 max-w-[470px] text-[14px] font-medium leading-[1.8] tracking-[-0.35px] text-[#667085]">
-                {(preview?.finalCount || 0) > 0
+                {(visiblePreview?.finalCount || 0) > 0
                   ? "현재 최종 정리 문서가 대시보드 결과 확인에 저장됩니다."
                   : "현재 저장할 최종 정리 문서가 없습니다. 그대로 종료하면 대시보드 결과 확인에 표시할 내용이 없습니다."}
               </p>
@@ -97,7 +105,7 @@ export function CanvasEndMeetingDialogs({
                     저장될 문서 항목
                   </p>
                   <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">
-                    {preview?.finalCount || 0}
+                    {visiblePreview?.finalCount || 0}
                     <span className="ml-1 text-[13px] font-semibold text-[#7c7c7c]">개</span>
                   </p>
                 </div>
@@ -106,12 +114,12 @@ export function CanvasEndMeetingDialogs({
                     포함된 문서 섹션
                   </p>
                   <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">
-                    {preview?.topicCount || 0}
+                    {visiblePreview?.topicCount || 0}
                     <span className="ml-1 text-[13px] font-semibold text-[#7c7c7c]">개</span>
                   </p>
                 </div>
               </div>
-              {(preview?.finalCount || 0) === 0 ? (
+              {(visiblePreview?.finalCount || 0) === 0 ? (
                 <p className="rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] px-4 py-3 text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#236cf3]">
                   결과를 남기려면 요약 단계에서 최종 정리 문서를 생성하거나 직접 작성해 주세요.
                 </p>
@@ -133,13 +141,13 @@ export function CanvasEndMeetingDialogs({
                 onClick={onConfirm}
                 disabled={saving}
                 className={`inline-flex h-[42px] min-w-[148px] items-center justify-center rounded-full px-6 shadow-[0_12px_28px_rgba(5,66,255,0.22)] transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                  (preview?.finalCount || 0) > 0
+                  (visiblePreview?.finalCount || 0) > 0
                     ? "moa-dashboard-primary-button"
                     : "bg-[#484e54] hover:bg-[#3c4147]"
                 }`}
               >
                 <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">
-                  {saving ? "저장 중" : (preview?.finalCount || 0) > 0 ? "저장하고 종료" : "결과 없이 종료"}
+                  {saving ? "저장 중" : (visiblePreview?.finalCount || 0) > 0 ? "저장하고 종료" : "결과 없이 종료"}
                 </span>
               </button>
             </div>
@@ -147,8 +155,8 @@ export function CanvasEndMeetingDialogs({
         </div>
       ) : null}
 
-      {summaryPreviewMarkdown ? (
-        <div className="moa-font-pretendard fixed inset-0 z-[85] flex flex-col bg-[#f8f8f8]">
+      {summaryPreviewPresence.shouldRender ? (
+        <div className="moa-popover-fullscreen moa-font-pretendard fixed inset-0 z-[85] flex flex-col bg-[#f8f8f8]" data-exiting={summaryPreviewPresence.isExiting}>
           <header className="flex min-h-[76px] items-center justify-between gap-5 border-b border-[#e1e7f2] bg-white px-[clamp(24px,3.2vw,56px)] shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
             <div className="flex min-w-0 items-center gap-4">
               <MoaLogo showText={false} markClassName="h-[24px] w-[39px]" />
@@ -215,7 +223,7 @@ export function CanvasEndMeetingDialogs({
                     문서 항목
                   </p>
                   <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">
-                    {preview?.finalCount || 0}
+                    {visiblePreview?.finalCount || 0}
                     <span className="ml-1 text-[13px] font-semibold text-[#7c7c7c]">개</span>
                   </p>
                 </div>
@@ -224,7 +232,7 @@ export function CanvasEndMeetingDialogs({
                     문서 섹션
                   </p>
                   <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">
-                    {preview?.topicCount || 0}
+                    {visiblePreview?.topicCount || 0}
                     <span className="ml-1 text-[13px] font-semibold text-[#7c7c7c]">개</span>
                   </p>
                 </div>
@@ -236,14 +244,14 @@ export function CanvasEndMeetingDialogs({
             <main className="min-h-0 rounded-[30px] border border-[#e1e7f2] bg-white p-3 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
               <iframe
                 title="최종 정리 문서 미리보기"
-                srcDoc={summaryPreviewHtml}
+                srcDoc={visibleSummaryPreviewHtml}
                 className="h-full w-full rounded-[22px] border border-[#edf1f6] bg-white"
               />
             </main>
           </div>
-          {finalReportQrOpen ? (
-            <div className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0f172a]/42 p-5 backdrop-blur-[3px]">
-              <div className="moa-font-pretendard w-full max-w-[420px] overflow-hidden rounded-[28px] border border-[#dbe7f5] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.18)]">
+          {finalReportQrPresence.shouldRender ? (
+            <div className="moa-popover-backdrop fixed inset-0 z-[90] flex items-center justify-center bg-[#0f172a]/42 p-5 backdrop-blur-[3px]" data-exiting={finalReportQrPresence.isExiting}>
+              <div className="moa-popover-panel moa-font-pretendard w-full max-w-[420px] overflow-hidden rounded-[28px] border border-[#dbe7f5] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.18)]" data-exiting={finalReportQrPresence.isExiting}>
                 <div className="relative border-b border-[#e7edf6] px-6 pb-5 pt-6">
                   <div className="moa-dashboard-primary-button absolute inset-x-0 top-0 h-[5px]" />
                   <div className="flex items-center justify-between gap-3">

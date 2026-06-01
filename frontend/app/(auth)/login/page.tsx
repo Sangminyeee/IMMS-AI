@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEventHandler } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
@@ -55,15 +55,31 @@ function getGuestLoginErrorMessage(error: unknown) {
   return message || "게스트 로그인에 실패했습니다.";
 }
 
+function getSafeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/dashboard";
+  if (value.startsWith("/login") || value.startsWith("/register")) return "/dashboard";
+  return value;
+}
+
+function getLoginNextPath() {
+  if (typeof window === "undefined") return "/dashboard";
+  return getSafeNextPath(new URLSearchParams(window.location.search).get("next"));
+}
+
 export default function LoginPage() {
   const renderMode = useAuthRenderMode();
   const router = useRouter();
-  const { signIn, signInGuest, loading: authLoading } = useAuth();
+  const { signIn, signInGuest, loading: authLoading, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [guestLoading, setGuestLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+    router.replace(getLoginNextPath());
+  }, [authLoading, router, user]);
 
   const handleSubmit: FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
@@ -76,7 +92,7 @@ export default function LoginPage() {
         setError(getErrorMessage(signInError, "로그인에 실패했습니다."));
         return;
       }
-      router.push("/dashboard");
+      router.replace(getLoginNextPath());
     } catch (err) {
       setError(getErrorMessage(err, "로그인에 실패했습니다."));
     } finally {
@@ -94,7 +110,7 @@ export default function LoginPage() {
         setError(getGuestLoginErrorMessage(guestError));
         return;
       }
-      router.push("/dashboard");
+      router.replace(getLoginNextPath());
     } catch (err) {
       setError(getGuestLoginErrorMessage(err));
     } finally {
@@ -166,18 +182,19 @@ export default function LoginPage() {
 
         {error ? <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div> : null}
 
-        <MoaButton type="submit" disabled={loading || guestLoading} fullWidth size="lg" className="!mt-[42px] !h-[38px] !rounded-[10px] !text-[13px]">
+        <MoaButton type="submit" disabled={loading || guestLoading} fullWidth size="lg" className="!mt-[30px] !h-[48px] !rounded-[14px] !text-[15px]">
           {loading ? "로그인 중..." : "로그인"}
         </MoaButton>
       </form>
 
-      <p className="mt-4 text-center text-[12px] leading-[17px] text-[var(--moa-muted)]">
+      <MoaGuestLoginButton disabled={loading} loading={guestLoading} onClick={handleGuestLogin} />
+
+      <p className="mt-5 text-center text-[13px] font-medium leading-[18px] tracking-[-0.03px] text-[var(--moa-muted)]">
         계정이 없으신가요?{" "}
         <AuthTransitionLink href="/register" className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-hover)]">
           회원가입
         </AuthTransitionLink>
       </p>
-      <MoaGuestLoginButton disabled={loading} loading={guestLoading} onClick={handleGuestLogin} />
     </>
   );
 }

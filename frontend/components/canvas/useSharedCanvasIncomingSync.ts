@@ -11,11 +11,17 @@ import {
   type AgendaOverride,
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
-import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
+import {
+  normalizeCanvasArtifactGeneration,
+  PROBLEM_DEFINITION_STEP1_ARTIFACT,
+  PROBLEM_DEFINITION_STEP2_ARTIFACT,
+  SUMMARY_DOCUMENT_ARTIFACT,
+} from "@/components/canvas/canvasArtifactGeneration";
 import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
   hydrateProblemStructureState,
+  type ProblemStructureArtifactMeta,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -106,6 +112,7 @@ type UseSharedCanvasIncomingSyncOptions = {
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
   setProblemGroups: Dispatch<SetStateAction<ProblemGroupModel[]>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
+  setProblemStructureArtifactMeta: Dispatch<SetStateAction<ProblemStructureArtifactMeta>>;
   setProblemStructureNodes: Dispatch<SetStateAction<ProblemStructureNodeViewModel[]>>;
   setProblemStructurePending: Dispatch<SetStateAction<boolean>>;
   setSummaryDocumentDraftDirty: Dispatch<SetStateAction<boolean>>;
@@ -136,6 +143,105 @@ function shouldApplyIncomingIdeationBubbleGraph(
   if ((incoming.update_cycle || 0) > (current.update_cycle || 0)) return true;
   if ((incoming.update_cycle || 0) < (current.update_cycle || 0)) return false;
   return getSyncUpdatedAtMs(incoming.updated_at) > getSyncUpdatedAtMs(current.updated_at);
+}
+
+function problemStructureRevisionOf(raw: CanvasProblemStructureState | null | undefined) {
+  const value = Number(raw?.revision || 0);
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function problemStructureUpdatedAtMs(raw: CanvasProblemStructureState | null | undefined) {
+  const parsed = raw?.updated_at ? Date.parse(raw.updated_at) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function problemStructureHasGroups(raw: CanvasProblemStructureState | null | undefined) {
+  return (raw?.groups || []).some((group) => group && (group.node_ids || []).length > 0);
+}
+
+function shouldApplyIncomingProblemStructure(
+  incoming: CanvasProblemStructureState | null | undefined,
+  current: CanvasProblemStructureState | null | undefined,
+) {
+  const incomingRevision = problemStructureRevisionOf(incoming);
+  const currentRevision = problemStructureRevisionOf(current);
+  if (incomingRevision > currentRevision) return true;
+  if (incomingRevision < currentRevision) return false;
+  if (problemStructureHasGroups(current) && !problemStructureHasGroups(incoming)) {
+    return false;
+  }
+  return problemStructureUpdatedAtMs(incoming) >= problemStructureUpdatedAtMs(current);
+}
+
+function mergeIncomingArtifactGeneration(
+  current: CanvasArtifactGenerationMap,
+  incoming: CanvasArtifactGenerationMap,
+) {
+  const merged: CanvasArtifactGenerationMap = { ...current };
+  Object.entries(incoming).forEach(([key, incomingEntry]) => {
+    const currentEntry = current[key];
+    const currentVersion = Number(currentEntry?.version || 0);
+    const incomingVersion = Number(incomingEntry?.version || 0);
+    if (currentVersion > incomingVersion) return;
+    const currentGenerationId = (currentEntry?.generation_id || "").trim();
+    const incomingGenerationId = (incomingEntry.generation_id || "").trim();
+    if (
+      currentVersion === incomingVersion &&
+      currentGenerationId &&
+      incomingGenerationId &&
+      currentGenerationId !== incomingGenerationId &&
+      incomingEntry.status !== "generating"
+    ) {
+      return;
+    }
+    if (
+      currentVersion === incomingVersion &&
+      currentEntry?.status === "ready" &&
+      incomingEntry.status !== "ready" &&
+      (!currentGenerationId || !incomingGenerationId || currentGenerationId === incomingGenerationId)
+    ) {
+      return;
+    }
+    merged[key] = incomingEntry;
+  });
+  return normalizeCanvasArtifactGeneration(merged);
+}
+
+function shouldApplyArtifactScopedWorkspace(
+  current: CanvasArtifactGenerationMap,
+  incoming: CanvasArtifactGenerationMap,
+  artifactKey: string,
+) {
+  const incomingEntry = incoming[artifactKey];
+  if (!incomingEntry) return true;
+
+  const currentEntry = current[artifactKey];
+  const currentVersion = Number(currentEntry?.version || 0);
+  const incomingVersion = Number(incomingEntry.version || 0);
+  if (currentVersion > incomingVersion) return false;
+
+  const currentGenerationId = (currentEntry?.generation_id || "").trim();
+  const incomingGenerationId = (incomingEntry.generation_id || "").trim();
+  if (
+    currentVersion === incomingVersion &&
+    currentGenerationId &&
+    incomingGenerationId &&
+    currentGenerationId !== incomingGenerationId &&
+    incomingEntry.status !== "generating"
+  ) {
+    return false;
+  }
+
+  if (
+    currentVersion === incomingVersion &&
+    currentEntry?.status === "ready" &&
+    incomingEntry.status !== "ready" &&
+    (!currentGenerationId || !incomingGenerationId || currentGenerationId === incomingGenerationId)
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function positionsEqual(
@@ -182,6 +288,7 @@ export function useSharedCanvasIncomingSync({
   setNodePositions,
   setProblemGroups,
   setProblemStructureGroups,
+  setProblemStructureArtifactMeta,
   setProblemStructureNodes,
   setProblemStructurePending,
   setSummaryDocumentDraftDirty,
@@ -303,6 +410,232 @@ export function useSharedCanvasIncomingSync({
       return;
     }
 
+    const applyRemoteWorkspace = (
+      nextWorkspace: SharedWorkspaceSnapshot,
+      applyState: () => void,
+    ) => {
+      applyingRemoteSharedSyncRef.current = true;
+      latestSharedWorkspaceRef.current = nextWorkspace;
+      lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
+        meeting_goal: nextWorkspace.meetingGoal,
+        meeting_goal_context: nextWorkspace.meetingGoalContext,
+        stage: nextWorkspace.stage,
+        agenda_overrides: nextWorkspace.agendaOverrides,
+        canvas_items: nextWorkspace.canvasItems,
+        custom_groups: serializeCustomGroups(nextWorkspace.customGroups),
+        problem_groups: nextWorkspace.problemGroups,
+        problem_structure: nextWorkspace.problemStructure,
+        solution_topics: [],
+        final_solution_summary: buildFinalSolutionSummaryPayload(nextWorkspace.finalSolutionSummary),
+        artifact_generation: nextWorkspace.artifactGeneration,
+        ideation_bubble_graph: nextWorkspace.ideationBubbleGraph,
+        node_positions: nextWorkspace.nodePositions,
+        imported_state: nextWorkspace.importedState,
+      });
+      lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
+        meetingGoal: nextWorkspace.meetingGoal,
+        meetingGoalContext: nextWorkspace.meetingGoalContext,
+        stage: nextWorkspace.stage,
+        agendaOverrides: nextWorkspace.agendaOverrides,
+        canvasItems: nextWorkspace.canvasItems,
+        customGroups: nextWorkspace.customGroups,
+        problemGroups: nextWorkspace.problemGroups,
+        problemStructure: nextWorkspace.problemStructure,
+        finalSolutionSummary: nextWorkspace.finalSolutionSummary,
+        artifactGeneration: nextWorkspace.artifactGeneration,
+        ideationBubbleGraph: nextWorkspace.ideationBubbleGraph,
+        nodePositions: nextWorkspace.nodePositions,
+        importedState: nextWorkspace.importedState,
+      });
+      applyState();
+      window.setTimeout(() => {
+        applyingRemoteSharedSyncRef.current = false;
+      }, 0);
+    };
+
+    const currentWorkspace = latestSharedWorkspaceRef.current;
+    const syncScope = incomingSharedCanvasSync.sync_scope || "full";
+    if (syncScope === "artifact_generation") {
+      const nextArtifactGeneration = mergeIncomingArtifactGeneration(
+        currentWorkspace.artifactGeneration,
+        normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {}),
+      );
+      applyRemoteWorkspace(
+        {
+          ...currentWorkspace,
+          stage,
+          artifactGeneration: nextArtifactGeneration,
+        },
+        () => {
+          setArtifactGeneration(nextArtifactGeneration);
+        },
+      );
+      return;
+    }
+
+    if (syncScope === "ideation_bubble_graph") {
+      const incomingIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+        incomingSharedCanvasSync.ideation_bubble_graph,
+      );
+      const currentIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+        currentWorkspace.ideationBubbleGraph,
+      );
+      const nextIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
+        incomingIdeationBubbleGraph,
+        currentIdeationBubbleGraph,
+      )
+        ? incomingIdeationBubbleGraph
+        : currentIdeationBubbleGraph;
+      applyRemoteWorkspace(
+        {
+          ...currentWorkspace,
+          stage,
+          ideationBubbleGraph: nextIdeationBubbleGraph,
+        },
+        () => {
+          setIdeationBubbleGraph(nextIdeationBubbleGraph);
+        },
+      );
+      return;
+    }
+
+    if (syncScope === "summary_document") {
+      const incomingArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
+      const shouldApplySummaryDocument = shouldApplyArtifactScopedWorkspace(
+        currentWorkspace.artifactGeneration,
+        incomingArtifactGeneration,
+        SUMMARY_DOCUMENT_ARTIFACT,
+      );
+      const nextFinalSummary = normalizeFinalSolutionSummaryPayload(
+        shouldApplySummaryDocument
+          ? incomingSharedCanvasSync.final_solution_summary || currentWorkspace.finalSolutionSummary
+          : currentWorkspace.finalSolutionSummary,
+      );
+      const nextArtifactGeneration = mergeIncomingArtifactGeneration(currentWorkspace.artifactGeneration, incomingArtifactGeneration);
+      applyRemoteWorkspace(
+        {
+          ...currentWorkspace,
+          stage,
+          finalSolutionSummary: nextFinalSummary,
+          artifactGeneration: nextArtifactGeneration,
+        },
+        () => {
+          if (shouldApplySummaryDocument) {
+            setFinalSummaryDocument(nextFinalSummary);
+            setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
+            setSummaryDocumentDraftDirty(false);
+            setSummaryDocumentEditMode(false);
+          }
+          setArtifactGeneration(nextArtifactGeneration);
+        },
+      );
+      return;
+    }
+
+    if (syncScope === "problem_groups") {
+      const incomingArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
+      const shouldApplyProblemGroups = shouldApplyArtifactScopedWorkspace(
+        currentWorkspace.artifactGeneration,
+        incomingArtifactGeneration,
+        PROBLEM_DEFINITION_STEP1_ARTIFACT,
+      );
+      const nextProblemGroups = shouldApplyProblemGroups
+        ? hydrateProblemGroups(
+            incomingSharedCanvasSync.problem_groups || [],
+            currentWorkspace.problemGroups,
+          )
+        : currentWorkspace.problemGroups;
+      const nextNodePositions =
+        shouldApplyProblemGroups && incomingSharedCanvasSync.node_positions
+          ? normalizeCanvasNodePositionsForComputedIdeation(incomingSharedCanvasSync.node_positions)
+          : currentWorkspace.nodePositions;
+      const nextArtifactGeneration = mergeIncomingArtifactGeneration(currentWorkspace.artifactGeneration, incomingArtifactGeneration);
+      applyRemoteWorkspace(
+        {
+          ...currentWorkspace,
+          stage,
+          problemGroups: nextProblemGroups,
+          nodePositions: nextNodePositions,
+          artifactGeneration: nextArtifactGeneration,
+        },
+        () => {
+          if (shouldApplyProblemGroups) {
+            setProblemGroups(nextProblemGroups);
+            if (incomingSharedCanvasSync.node_positions) {
+              liveNodePositionsRef.current = nextNodePositions;
+              setNodePositions(nextNodePositions);
+            }
+          }
+          setArtifactGeneration(nextArtifactGeneration);
+        },
+      );
+      return;
+    }
+
+    if (syncScope === "problem_structure") {
+      const incomingArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
+      const shouldApplyProblemStructureArtifact = shouldApplyArtifactScopedWorkspace(
+        currentWorkspace.artifactGeneration,
+        incomingArtifactGeneration,
+        PROBLEM_DEFINITION_STEP2_ARTIFACT,
+      );
+      const incomingProblemGroups = hydrateProblemGroups(
+        incomingSharedCanvasSync.problem_groups || [],
+        currentWorkspace.problemGroups,
+      );
+      const incomingProblemStructure = incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState();
+      const shouldApplyProblemStructure = shouldApplyProblemStructureArtifact && shouldApplyIncomingProblemStructure(
+        incomingProblemStructure,
+        currentWorkspace.problemStructure,
+      );
+      const nextProblemGroups = shouldApplyProblemStructure ? incomingProblemGroups : currentWorkspace.problemGroups;
+      const nextProblemStructure = shouldApplyProblemStructure
+        ? hydrateProblemStructureState(incomingProblemStructure, nextProblemGroups)
+        : hydrateProblemStructureState(currentWorkspace.problemStructure, currentWorkspace.problemGroups);
+      const nextProblemStructurePayload = buildProblemStructureStatePayload({
+        ...nextProblemStructure,
+        phase: problemDefinitionPhase,
+        method: problemStructureMethod,
+        mode: problemDefinitionMode,
+      });
+      const nextNodePositions = shouldApplyProblemStructure && incomingSharedCanvasSync.node_positions
+        ? normalizeCanvasNodePositionsForComputedIdeation(incomingSharedCanvasSync.node_positions)
+        : currentWorkspace.nodePositions;
+      const nextArtifactGeneration = mergeIncomingArtifactGeneration(currentWorkspace.artifactGeneration, incomingArtifactGeneration);
+      applyRemoteWorkspace(
+        {
+          ...currentWorkspace,
+          stage,
+          problemGroups: nextProblemGroups,
+          problemStructure: nextProblemStructurePayload,
+          nodePositions: nextNodePositions,
+          artifactGeneration: nextArtifactGeneration,
+        },
+        () => {
+          if (shouldApplyProblemStructure) {
+            setProblemGroups(nextProblemGroups);
+            setProblemStructureNodes(nextProblemStructure.nodes);
+            setProblemStructureGroups(nextProblemStructure.groups);
+            setProblemStructureArtifactMeta({
+              revision: nextProblemStructure.revision,
+              sourceGenerationId: nextProblemStructure.sourceGenerationId,
+              basedOnTranscriptRevision: nextProblemStructure.basedOnTranscriptRevision,
+              updatedAt: nextProblemStructure.updatedAt,
+            });
+          }
+          if (shouldApplyProblemStructure && incomingSharedCanvasSync.node_positions) {
+            liveNodePositionsRef.current = nextNodePositions;
+            setNodePositions(nextNodePositions);
+          }
+          setArtifactGeneration(nextArtifactGeneration);
+          if (nextArtifactGeneration["problem-definition:structure"]?.status !== "generating") {
+            setProblemStructurePending(false);
+          }
+        },
+      );
+      return;
+    }
+
     const incomingCanvasItems = hydrateCanvasItems(incomingSharedCanvasSync.canvas_items || []);
     const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
     const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
@@ -310,11 +643,16 @@ export function useSharedCanvasIncomingSync({
     const nextIncomingCanvasItems = incomingCanvasItems;
     const currentNodePositionsSnapshot = liveNodePositionsRef.current;
 
-    const nextProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], problemGroups);
-    const nextProblemStructure = hydrateProblemStructureState(
-      incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState(),
-      nextProblemGroups,
+    const incomingProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], problemGroups);
+    const incomingProblemStructure = incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState();
+    const shouldApplyProblemStructure = shouldApplyIncomingProblemStructure(
+      incomingProblemStructure,
+      currentWorkspace.problemStructure,
     );
+    const nextProblemGroups = shouldApplyProblemStructure ? incomingProblemGroups : currentWorkspace.problemGroups;
+    const nextProblemStructure = shouldApplyProblemStructure
+      ? hydrateProblemStructureState(incomingProblemStructure, nextProblemGroups)
+      : hydrateProblemStructureState(currentWorkspace.problemStructure, currentWorkspace.problemGroups);
     const localViewProblemStructurePayload = buildProblemStructureStatePayload({
       ...nextProblemStructure,
       phase: problemDefinitionPhase,
@@ -322,7 +660,10 @@ export function useSharedCanvasIncomingSync({
       mode: problemDefinitionMode,
     });
     const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
-    const nextArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
+    const nextArtifactGeneration = mergeIncomingArtifactGeneration(
+      currentWorkspace.artifactGeneration,
+      normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {}),
+    );
     const incomingIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
       incomingSharedCanvasSync.ideation_bubble_graph,
     );
@@ -343,7 +684,7 @@ export function useSharedCanvasIncomingSync({
       agenda_overrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvas_items: nextIncomingCanvasItems,
       custom_groups: serializeCustomGroups(incomingCustomGroups),
-      problem_groups: incomingSharedCanvasSync.problem_groups || [],
+      problem_groups: nextProblemGroups,
       problem_structure: localViewProblemStructurePayload,
       solution_topics: [],
       final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
@@ -372,7 +713,15 @@ export function useSharedCanvasIncomingSync({
     setProblemGroups(nextProblemGroups);
     setProblemStructureNodes(nextProblemStructure.nodes);
     setProblemStructureGroups(nextProblemStructure.groups);
-    setProblemStructurePending(false);
+    setProblemStructureArtifactMeta({
+      revision: nextProblemStructure.revision,
+      sourceGenerationId: nextProblemStructure.sourceGenerationId,
+      basedOnTranscriptRevision: nextProblemStructure.basedOnTranscriptRevision,
+      updatedAt: nextProblemStructure.updatedAt,
+    });
+    if (nextArtifactGeneration["problem-definition:structure"]?.status !== "generating") {
+      setProblemStructurePending(false);
+    }
     setFinalSummaryDocument(nextFinalSummary);
     setArtifactGeneration(nextArtifactGeneration);
     setIdeationBubbleGraph(nextIdeationBubbleGraph);
@@ -447,6 +796,7 @@ export function useSharedCanvasIncomingSync({
     setMeetingGoalDrafts,
     setNodePositions,
     setProblemGroups,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureNodes,
     setProblemStructurePending,

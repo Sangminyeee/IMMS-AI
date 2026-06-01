@@ -232,6 +232,10 @@ export interface CanvasProblemStructureState {
   phase: "explore" | "structure" | string;
   method: "affinity" | "card-sorting" | string;
   mode?: "" | "manual" | "ai" | string;
+  revision?: number;
+  source_generation_id?: string;
+  based_on_transcript_revision?: number;
+  updated_at?: string;
   nodes: CanvasProblemStructureNode[];
   groups: CanvasProblemStructureGroup[];
 }
@@ -361,6 +365,7 @@ export interface CanvasArtifactGenerationState {
   finished_at?: string;
   error?: string;
   version?: number;
+  input_transcript_revision?: number;
 }
 
 export type CanvasArtifactGenerationMap = Record<string, CanvasArtifactGenerationState>;
@@ -418,6 +423,7 @@ export interface CanvasWorkspacePatchRequest {
   artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
+  llm_cache_reset_prefixes?: string[];
 }
 
 export interface CanvasFinalReportShareResponse {
@@ -477,7 +483,14 @@ export interface CanvasPersonalNotesStateResponse {
 export interface CanvasRealtimeSyncPayload {
   sync_id: string;
   meeting_id: string;
-  sync_scope?: "full" | "node_positions";
+  sync_scope?:
+    | "full"
+    | "node_positions"
+    | "artifact_generation"
+    | "ideation_bubble_graph"
+    | "problem_groups"
+    | "problem_structure"
+    | "summary_document";
   meeting_goal?: string;
   meeting_goal_context?: string;
   updated_by: string;
@@ -565,6 +578,10 @@ export interface CanvasFinalSolutionSummary {
   markdown: string;
   document_blocks?: CanvasSummaryDocumentBlock[];
   document_status?: "empty" | "ready" | "edited" | string;
+  revision?: number;
+  source_generation_id?: string;
+  based_on_transcript_revision?: number;
+  updated_at?: string;
   generated_at?: string;
   used_llm?: boolean;
   warning?: string;
