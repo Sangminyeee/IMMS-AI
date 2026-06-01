@@ -11,17 +11,17 @@ interface MoaTextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
 export function MoaTextField({ className, error, id, label, rightSlot, wrapperClassName, ...props }: MoaTextFieldProps) {
   return (
     <label className={classNames("block", wrapperClassName)} htmlFor={id}>
-      <span className="mb-[6px] block text-[13px] font-bold leading-[18px] text-[var(--moa-text-body)] lg:mb-[clamp(6px,1vh,13px)] lg:text-[clamp(13px,1vw,26px)] lg:leading-[143%]">{label}</span>
+      <span className="mb-[7px] block text-[13px] font-bold leading-[18px] text-[var(--moa-text-body)] lg:mb-[clamp(6px,1vh,13px)] lg:text-[clamp(13px,1vw,26px)] lg:leading-[143%]">{label}</span>
       <span
         className={classNames(
-          "flex h-[38px] items-center rounded-[10px] border bg-[var(--moa-surface-muted)] px-5 transition focus-within:border-[#bdbdbd] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--moa-primary-soft)] lg:h-[clamp(38px,5vh,74px)] lg:rounded-[clamp(10px,1vw,19px)] lg:px-[clamp(20px,2vw,44px)]",
+          "flex h-[48px] items-center rounded-[14px] border bg-[var(--moa-surface-muted)] px-4 transition focus-within:border-[#bdbdbd] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--moa-primary-soft)] lg:h-[clamp(38px,5vh,74px)] lg:rounded-[clamp(10px,1vw,19px)] lg:px-[clamp(20px,2vw,44px)]",
           error ? "border-red-300" : "border-[var(--moa-border)]",
         )}
       >
         <input
           id={id}
           className={classNames(
-            "h-full min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[var(--moa-text-body)] outline-none placeholder:text-[#5c5c5c] lg:text-[clamp(13px,1vw,26px)]",
+            "h-full min-w-0 flex-1 bg-transparent text-[14px] font-semibold text-[var(--moa-text-body)] outline-none placeholder:text-[#8a8a8a] lg:text-[clamp(13px,1vw,26px)] lg:placeholder:text-[#5c5c5c]",
             className,
           )}
           {...props}

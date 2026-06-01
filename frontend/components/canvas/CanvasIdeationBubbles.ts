@@ -26,6 +26,10 @@ export type IdeationKeywordBubble = {
   offTopic?: boolean;
   offTopicReason?: string;
   anchorText?: string;
+  layoutX?: number;
+  layoutY?: number;
+  layoutSize?: number;
+  clusterId?: string;
   activity?: number;
   opacity?: number;
   layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
@@ -877,6 +881,11 @@ function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
 }
 
 function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
+  const serverOpacity = Number(bubble.opacity);
+  if (Number.isFinite(serverOpacity)) {
+    return isIdeationBubbleOpacityLocked(bubble) ? 1 : Number(clampNumber(serverOpacity, 0, 1).toFixed(3));
+  }
+
   if (isIdeationBubbleOpacityLocked(bubble)) {
     return 1;
   }
@@ -909,6 +918,13 @@ function getIdeationBubbleImportanceScore(bubble: IdeationKeywordBubble, maxCoun
 }
 
 function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[]) {
+  const serverPrimaryIds = visuals
+    .filter((visual) => visual.emphasis === "primary")
+    .map((visual) => visual.id);
+  if (serverPrimaryIds.length > 0) {
+    return new Set(serverPrimaryIds);
+  }
+
   const maxCount = Math.max(1, ...visuals.map((bubble) => bubble.count));
   const rankBubbles = (left: IdeationKeywordBubble, right: IdeationKeywordBubble) =>
     getIdeationBubbleImportanceScore(right, maxCount) - getIdeationBubbleImportanceScore(left, maxCount) ||
@@ -936,6 +952,13 @@ function resolveIdeationBubblePrimaryIds(visuals: IdeationKeywordBubbleVisual[])
 }
 
 function applyIdeationBubblePrimaryEmphasis(visuals: IdeationKeywordBubbleVisual[]) {
+  if (visuals.some((visual) => visual.emphasis === "primary" || visual.emphasis === "default")) {
+    return visuals.map((visual) => ({
+      ...visual,
+      opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
+    }));
+  }
+
   const primaryIds = resolveIdeationBubblePrimaryIds(visuals);
   return visuals.map((visual) => {
     const nextVisual = {
@@ -954,6 +977,19 @@ function clampIdeationBubblePosition(x: number, y: number, size: number) {
     x: clampNumber(x, 70, CANVAS_IDEATION_BUBBLE_PLANE_WIDTH - size - 70),
     y: clampNumber(y, 80, CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT - size - 70),
   };
+}
+
+function hasServerIdeationBubbleTarget(bubble: IdeationKeywordBubble) {
+  return Number.isFinite(Number(bubble.layoutX)) && Number.isFinite(Number(bubble.layoutY));
+}
+
+function getServerIdeationBubblePosition(bubble: IdeationKeywordBubble, size: number) {
+  const serverSize = Number.isFinite(Number(bubble.layoutSize)) && Number(bubble.layoutSize) > 0
+    ? Number(bubble.layoutSize)
+    : size;
+  const centerX = Number(bubble.layoutX) + serverSize / 2;
+  const centerY = Number(bubble.layoutY) + serverSize / 2;
+  return clampIdeationBubblePosition(centerX - size / 2, centerY - size / 2, size);
 }
 
 function findIdeationBubbleVisualByText(
@@ -1415,6 +1451,53 @@ function resolveIdeationBubbleVisualCollisions(
   return nextVisuals;
 }
 
+function buildServerManagedIdeationBubbleVisuals(
+  previousVisuals: IdeationKeywordBubbleVisual[],
+  incomingBubbles: IdeationKeywordBubble[],
+  growthById: Record<string, number>,
+  tick: number,
+  layoutAnchor?: IdeationBubbleLayoutAnchor | null,
+) {
+  const previousById = new Map(previousVisuals.map((visual) => [visual.id, visual]));
+  const maxCount = Math.max(1, ...incomingBubbles.map((bubble) => bubble.count));
+  const newBubbleIds = new Set<string>();
+
+  const visuals = incomingBubbles.map((bubble) => {
+    const previous = previousById.get(bubble.id);
+    const incomingActivity = getIdeationBubbleIncomingActivity(bubble);
+    const activity = previous
+      ? clampNumber(Math.max(previous.activity, 0.5) * 0.35 + incomingActivity * 0.65, 0.18, 1)
+      : incomingActivity;
+    const serverSize = Number(bubble.layoutSize);
+    const size = Number.isFinite(serverSize) && serverSize > 0
+      ? Math.round(serverSize)
+      : getIdeationBubbleVisualSize(bubble, maxCount, activity, growthById[bubble.id] || 1);
+    const position = getServerIdeationBubblePosition(bubble, size);
+    if (!previous) {
+      newBubbleIds.add(bubble.id);
+    }
+
+    const merged = previous ? { ...previous, ...bubble } : bubble;
+    return {
+      ...merged,
+      activity,
+      opacity: getIdeationBubbleVisualOpacity(merged, activity),
+      size,
+      targetX: position.x,
+      targetY: position.y,
+      settledTargetX: undefined,
+      settledTargetY: undefined,
+      visualScale: 1,
+      entering: false,
+      firstSeenTick: previous?.firstSeenTick ?? tick,
+      lastSeenTick: tick,
+    };
+  });
+
+  const emphasized = applyIdeationBubblePrimaryEmphasis(visuals);
+  return applyIdeationBubbleEnterState(emphasized, newBubbleIds, tick, layoutAnchor);
+}
+
 export function buildStableIdeationBubbleVisuals(
   previousVisuals: IdeationKeywordBubbleVisual[],
   incomingBubbles: IdeationKeywordBubble[],
@@ -1422,6 +1505,16 @@ export function buildStableIdeationBubbleVisuals(
   tick: number,
   layoutAnchor?: IdeationBubbleLayoutAnchor | null,
 ) {
+  if (incomingBubbles.length > 0 && incomingBubbles.every(hasServerIdeationBubbleTarget)) {
+    return buildServerManagedIdeationBubbleVisuals(
+      previousVisuals,
+      incomingBubbles,
+      growthById,
+      tick,
+      layoutAnchor,
+    );
+  }
+
   const incomingById = new Map(incomingBubbles.map((bubble) => [bubble.id, bubble]));
   const incomingIds = new Set(incomingById.keys());
   const visiblePreviousVisuals = previousVisuals.filter((visual) => incomingIds.has(visual.id));

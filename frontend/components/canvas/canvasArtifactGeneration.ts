@@ -39,6 +39,9 @@ export function normalizeCanvasArtifactGeneration(
           finished_at: (value.finished_at || "").trim(),
           error: (value.error || "").trim(),
           version: Number.isFinite(Number(value.version)) ? Number(value.version) : 0,
+          input_transcript_revision: Number.isFinite(Number(value.input_transcript_revision))
+            ? Number(value.input_transcript_revision)
+            : 0,
         } satisfies CanvasArtifactGenerationState,
       ]];
     }),

@@ -28,6 +28,7 @@ import type {
 } from "@/lib/types";
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
+type CanvasSyncScope = NonNullable<CanvasRealtimeSyncPayload["sync_scope"]>;
 
 type UseSharedCanvasBroadcastOptions = {
   agendaOverrides: Record<string, AgendaOverride>;
@@ -57,6 +58,31 @@ type UseSharedCanvasBroadcastOptions = {
   workspaceHydratingRef: MutableRefObject<boolean>;
   workspaceLoadedRef: MutableRefObject<boolean>;
 };
+
+const SCOPED_SYNC_OVERRIDE_KEYS = new Set([
+  "problemGroups",
+  "problemStructure",
+  "finalSolutionSummary",
+  "artifactGeneration",
+  "ideationBubbleGraph",
+  "nodePositions",
+]);
+
+function resolveForcedSyncScope(overrides?: FullWorkspacePatchPayloadOverrides): CanvasSyncScope {
+  if (!overrides) return "full";
+
+  const overrideKeys = Object.keys(overrides);
+  const hasOnlyScopedKeys = overrideKeys.every((key) => SCOPED_SYNC_OVERRIDE_KEYS.has(key));
+  if (!hasOnlyScopedKeys) return "full";
+
+  if ("finalSolutionSummary" in overrides) return "summary_document";
+  if ("problemStructure" in overrides) return "problem_structure";
+  if ("problemGroups" in overrides) return "problem_groups";
+  if ("ideationBubbleGraph" in overrides) return "ideation_bubble_graph";
+  if ("artifactGeneration" in overrides) return "artifact_generation";
+  if ("nodePositions" in overrides) return "node_positions";
+  return "full";
+}
 
 export function useSharedCanvasBroadcast({
   agendaOverrides,
@@ -194,10 +220,11 @@ export function useSharedCanvasBroadcast({
       pendingNodePreviewsRef.current = {};
       lastNodePreviewFlushAtRef.current = Date.now();
       lastSharedSyncSignatureRef.current = buildSharedCanvasSignature(snapshot);
+      const syncScope = resolveForcedSyncScope(overrides);
       onSharedCanvasSync({
         sync_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         meeting_id: meetingId,
-        sync_scope: "full",
+        sync_scope: syncScope,
         updated_by: userId,
         updated_at: new Date().toISOString(),
         meeting_goal: snapshot.meeting_goal,

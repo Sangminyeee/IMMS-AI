@@ -89,7 +89,7 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
             contentSignature: "ideation-keyword-empty",
             label: (
               <div className="flex min-h-[180px] items-center justify-center rounded-[18px] border border-dashed border-black/10 bg-white/80 px-6 text-center text-sm leading-6 text-[#777]">
-                발화가 들어오면 자주 나온 명사가 버블로 표시됩니다.
+                음성이 감지되면 STT 전사 후 핵심 키워드 버블을 생성합니다.
               </div>
             ),
           },

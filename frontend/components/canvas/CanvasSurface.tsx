@@ -9,7 +9,9 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { memo, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useMoaPresence, useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
+import { classNames } from "@/lib/classNames";
 import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
 import {
   CanvasStageEmptyOverlay,
@@ -140,18 +142,23 @@ export type CanvasSurfaceProps = {
 
 const EMPTY_EDGES: Edge[] = [];
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
+const CANVAS_STAGE_TRANSITION_MS = 460;
+
+type CanvasStageTransitionPhase = "idle" | "in";
 
 function ProblemGroupingRationaleOverlay({
+  exiting = false,
   title,
   rationale,
   onClose,
 }: {
+  exiting?: boolean;
   title: string;
   rationale: ProblemGroupingRationale;
   onClose: () => void;
 }) {
   return (
-    <div className="absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur">
+    <div className="moa-popover-panel absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur" data-exiting={exiting}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Grouping Rationale</p>
@@ -274,10 +281,62 @@ export const CanvasSurface = memo(function CanvasSurface({
   const showMissingFinalProblemStructureOverlay = stage === "solution" && !hasFinalProblemStructureGroups;
   const showProblemGenerationOverlay = problemDefinitionStagePending && problemGroupsCount === 0;
   const showSummaryGenerationOverlay = summaryDocumentPending && hasFinalProblemStructureGroups;
+  const showProblemEmptyOverlay = stage === "problem-definition" && problemGroupsCount === 0;
+  const showSummaryEmptyOverlay =
+    stage === "solution" &&
+    (showMissingFinalProblemStructureOverlay ||
+      (!finalSummaryDocument.markdown.trim() && !(finalSummaryDocument.document_blocks || []).length && !summaryDocumentPending));
+  const showProblemStructureSetup = stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen;
+  const problemRationalePresence = useMoaPresenceValue(
+    stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale
+      ? { rationale: activeProblemGroupingRationale, title: activeProblemGroupingRationaleTitle }
+      : null,
+  );
+  const showProblemToolbar =
+    stage === "problem-definition" && problemDefinitionPhase !== "structure" && problemCanvasToolbarActions.length > 0;
+  const problemEmptyPresence = useMoaPresence(showProblemEmptyOverlay);
+  const summaryEmptyPresence = useMoaPresence(showSummaryEmptyOverlay);
+  const problemGenerationPresence = useMoaPresence(showProblemGenerationOverlay);
+  const summaryGenerationPresence = useMoaPresence(showSummaryGenerationOverlay);
+  const problemStructureSetupPresence = useMoaPresence(showProblemStructureSetup);
+  const problemToolbarPresence = useMoaPresence(showProblemToolbar);
+  const stageSurfaceKey = stage === "problem-definition" ? `${stage}:${problemDefinitionPhase}` : stage;
+  const previousStageSurfaceKeyRef = useRef(stageSurfaceKey);
+  const stageTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stageTransitionPhase, setStageTransitionPhase] = useState<CanvasStageTransitionPhase>("idle");
+
+  useEffect(() => {
+    if (previousStageSurfaceKeyRef.current === stageSurfaceKey) return undefined;
+
+    previousStageSurfaceKeyRef.current = stageSurfaceKey;
+
+    if (stageTransitionTimerRef.current) {
+      clearTimeout(stageTransitionTimerRef.current);
+      stageTransitionTimerRef.current = null;
+    }
+
+    setStageTransitionPhase("in");
+    stageTransitionTimerRef.current = setTimeout(() => {
+      setStageTransitionPhase("idle");
+      stageTransitionTimerRef.current = null;
+    }, CANVAS_STAGE_TRANSITION_MS);
+
+    return () => {
+      if (stageTransitionTimerRef.current) {
+        clearTimeout(stageTransitionTimerRef.current);
+        stageTransitionTimerRef.current = null;
+      }
+    };
+  }, [stageSurfaceKey]);
 
   return (
     <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
-      <div className="relative min-h-0 w-full flex-1">
+      <div
+        className={classNames(
+          "moa-canvas-stage-surface relative min-h-0 w-full flex-1",
+          stageTransitionPhase === "in" && "moa-canvas-stage-surface-in",
+        )}
+      >
         {stage === "ideation" || stage === "problem-definition" ? (
           <ReactFlow<Node, Edge>
             nodes={nodes}
@@ -352,19 +411,23 @@ export const CanvasSurface = memo(function CanvasSurface({
         )}
       </div>
 
-      {stage === "problem-definition" && problemGroupsCount === 0 ? (
+      {stageTransitionPhase === "in" ? (
+        <div key={stageSurfaceKey} aria-hidden="true" className="moa-canvas-stage-transition-veil" />
+      ) : null}
+
+      {problemEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay
           eyebrow="Problem Definition"
+          exiting={problemEmptyPresence.isExiting}
           message={busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
           tone="problem"
         />
       ) : null}
 
-      {stage === "solution" &&
-      (showMissingFinalProblemStructureOverlay ||
-        (!finalSummaryDocument.markdown.trim() && !(finalSummaryDocument.document_blocks || []).length && !summaryDocumentPending)) ? (
+      {summaryEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay
           eyebrow="Summary Stage"
+          exiting={summaryEmptyPresence.isExiting}
           message={
             !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
@@ -374,12 +437,15 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {showProblemGenerationOverlay ? <ProblemDefinitionPreparingOverlay /> : null}
+      {problemGenerationPresence.shouldRender ? (
+        <ProblemDefinitionPreparingOverlay exiting={problemGenerationPresence.isExiting} />
+      ) : null}
 
-      {stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen ? (
+      {problemStructureSetupPresence.shouldRender ? (
         <ProblemStructureSetupModal
           draftMethod={problemStructureDraftMethod}
           draftMode={problemStructureDraftMode}
+          exiting={problemStructureSetupPresence.isExiting}
           problemGroupsCount={problemGroupsCount}
           pending={problemStructurePending}
           onClose={onCloseProblemStructureSetup}
@@ -389,21 +455,25 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale ? (
+      {problemRationalePresence.shouldRender && problemRationalePresence.presentValue ? (
         <ProblemGroupingRationaleOverlay
-          title={activeProblemGroupingRationaleTitle}
-          rationale={activeProblemGroupingRationale}
+          exiting={problemRationalePresence.isExiting}
+          title={problemRationalePresence.presentValue.title}
+          rationale={problemRationalePresence.presentValue.rationale}
           onClose={onCloseProblemGroupingRationale}
         />
       ) : null}
 
-      {showSummaryGenerationOverlay ? <SummaryDocumentPendingOverlay /> : null}
+      {summaryGenerationPresence.shouldRender ? (
+        <SummaryDocumentPendingOverlay exiting={summaryGenerationPresence.isExiting} />
+      ) : null}
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase !== "structure" && problemCanvasToolbarActions.length > 0 ? (
+      {problemToolbarPresence.shouldRender ? (
         <ProblemCanvasToolbar
           actions={problemCanvasToolbarActions}
+          exiting={problemToolbarPresence.isExiting}
           getActionLabel={getProblemToolbarActionLabel}
           isActionActive={isProblemToolbarActionActive}
           isActionDisabled={(item) =>

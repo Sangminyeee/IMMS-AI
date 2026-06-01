@@ -107,7 +107,7 @@ function XIcon({ className = "" }: IconProps) {
 }
 
 function problemStructureColumnLabel(isUngrouped: boolean, index: number) {
-  return isUngrouped ? "미분류" : `분류${index}`;
+  return isUngrouped ? "미분류" : `묶음${index}`;
 }
 
 function problemStructureColumnHeight(cardCount: number) {
@@ -384,19 +384,16 @@ export function buildProblemStructureCanvasBlueprint(input: {
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <span className="inline-flex h-[22px] w-[40px] items-center justify-center rounded-full bg-[rgba(161,161,161,0.2)] px-[6px] text-[10px] font-normal leading-[14px] text-[#414141]">
-                  {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
-                </span>
                 {isGroupEditing ? (
                   <input
                     value={problemStructureGroupDraftTitle}
                     onChange={(event) => onProblemStructureGroupDraftTitleChange(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
                     aria-label="구조화 그룹 제목"
-                    className="nodrag nopan mt-[14px] block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
+                    className="nodrag nopan block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
                   />
                 ) : (
-                  <strong className="mt-[14px] block whitespace-normal break-keep text-[14.286px] font-bold leading-[16px] text-[#111]">
+                  <strong className="block whitespace-normal break-keep text-[14.286px] font-bold leading-[16px] text-[#111]">
                     {column.title || (isUngrouped ? "미분류" : "구조화 그룹")}
                   </strong>
                 )}
@@ -404,7 +401,10 @@ export function buildProblemStructureCanvasBlueprint(input: {
                   {problemStructureCardsCountLabel(columnNodes.length)}
                 </p>
               </div>
-              <div className="relative shrink-0">
+              <div className="flex shrink-0 items-start gap-2">
+                <span className="inline-flex h-[22px] w-[44px] items-center justify-center rounded-full bg-[rgba(161,161,161,0.2)] px-[6px] text-[10px] font-normal leading-[14px] text-[#414141]">
+                  {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
+                </span>
                 {isGroupEditing ? (
                   <div className="flex items-center gap-1">
                     <button
@@ -427,7 +427,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                     </button>
                   </div>
                 ) : (
-                  <>
+                  <div className="relative shrink-0">
                     <button
                       type="button"
                       aria-label="구조화 그룹 메뉴"
@@ -458,7 +458,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                         </button>
                       </div>
                     ) : null}
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -502,18 +502,23 @@ export function buildProblemStructureCanvasBlueprint(input: {
                           : "hover:border-[#01a3ff]/35"
                       } ${isDraggingNode ? "opacity-60" : ""}`}
                     >
-                      <div className="mb-[7px] flex h-[18px] items-center gap-[6px]">
-                        <span
-                          className={`inline-flex h-[18px] min-w-[36px] items-center justify-center rounded-full border-[0.8px] border-white px-[7px] text-[8px] font-bold leading-[1.4] text-white ${problemStructureDepthTone(
-                            node.depth,
-                          )}`}
-                        >
-                          {problemStructureDepthLabel(node.depth)}
+                      <div className="mb-[7px] flex h-[18px] items-center justify-between gap-[6px]">
+                        <div className="flex min-w-0 items-center gap-[6px]">
+                          <span
+                            className={`inline-flex h-[18px] min-w-[36px] items-center justify-center rounded-full border-[0.8px] border-white px-[7px] text-[8px] font-bold leading-[1.4] text-white ${problemStructureDepthTone(
+                              node.depth,
+                            )}`}
+                          >
+                            {problemStructureDepthLabel(node.depth)}
+                          </span>
+                          <ProblemStructureNodeStatusButton
+                            status={node.status}
+                            onChange={(nextStatus) => onUpdateProblemStructureNodeStatus(node.id, nextStatus)}
+                          />
+                        </div>
+                        <span className="inline-flex h-[18px] min-w-[42px] shrink-0 items-center justify-center rounded-full bg-white px-[7px] text-[8px] font-bold leading-[1.4] text-[#737982] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+                          {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
                         </span>
-                        <ProblemStructureNodeStatusButton
-                          status={node.status}
-                          onChange={(nextStatus) => onUpdateProblemStructureNodeStatus(node.id, nextStatus)}
-                        />
                       </div>
 
                       {isNodeEditing ? (

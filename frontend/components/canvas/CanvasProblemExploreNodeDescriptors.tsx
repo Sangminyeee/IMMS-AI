@@ -621,13 +621,13 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
         {rootEditing ? (
           <>
             <div className="flex items-center justify-between gap-2">
-              <div className="inline-flex h-[22px] items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
-                분류{rootIndex + 1}
-              </div>
               <ProblemExploreInlineEditActions
                 onCancel={handlers.onCancelProblemGroupEdit}
                 onSave={() => handlers.onSaveProblemGroupEdit(root.group_id)}
               />
+              <div className="inline-flex h-[22px] shrink-0 items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
+                분류{rootIndex + 1}
+              </div>
             </div>
             <div className="mt-[19px] min-w-0">
               <ProblemExploreInlineTitleInput
@@ -649,10 +649,7 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
           </>
         ) : (
           <>
-            <div className="inline-flex h-[22px] items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
-              분류{rootIndex + 1}
-            </div>
-            <div className="mt-[19px] flex items-start justify-between gap-2">
+            <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <h3 className="line-clamp-2 text-[12px] font-bold leading-[16px] tracking-[-0.03px] text-[#111]">
                   {root.topic || "문제 후보 분류"}
@@ -685,6 +682,9 @@ function ProblemExploreBoard<TGroup extends ProblemExploreGroupNodeModel>({
                 >
                   <TrashIcon className="h-[12px] w-[12px]" />
                 </ProblemExploreIconButton>
+                <span className="inline-flex h-[22px] shrink-0 items-center rounded-full bg-[#f0f1f3] px-[10px] text-[9px] font-bold leading-none text-[#767676]">
+                  분류{rootIndex + 1}
+                </span>
               </div>
             </div>
             {rootDetailText ? (

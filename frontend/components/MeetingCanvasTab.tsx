@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createCanvasFinalReportShare,
+  finishCanvasArtifactGeneration,
   getCanvasProblemDiscussionWorkspaceJob,
   saveCanvasWorkspacePatch,
   startCanvasArtifactGeneration,
@@ -22,6 +23,10 @@ import {
   CanvasWorkspacePanels,
   type CanvasWorkspaceParticipant,
 } from "@/components/canvas/CanvasWorkspacePanels";
+import {
+  MobileMeetingReadOnlyView,
+  type MobileMeetingViewStage,
+} from "@/components/canvas/MobileMeetingReadOnlyView";
 import { useCanvasWorkspacePanelModels } from "@/components/canvas/useCanvasWorkspacePanelModels";
 import {
   buildProblemExploreLayout,
@@ -49,10 +54,12 @@ import {
 } from "@/components/canvas/CanvasIdeationBubbles";
 import {
   buildProblemStructureStatePayload,
+  createDefaultProblemStructureArtifactMeta,
   createDefaultProblemStructureState,
   getSummaryEligibleStructureGroups,
   hydrateProblemStructureState,
   problemStructureMethodLabel,
+  type ProblemStructureArtifactMeta,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -190,6 +197,12 @@ function buildFinalReportShareUrl(meetingId: string, token: string) {
   ).toString();
 }
 
+function toMobileViewedStage(stage: CanvasStage, phase: ProblemDefinitionPhase): MobileMeetingViewStage {
+  if (stage === "ideation") return "ideation";
+  if (stage === "solution") return "summary";
+  return phase === "structure" ? "problem-structure" : "problem-explore";
+}
+
 async function copyTextToClipboard(text: string) {
   if (!text) return false;
 
@@ -323,6 +336,8 @@ type MeetingCanvasTabProps = {
   liveSpeechPreview: LiveSpeechPreview | null;
   isRecording?: boolean;
   recordingStartedAtMs?: number | null;
+  meetingTimerStartedAtMs?: number | null;
+  meetingTimerEndedAtMs?: number | null;
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
   onStopRecording?: () => void | Promise<void>;
@@ -682,6 +697,8 @@ export default function MeetingCanvasTab({
   incomingCanvasStateRequestId,
   isRecording = false,
   recordingStartedAtMs = null,
+  meetingTimerStartedAtMs = null,
+  meetingTimerEndedAtMs = null,
   onToggleRecording,
   onEndMeeting,
   onStopRecording,
@@ -699,6 +716,7 @@ export default function MeetingCanvasTab({
   const captureProblemPhaseOverride: ProblemDefinitionPhase | "" =
     captureProblemPhaseParam === "explore" || captureProblemPhaseParam === "structure" ? captureProblemPhaseParam : "";
   const [stage, setStage] = useState<CanvasStage>("ideation");
+  const [mobileViewedStage, setMobileViewedStage] = useState<MobileMeetingViewStage>("ideation");
   const [composerAgendaId, setComposerAgendaId] = useState("");
   const [composerTitle, setComposerTitle] = useState("");
   const [composerBody, setComposerBody] = useState("");
@@ -728,6 +746,9 @@ export default function MeetingCanvasTab({
   const [problemStructureSetupOpen, setProblemStructureSetupOpen] = useState(false);
   const [problemStructureNodes, setProblemStructureNodes] = useState<ProblemStructureNodeViewModel[]>([]);
   const [problemStructureGroups, setProblemStructureGroups] = useState<ProblemStructureGroupViewModel[]>([]);
+  const [problemStructureArtifactMeta, setProblemStructureArtifactMeta] = useState<ProblemStructureArtifactMeta>(
+    createDefaultProblemStructureArtifactMeta,
+  );
   const [problemStructurePending, setProblemStructurePending] = useState(false);
   const {
     clearProblemStructureDrag,
@@ -821,6 +842,7 @@ export default function MeetingCanvasTab({
     toggleRightDrawer,
     rightPanelRatio,
     isDesktopLayout,
+    viewportModeReady,
     startPanelResize,
     solutionRightPaneRef,
   } = useCanvasUiState({
@@ -847,6 +869,7 @@ export default function MeetingCanvasTab({
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const { canvasSurfaceRef, flowRef } = useCanvasFlowRefs();
   const ideationViewportCenteredKeyRef = useRef("");
+  const mobileViewedStageInitializedRef = useRef(false);
   const autoProblemDefinitionRef = useRef(false);
   const problemConclusionEntryHandledRef = useRef(false);
   const workspaceLoadedRef = useRef(false);
@@ -1243,10 +1266,15 @@ export default function MeetingCanvasTab({
         mode: problemDefinitionMode,
         nodes: problemStructureNodes,
         groups: problemStructureGroups,
+        revision: problemStructureArtifactMeta.revision,
+        sourceGenerationId: problemStructureArtifactMeta.sourceGenerationId,
+        basedOnTranscriptRevision: problemStructureArtifactMeta.basedOnTranscriptRevision,
+        updatedAt: problemStructureArtifactMeta.updatedAt,
       }),
     [
       problemDefinitionMode,
       problemDefinitionPhase,
+      problemStructureArtifactMeta,
       problemStructureGroups,
       problemStructureMethod,
       problemStructureNodes,
@@ -1389,6 +1417,14 @@ export default function MeetingCanvasTab({
   }, [isRecording, onStopRecording, stage]);
 
   useEffect(() => {
+    if (isDesktopLayout || !viewportModeReady || mobileViewedStageInitializedRef.current) return;
+    if (!workspaceLoadedRef.current) return;
+
+    mobileViewedStageInitializedRef.current = true;
+    setMobileViewedStage(toMobileViewedStage(stage, problemDefinitionPhase));
+  }, [isDesktopLayout, problemDefinitionPhase, stage, viewportModeReady]);
+
+  useEffect(() => {
     autoProblemDefinitionRef.current = false;
     problemConclusionEntryHandledRef.current = false;
     lastIncomingSharedSyncIdRef.current = "";
@@ -1419,6 +1455,8 @@ export default function MeetingCanvasTab({
       importedState: null,
     };
     latestSharedSyncEnabledRef.current = true;
+    mobileViewedStageInitializedRef.current = false;
+    setMobileViewedStage("ideation");
     setImportOverrideActive(false);
     setAgendaOverrides({});
     setCanvasItems([]);
@@ -1431,6 +1469,7 @@ export default function MeetingCanvasTab({
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
     setArtifactGeneration({});
     setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
+    setProblemStructureArtifactMeta(createDefaultProblemStructureArtifactMeta());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
     setSelectedProblemSourceNodeId("");
@@ -1599,6 +1638,7 @@ export default function MeetingCanvasTab({
     setProblemGroups,
     setProblemStructureDraftMethod,
     setProblemStructureDraftMode,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureMethod,
     setProblemStructureNodes,
@@ -1826,6 +1866,8 @@ export default function MeetingCanvasTab({
     personalNotes,
     problemDefinitionStagePending,
     problemGroups,
+    problemStructurePending:
+      problemStructurePending || isCanvasArtifactGenerating(artifactGeneration, PROBLEM_DEFINITION_STEP2_ARTIFACT),
     problemStructureStatePayload,
     sharedSyncEnabled,
     stage,
@@ -1876,6 +1918,7 @@ export default function MeetingCanvasTab({
       );
       const nextProblemStructurePayload = buildProblemStructureStatePayload(nextProblemStructure);
       const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(workspace.node_positions || nodePositions);
+      const nextArtifactGeneration = normalizeCanvasArtifactGeneration(workspace.artifact_generation || artifactGeneration);
       (workspace.problem_processed_utterance_ids || []).forEach((id) => {
         if (id) processedProblemUtteranceIdsRef.current.add(id);
       });
@@ -1888,12 +1931,20 @@ export default function MeetingCanvasTab({
       setProblemStructureDraftMode(nextProblemStructure.mode || "ai");
       setProblemStructureNodes(nextProblemStructure.nodes);
       setProblemStructureGroups(nextProblemStructure.groups);
+      setProblemStructureArtifactMeta({
+        revision: nextProblemStructure.revision,
+        sourceGenerationId: nextProblemStructure.sourceGenerationId,
+        basedOnTranscriptRevision: nextProblemStructure.basedOnTranscriptRevision,
+        updatedAt: nextProblemStructure.updatedAt,
+      });
       setProblemStructurePending(false);
+      setArtifactGeneration(nextArtifactGeneration);
       setNodePositions(nextNodePositions);
       latestSharedWorkspaceRef.current = {
         ...latestSharedWorkspaceRef.current,
         problemGroups: nextProblemGroups,
         problemStructure: nextProblemStructurePayload,
+        artifactGeneration: nextArtifactGeneration,
         nodePositions: nextNodePositions,
         importedState: persistedSharedImportedState,
       };
@@ -1904,18 +1955,21 @@ export default function MeetingCanvasTab({
           buildCurrentWorkspacePatchPayload({
             problemGroups: nextProblemGroups,
             problemStructure: nextProblemStructurePayload,
+            artifactGeneration: nextArtifactGeneration,
             nodePositions: nextNodePositions,
           }),
         );
         forceBroadcastSharedCanvas({
           problemGroups: nextProblemGroups,
           problemStructure: nextProblemStructurePayload,
+          artifactGeneration: nextArtifactGeneration,
           nodePositions: nextNodePositions,
         });
       }
     },
     [
       buildCurrentWorkspacePatchPayload,
+      artifactGeneration,
       forceBroadcastSharedCanvas,
       meetingId,
       nodePositions,
@@ -1924,6 +1978,58 @@ export default function MeetingCanvasTab({
       problemStructureStatePayload,
       setNodePositions,
       sharedSyncEnabled,
+    ],
+  );
+
+  const commitSharedProblemStructureGeneration = useCallback(
+    async (payload: {
+      generationId: string;
+      status: "ready" | "failed";
+      error?: string;
+      problemStructure?: ReturnType<typeof buildProblemStructureStatePayload>;
+    }) => {
+      const result = await finishCanvasArtifactGeneration({
+        meeting_id: meetingId,
+        artifact_key: PROBLEM_DEFINITION_STEP2_ARTIFACT,
+        user_id: userEmail || userId,
+        generation_id: payload.generationId,
+        status: payload.status,
+        error: payload.error || "",
+        problem_structure: payload.problemStructure,
+      });
+      const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
+        result.workspace?.artifact_generation ||
+          setCanvasArtifactGenerationState(
+            latestSharedWorkspaceRef.current.artifactGeneration || artifactGeneration,
+            result.generation,
+          ),
+      );
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        artifactGeneration: nextArtifactGeneration,
+      };
+      setArtifactGeneration(nextArtifactGeneration);
+      if (result.workspace) {
+        applyServerProblemWorkspace(result.workspace);
+      } else if (sharedSyncEnabled) {
+        forceBroadcastSharedCanvas({
+          artifactGeneration: nextArtifactGeneration,
+        });
+      }
+      return {
+        applied: result.applied,
+        artifactGeneration: nextArtifactGeneration,
+      };
+    },
+    [
+      applyServerProblemWorkspace,
+      artifactGeneration,
+      forceBroadcastSharedCanvas,
+      latestSharedWorkspaceRef,
+      meetingId,
+      sharedSyncEnabled,
+      userEmail,
+      userId,
     ],
   );
 
@@ -2186,6 +2292,7 @@ export default function MeetingCanvasTab({
     setMeetingGoalDrafts,
     setNodePositions,
     setProblemGroups,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureNodes,
     setProblemStructurePending,
@@ -2335,7 +2442,7 @@ export default function MeetingCanvasTab({
     setSelectedNodeId,
     setSelectedProblemGroupId,
     startSharedArtifactGeneration,
-    finishSharedArtifactGeneration,
+    commitProblemStructureGeneration: commitSharedProblemStructureGeneration,
   });
 
   const problemExploreLayout = useMemo(
@@ -3276,6 +3383,8 @@ export default function MeetingCanvasTab({
       meetingTitle,
       isRecording: Boolean(isRecording),
       recordingStartedAtMs,
+      meetingTimerStartedAtMs,
+      meetingTimerEndedAtMs,
       endMeetingSaving,
       stage,
       busy,
@@ -3484,6 +3593,42 @@ export default function MeetingCanvasTab({
     onSaveAndEnd: handleSaveAndEndMeeting,
     getFinalSummarySnapshot: getEndingFinalSummaryDocumentSnapshot,
   });
+
+  if (!viewportModeReady) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center bg-[#f8fbff] text-[#526070]">
+        <div className="rounded-[22px] border border-[#d8e3f0] bg-white px-6 py-5 text-center shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+          <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-[#dceeff] border-t-[#236cf3]" />
+          <p className="mt-3 text-[13px] font-semibold leading-6 tracking-[-0.03px]">화면을 준비하는 중입니다.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isDesktopLayout) {
+    return (
+      <div className="h-full min-h-0 bg-[#f8fbff] text-black">
+        <MobileMeetingReadOnlyView
+          actualStage={stage}
+          actualProblemPhase={problemDefinitionPhase}
+          finalSummaryDocument={finalSummaryDocument}
+          ideationBubbleVisuals={ideationBubbleVisuals}
+          meetingStatus={meetingStatus}
+          meetingTimerEndedAtMs={meetingTimerEndedAtMs}
+          meetingTimerStartedAtMs={meetingTimerStartedAtMs}
+          meetingTitle={meetingTitle}
+          onViewedStageChange={setMobileViewedStage}
+          problemDefinitionPending={problemDefinitionStagePending || sharedProblemDefinitionGenerating}
+          problemGroups={problemGroups}
+          problemStructureGroups={problemStructureGroups}
+          problemStructureNodes={problemStructureNodes}
+          problemStructurePending={problemStructurePending || sharedProblemStructureGenerating}
+          summaryDocumentPending={summaryDocumentPending || sharedSummaryGenerating}
+          viewedStage={mobileViewedStage}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full min-h-0 bg-[#f9f9f9] text-black">

@@ -232,6 +232,10 @@ export interface CanvasProblemStructureState {
   phase: "explore" | "structure" | string;
   method: "affinity" | "card-sorting" | string;
   mode?: "" | "manual" | "ai" | string;
+  revision?: number;
+  source_generation_id?: string;
+  based_on_transcript_revision?: number;
+  updated_at?: string;
   nodes: CanvasProblemStructureNode[];
   groups: CanvasProblemStructureGroup[];
 }
@@ -361,6 +365,7 @@ export interface CanvasArtifactGenerationState {
   finished_at?: string;
   error?: string;
   version?: number;
+  input_transcript_revision?: number;
 }
 
 export type CanvasArtifactGenerationMap = Record<string, CanvasArtifactGenerationState>;
@@ -477,7 +482,14 @@ export interface CanvasPersonalNotesStateResponse {
 export interface CanvasRealtimeSyncPayload {
   sync_id: string;
   meeting_id: string;
-  sync_scope?: "full" | "node_positions";
+  sync_scope?:
+    | "full"
+    | "node_positions"
+    | "artifact_generation"
+    | "ideation_bubble_graph"
+    | "problem_groups"
+    | "problem_structure"
+    | "summary_document";
   meeting_goal?: string;
   meeting_goal_context?: string;
   updated_by: string;
@@ -737,6 +749,16 @@ export interface CanvasIdeationBubbleGraphBubble {
   importance?: number;
   relevance?: number;
   activity?: number;
+  opacity?: number;
+  emphasis?: "primary" | "default" | string;
+  x?: number;
+  y?: number;
+  size?: number;
+  cluster_id?: string;
+  cluster_x?: number;
+  cluster_y?: number;
+  local_x?: number;
+  local_y?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
@@ -754,6 +776,7 @@ export interface CanvasIdeationBubbleGraphBubble {
 export interface CanvasIdeationBubbleGraph {
   version: number;
   update_cycle: number;
+  layout_revision?: number;
   bubbles: CanvasIdeationBubbleGraphBubble[];
   processed_utterance_ids: string[];
   updated_at?: string;

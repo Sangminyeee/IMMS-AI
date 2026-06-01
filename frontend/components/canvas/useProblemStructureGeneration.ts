@@ -3,6 +3,7 @@
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { PROBLEM_DEFINITION_STEP2_ARTIFACT } from "@/components/canvas/canvasArtifactGeneration";
 import {
+  buildProblemStructureStatePayload,
   buildProblemStructureNodesFromGroups,
   normalizeProblemStructureGroupsFromResponse,
   problemDefinitionModeLabel,
@@ -20,6 +21,7 @@ import type {
   CanvasArtifactGenerationKey,
   CanvasArtifactGenerationMap,
   CanvasArtifactGenerationState,
+  CanvasProblemStructureState,
 } from "@/lib/types";
 
 type UseProblemStructureGenerationOptions<TProblemGroup extends ProblemStructureSourceGroup> = {
@@ -55,12 +57,15 @@ type UseProblemStructureGenerationOptions<TProblemGroup extends ProblemStructure
     generation: CanvasArtifactGenerationState;
     artifactGeneration: CanvasArtifactGenerationMap;
   }>;
-  finishSharedArtifactGeneration: (
-    artifactKey: CanvasArtifactGenerationKey,
-    status: "ready" | "failed",
-    generationId?: string,
-    error?: string,
-  ) => CanvasArtifactGenerationMap;
+  commitProblemStructureGeneration: (payload: {
+    generationId: string;
+    status: "ready" | "failed";
+    error?: string;
+    problemStructure?: CanvasProblemStructureState;
+  }) => Promise<{
+    applied: boolean;
+    artifactGeneration: CanvasArtifactGenerationMap;
+  }>;
 };
 
 export function useProblemStructureGeneration<TProblemGroup extends ProblemStructureSourceGroup>({
@@ -89,7 +94,7 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
   setSelectedNodeId,
   setSelectedProblemGroupId,
   startSharedArtifactGeneration,
-  finishSharedArtifactGeneration,
+  commitProblemStructureGeneration,
 }: UseProblemStructureGenerationOptions<TProblemGroup>) {
   const syncProblemStructureNodesFromDefinition = useCallback(() => {
     const nextNodes = buildProblemStructureNodesFromGroups(problemGroups);
@@ -180,12 +185,11 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
 
         const nextGroups = normalizeProblemStructureGroupsFromResponse(result.groups || [], structureNodes);
         if (nextGroups.length === 0) {
-          finishSharedArtifactGeneration(
-            PROBLEM_DEFINITION_STEP2_ARTIFACT,
-            "failed",
+          await commitProblemStructureGeneration({
             generationId,
-            result.warning || "유효한 구조화 그룹 없음",
-          );
+            status: "failed",
+            error: result.warning || "유효한 구조화 그룹 없음",
+          });
           setActivityMessage(result.warning || "AI가 유효한 구조화 그룹을 만들지 못했습니다.");
           return;
         }
@@ -194,7 +198,21 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
         setProblemStructureMethod(method);
         setProblemStructureNodes(structureNodes);
         setProblemStructureGroups(nextGroups);
-        finishSharedArtifactGeneration(PROBLEM_DEFINITION_STEP2_ARTIFACT, "ready", generationId);
+        const commitResult = await commitProblemStructureGeneration({
+          generationId,
+          status: "ready",
+          problemStructure: buildProblemStructureStatePayload({
+            phase: "structure",
+            method,
+            mode: "ai",
+            nodes: structureNodes,
+            groups: nextGroups,
+          }),
+        });
+        if (!commitResult.applied) {
+          setActivityMessage("다른 재생성 결과가 먼저 반영되어 현재 결과는 건너뛰었습니다.");
+          return;
+        }
         setActivityMessage(
           result.warning ||
             `${result.used_llm ? "AI" : "로컬 fallback"}가 ${structureNodes.length}개 노드를 ${nextGroups.length}개 그룹으로 묶었습니다.`,
@@ -204,7 +222,11 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
-        finishSharedArtifactGeneration(PROBLEM_DEFINITION_STEP2_ARTIFACT, "failed", generationId, message);
+        await commitProblemStructureGeneration({
+          generationId,
+          status: "failed",
+          error: message,
+        });
         setActivityMessage(`AI 구조화 실패: ${message}`);
       } finally {
         if (problemStructureRequestSeqRef.current === requestSeq) {
@@ -227,7 +249,7 @@ export function useProblemStructureGeneration<TProblemGroup extends ProblemStruc
       setProblemStructureNodes,
       setProblemStructurePending,
       startSharedArtifactGeneration,
-      finishSharedArtifactGeneration,
+      commitProblemStructureGeneration,
     ],
   );
 

@@ -590,6 +590,12 @@ def _normalize_canvas_problem_structure_state(raw: Any) -> dict[str, Any]:
         "phase": phase,
         "method": method,
         "mode": mode,
+        "revision": _safe_nonnegative_int(raw.get("revision")),
+        "source_generation_id": _safe_text(raw.get("source_generation_id") or raw.get("sourceGenerationId")),
+        "based_on_transcript_revision": _safe_nonnegative_int(
+            raw.get("based_on_transcript_revision") or raw.get("basedOnTranscriptRevision")
+        ),
+        "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
         "nodes": nodes,
         "groups": groups,
     }
@@ -1265,6 +1271,10 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
 
 
 def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
+    ideation_bubble_graph = _normalize_canvas_ideation_bubble_graph(
+        workspace.get("ideation_bubble_graph")
+    )
+    _ensure_ideation_bubble_graph_server_layout(ideation_bubble_graph)
     return {
         "ok": True,
         "meeting_id": _safe_text(workspace.get("meeting_id")),
@@ -1284,9 +1294,7 @@ def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
         "artifact_generation": _normalize_canvas_artifact_generation(
             workspace.get("artifact_generation") or {}
         ),
-        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
-            workspace.get("ideation_bubble_graph")
-        ),
+        "ideation_bubble_graph": ideation_bubble_graph,
         "idea_create_stack": _safe_nonnegative_int(workspace.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -2549,6 +2557,10 @@ class CanvasWorkspaceProblemStructureInput(BaseModel):
     phase: str = "explore"
     method: str = "affinity"
     mode: str = ""
+    revision: int = 0
+    source_generation_id: str = ""
+    based_on_transcript_revision: int = 0
+    updated_at: str = ""
     nodes: list[CanvasWorkspaceProblemStructureNodeInput] = Field(default_factory=list)
     groups: list[CanvasWorkspaceProblemStructureGroupInput] = Field(default_factory=list)
 
@@ -2563,6 +2575,7 @@ class CanvasArtifactGenerationEntryInput(BaseModel):
     finished_at: str = ""
     error: str = ""
     version: int = 0
+    input_transcript_revision: int = 0
 
 
 class CanvasWorkspaceStateInput(BaseModel):
@@ -2606,6 +2619,16 @@ class CanvasArtifactGenerationStartInput(BaseModel):
     artifact_key: str = ""
     user_id: str = ""
     force: bool = False
+
+
+class CanvasArtifactGenerationFinishInput(BaseModel):
+    meeting_id: str = ""
+    artifact_key: str = ""
+    user_id: str = ""
+    generation_id: str = ""
+    status: str = "ready"
+    error: str = ""
+    problem_structure: CanvasWorkspaceProblemStructureInput | None = None
 
 
 class CanvasFinalReportShareInput(BaseModel):
@@ -5798,14 +5821,17 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         "[목표]\n"
         "- conversation_context_cache, meeting_goal, meeting_goal_context, existing_keywords를 참고해 회의 흐름과 이미 잡힌 핵심어를 이해한다.\n"
         "- meeting_goal과 meeting_goal_context가 입력에 없으면 없는 정보로 간주하고 추측하지 않는다.\n"
-        "- 새로 반환할 keywords는 target_utterances에서 실제로 말한 핵심 명사/고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
+        "- 새로 반환할 keywords는 target_utterances에서 실제로 말한 핵심 명사/사람 이름을 제외한 고유명사/짧은 명사구만 추출하거나 기존 버블에 흡수한다.\n"
         "- 반드시 target_utterances에 나온 표현 또는 그 명사형 축약만 새 keywords로 뽑는다. 문맥 캐시에만 있고 target에는 없는 새 개념을 만들지 않는다.\n"
-        "- 동사, 형용사, 서술어, 문장, filler, 접속사, 단독 숫자/년도, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
-        "- text는 반드시 명사, 고유명사, 또는 짧은 명사구여야 한다. '~하다', '~한다', '~해야', '~되는', '~보임' 같은 서술형/동사형은 금지한다.\n"
+        "- 동사, 형용사, 서술어, 문장, filler, 접속사, 단독 숫자/년도, 인명, 직함이 붙은 인명, '생각', '부분', '관련', '회의', '아이디어' 같은 범용어는 제외한다.\n"
+        "- text는 반드시 명사, 사람 이름을 제외한 고유명사, 또는 짧은 명사구여야 한다. '~하다', '~한다', '~해야', '~되는', '~보임' 같은 서술형/동사형은 금지한다.\n"
+        "- 사람 이름은 절대 버블 text로 쓰지 않는다. 인물이 중요하게 언급되어도 '정상회담', '미중 관계', '관세', '방문 결과'처럼 회의 쟁점/주제어로 바꾼다.\n"
         "- 이번 batch 전체에서 반환할 버블은 0~3개다. 맥락상 의미 있는 핵심 명사가 없으면 keywords는 빈 배열이어야 한다.\n"
         "- 새 버블 생성보다 기존 버블 흡수, count 증가, merge_keywords 합병을 우선한다.\n"
         "- existing_keywords에 같은 의미, 동의어, 축약어, 상하위 표현이 있으면 새 버블을 만들지 말고 기존 text를 그대로 반환한다.\n"
-        "- 예: '트럼프', '트럼프 대통령', '도널드 트럼프'는 하나의 기존 text로 합친다.\n"
+        "- 예: '미국 관세', '관세 정책', '관세'가 같은 의미로 쓰이면 기존 text 하나로 합친다.\n"
+        "- 새 text는 conversation_context_cache와 target_utterances 전체를 기준으로 같은 의미가 최소 2번 이상 등장한 경우에만 만든다.\n"
+        "- 기존 버블 text를 재사용하는 경우에는 이번 batch에서 1번만 다시 나와도 반환할 수 있다.\n"
         "- existing_keywords 안에서 중복/동의어/세부 표현이 따로 버블화되어 있으면 merge_keywords로 합병한다.\n"
         "- existing_keywords 안에서 회의 흐름상 너무 범용적이거나 현재 의미 그래프를 흐리는 버블은 remove_keywords에 넣어 정리한다. 단, 한동안 언급이 적다는 이유만으로 핵심 주제를 지우지 않는다.\n"
         "- 기존 버블의 세부 표현에 불과한 문구는 기존 버블 count를 올리는 용도로 기존 text를 반환한다.\n"
@@ -5820,9 +5846,9 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         '  "merge_keywords": [{"source": "미중 갈등", "target": "갈등", "reason": "중복된 복합 표현을 관계 버블로 통합"}],\n'
         '  "remove_keywords": ["잡담"],\n'
         '  "keywords": [\n'
-        '    {"text": "미중", "count": 3, "kind": "entity", "importance": 0.95, "relevance": 0.98, "related": ["경쟁", "갈등"]},\n'
-        '    {"text": "경쟁", "count": 2, "kind": "relation", "importance": 0.72, "relevance": 0.9, "anchor": "미중", "related": ["미중"]},\n'
-        '    {"text": "사진", "count": 1, "kind": "off_topic", "importance": 0.35, "relevance": 0.15, "off_topic": true, "off_topic_reason": "현재 논점과 직접 관련이 낮음", "related": []}\n'
+        '    {"text": "미중", "count": 3, "support_count": 4, "kind": "entity", "importance": 0.95, "relevance": 0.98, "related": ["경쟁", "갈등"]},\n'
+        '    {"text": "경쟁", "count": 2, "support_count": 3, "kind": "relation", "importance": 0.72, "relevance": 0.9, "anchor": "미중", "related": ["미중"]},\n'
+        '    {"text": "사진", "count": 1, "support_count": 1, "kind": "off_topic", "importance": 0.35, "relevance": 0.15, "off_topic": true, "off_topic_reason": "현재 논점과 직접 관련이 낮음", "related": []}\n'
         "  ]\n"
         "}\n\n"
         "[규칙]\n"
@@ -5832,11 +5858,13 @@ def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput,
         "- remove_keywords에는 existing_keywords의 text만 넣는다. 이번 keywords나 merge target으로 반환한 text는 remove_keywords에 넣지 않는다.\n"
         "- merge/remove는 확신이 높은 경우만 사용한다. 불확실하면 기존 버블을 유지한다.\n"
         "- 새 text는 이번 batch에서 정말 새 논점일 때만 만든다. 같은 의미의 중복 버블은 금지한다.\n"
+        "- 새 text는 conversation_context_cache와 target_utterances를 합쳐 같은 의미가 최소 2회 이상 확인될 때만 만든다. 1회성 언급이면 만들지 않는다.\n"
         "- 반드시 1개 이상 반환하려고 하지 않는다. 잡담, 추임새, 단독 연도/숫자, 전체 흐름과 약한 단어만 있으면 keywords는 []로 둔다.\n"
         "- 3개를 초과해서 반환하지 않는다. 여러 표현이 있으면 중심 개념 1개와 관계 1~2개만 남긴다.\n"
         "- count는 기존 count가 아니라 target_utterances에서 해당 의미가 나타난 발화 수다.\n"
-        "- text는 2~18자 정도의 명사/고유명사/짧은 명사구만 허용한다. 문장, 서술어, 동사구, 형용사구는 금지한다.\n"
-        "- 좋은 text 예: '미중', '경쟁', '갈등', '방문 결과', '관세', '일정 조율'. 나쁜 text 예: '2026년', '다른 양상을 보임', '해야 한다', '좋은 것 같다'.\n"
+        "- support_count는 conversation_context_cache와 target_utterances를 합쳐 해당 의미가 등장한 총 발화 수다. 새 text는 support_count가 2 이상이어야 한다.\n"
+        "- text는 2~18자 정도의 명사/사람 이름을 제외한 고유명사/짧은 명사구만 허용한다. 문장, 서술어, 동사구, 형용사구, 인명은 금지한다.\n"
+        "- 좋은 text 예: '미중', '경쟁', '갈등', '방문 결과', '관세', '일정 조율'. 나쁜 text 예: '트럼프', '시진핑', '2026년', '다른 양상을 보임', '해야 한다', '좋은 것 같다'.\n"
         "- count는 최소 1 이상.\n"
         "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
         "- importance는 회의 전체에서의 중요도, relevance는 현재 meeting_topic/최근 흐름과의 관련도이며 0~1 숫자다.\n"
@@ -5867,6 +5895,14 @@ def _normalize_ideation_keyword_items(
             raw_kind = _safe_text(item.get("kind"), "topic").lower()
             raw_importance = item.get("importance")
             raw_relevance = item.get("relevance")
+            raw_support_count = (
+                item.get("support_count")
+                or item.get("supportCount")
+                or item.get("total_count")
+                or item.get("totalCount")
+                or item.get("occurrence_count")
+                or item.get("occurrenceCount")
+            )
             raw_off_topic = item.get("off_topic") or item.get("offTopic")
             raw_off_topic_reason = item.get("off_topic_reason") or item.get("offTopicReason")
             raw_anchor = item.get("anchor") or item.get("anchor_text")
@@ -5877,6 +5913,7 @@ def _normalize_ideation_keyword_items(
             raw_kind = "topic"
             raw_importance = 0.6
             raw_relevance = 1
+            raw_support_count = 1
             raw_off_topic = False
             raw_off_topic_reason = ""
             raw_anchor = ""
@@ -5888,6 +5925,7 @@ def _normalize_ideation_keyword_items(
         off_topic = _boolify(raw_off_topic, False)
         importance = _safe_float(raw_importance, 0.65)
         relevance = _safe_float(raw_relevance, 1)
+        support_count = _safe_nonnegative_int(raw_support_count, count) or count
         related = [
             _normalize_ideation_keyword_text(value)
             for value in (raw_related if isinstance(raw_related, list) else [])
@@ -5896,6 +5934,7 @@ def _normalize_ideation_keyword_items(
             {
                 "text": text,
                 "count": max(1, count),
+                "support_count": max(1, support_count),
                 "kind": "off_topic" if off_topic or kind == "off_topic" else kind,
                 "importance": max(0, min(1, importance)),
                 "relevance": max(0, min(1, relevance)),
@@ -5991,16 +6030,28 @@ def _normalize_ideation_keyword_operations(
 IDEATION_BUBBLE_GRAPH_VERSION = 1
 IDEATION_BUBBLE_GRAPH_MAX_BUBBLES = 80
 IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT = 2000
-IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 4
-IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES = 2
+IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 5
+IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES = 3
 IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES = 3
 IDEATION_BUBBLE_GRAPH_CORE_TOP_RATIO = 0.2
+IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH = 1580
+IDEATION_BUBBLE_GRAPH_LAYOUT_HEIGHT = 940
+IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X = IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH / 2
+IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y = 540
+IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X = 70
+IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y = 80
+IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP = 12
+IDEATION_BUBBLE_GRAPH_LAYOUT_CLUSTER_GAP = 118
+IDEATION_BUBBLE_GRAPH_CORE_CLUSTER_MOVE_LIMIT = 68
+IDEATION_BUBBLE_GRAPH_DEFAULT_CLUSTER_MOVE_LIMIT = 118
+IDEATION_BUBBLE_GRAPH_PERIPHERAL_CLUSTER_MOVE_LIMIT = 152
 
 
 def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
         "update_cycle": 0,
+        "layout_revision": 0,
         "bubbles": [],
         "processed_utterance_ids": [],
         "updated_at": "",
@@ -6061,6 +6112,19 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
         importance = max(0.0, min(1.0, _safe_float(item.get("importance"), 0.6)))
         relevance = max(0.0, min(1.0, _safe_float(item.get("relevance"), 1.0)))
         activity = max(0.0, min(1.0, _safe_float(item.get("activity"), 0.6)))
+        opacity = max(0.0, min(1.0, _safe_float(item.get("opacity"), 1.0)))
+        emphasis = _safe_text(item.get("emphasis"), "default").lower()
+        if emphasis not in {"primary", "default"}:
+            emphasis = "default"
+        size = max(48, min(260, _safe_nonnegative_int(item.get("size") or item.get("radius"), 0)))
+        raw_x = item.get("x")
+        raw_y = item.get("y")
+        x = _safe_float(raw_x, 0.0) if raw_x is not None else None
+        y = _safe_float(raw_y, 0.0) if raw_y is not None else None
+        cluster_x = item.get("cluster_x") if item.get("cluster_x") is not None else item.get("clusterX")
+        cluster_y = item.get("cluster_y") if item.get("cluster_y") is not None else item.get("clusterY")
+        local_x = item.get("local_x") if item.get("local_x") is not None else item.get("localX")
+        local_y = item.get("local_y") if item.get("local_y") is not None else item.get("localY")
         display_state = _normalize_ideation_bubble_state(
             item.get("display_state") or item.get("displayState") or item.get("state")
         )
@@ -6082,6 +6146,16 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "importance": importance,
                 "relevance": relevance,
                 "activity": activity,
+                "opacity": opacity,
+                "emphasis": emphasis,
+                "x": x,
+                "y": y,
+                "size": size,
+                "cluster_id": _safe_text(item.get("cluster_id") or item.get("clusterId")),
+                "cluster_x": _safe_float(cluster_x, 0.0) if cluster_x is not None else None,
+                "cluster_y": _safe_float(cluster_y, 0.0) if cluster_y is not None else None,
+                "local_x": _safe_float(local_x, 0.0) if local_x is not None else None,
+                "local_y": _safe_float(local_y, 0.0) if local_y is not None else None,
                 "display_state": display_state,
                 "layout_zone": _normalize_ideation_bubble_layout_zone(
                     item.get("layout_zone") or item.get("layoutZone")
@@ -6136,6 +6210,7 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
         "update_cycle": _safe_nonnegative_int(raw.get("update_cycle") or raw.get("updateCycle"), 0),
+        "layout_revision": _safe_nonnegative_int(raw.get("layout_revision") or raw.get("layoutRevision"), 0),
         "bubbles": bubbles,
         "processed_utterance_ids": processed_ids,
         "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
@@ -6202,6 +6277,8 @@ def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str) ->
     bubble["display_state"] = "archived"
     bubble["layout_zone"] = "archived"
     bubble["activity"] = min(_safe_float(bubble.get("activity"), 0.0), 0.12)
+    bubble["opacity"] = 0.0
+    bubble["emphasis"] = "default"
     bubble["missing_cycles"] = max(
         _safe_nonnegative_int(bubble.get("missing_cycles"), 0),
         1,
@@ -6222,7 +6299,7 @@ def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
     if not candidates:
         return set()
 
-    top_n = max(1, int((len(candidates) + 4) / 5))
+    top_n = max(1, math.ceil(len(candidates) * IDEATION_BUBBLE_GRAPH_CORE_TOP_RATIO))
     by_count = sorted(
         candidates,
         key=lambda bubble: (
@@ -6256,16 +6333,11 @@ def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str
             bubble["layout_zone"] = "archived"
             continue
         if bubble_id in core_ids and not bool(bubble.get("off_topic")):
-            missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0)
             bubble["display_state"] = "active"
-            bubble["layout_zone"] = (
-                "peripheral"
-                if missing_cycles >= IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES
-                else "core"
-            )
+            bubble["layout_zone"] = "core"
             bubble["activity"] = max(
                 _safe_float(bubble.get("activity"), 0.0),
-                0.42 if bubble["layout_zone"] == "peripheral" else 0.62,
+                0.62,
             )
             continue
         bubble["layout_zone"] = "peripheral" if state == "dimmed" else "default"
@@ -6298,6 +6370,600 @@ def _apply_ideation_bubble_decay(
             bubble["display_state"] = "active"
 
 
+def _apply_ideation_bubble_visual_state(graph: dict[str, Any], core_ids: set[str]) -> None:
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        state = _normalize_ideation_bubble_state(bubble.get("display_state"))
+        bubble_id = _safe_text(bubble.get("id"))
+        off_topic = bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic"
+        if state == "archived":
+            bubble["opacity"] = 0.0
+            bubble["emphasis"] = "default"
+            continue
+
+        if bubble_id in core_ids and not off_topic:
+            bubble["opacity"] = 1.0
+            bubble["emphasis"] = "primary"
+            bubble["display_state"] = "active"
+            bubble["layout_zone"] = "core"
+            continue
+
+        bubble["emphasis"] = "default"
+        activity = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.45)))
+        relevance = max(0.0, min(1.0, _safe_float(bubble.get("relevance"), 1.0)))
+        if state == "dimmed":
+            bubble["opacity"] = round(0.38 + min(activity, relevance) * 0.2, 3)
+        elif off_topic:
+            bubble["opacity"] = round(0.54 + activity * 0.22, 3)
+        else:
+            bubble["opacity"] = round(0.72 + activity * relevance * 0.28, 3)
+
+
+def _prune_archived_ideation_bubbles(graph: dict[str, Any]) -> None:
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+    ]
+    visible_ids = {_safe_text(bubble.get("id")) for bubble in visible if _safe_text(bubble.get("id"))}
+    for bubble in visible:
+        if _safe_text(bubble.get("anchor_id")) not in visible_ids:
+            bubble["anchor_id"] = ""
+        bubble["related_ids"] = [
+            related_id
+            for related_id in _safe_list_texts(bubble.get("related_ids"))
+            if related_id in visible_ids and related_id != _safe_text(bubble.get("id"))
+        ][:12]
+    graph["bubbles"] = visible
+
+
+def _ideation_bubble_seed_ratio(value: str, salt: int) -> float:
+    raw = _stable_short_id(f"{value}:{salt}")
+    try:
+        seed = int(raw, 16)
+    except Exception:
+        seed = 0
+    return (seed % 10000) / 10000
+
+
+def _ideation_bubble_layout_size(bubble: dict[str, Any], max_count: int) -> int:
+    count = max(1, _safe_nonnegative_int(bubble.get("count"), 1) or 1)
+    count_ratio = 1 if max_count <= 1 else max(0.0, min(1.0, count / max_count))
+    emphasized_ratio = math.pow(count_ratio, 0.72)
+    activity = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.6)))
+    return int(round((72 + emphasized_ratio * 142) * (0.82 + activity * 0.18)))
+
+
+def _clamp_ideation_bubble_layout_xy(x: float, y: float, size: float) -> tuple[float, float]:
+    max_x = max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X, IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH - size - IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X)
+    max_y = max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y, IDEATION_BUBBLE_GRAPH_LAYOUT_HEIGHT - size - IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y)
+    return (
+        max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X, min(max_x, x)),
+        max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y, min(max_y, y)),
+    )
+
+
+def _ideation_bubble_layout_circles_overlap(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    gap: float,
+) -> bool:
+    left_size = max(1.0, float(left.get("size") or 1))
+    right_size = max(1.0, float(right.get("size") or 1))
+    left_radius = left_size / 2
+    right_radius = right_size / 2
+    dx = float(left.get("x") or 0) + left_radius - (float(right.get("x") or 0) + right_radius)
+    dy = float(left.get("y") or 0) + left_radius - (float(right.get("y") or 0) + right_radius)
+    min_distance = left_radius + right_radius + gap
+    return dx * dx + dy * dy < min_distance * min_distance
+
+
+def _ideation_bubble_layout_clusters(bubbles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    by_id = {_safe_text(bubble.get("id")): bubble for bubble in bubbles if _safe_text(bubble.get("id"))}
+    adjacency: dict[str, set[str]] = {bubble_id: set() for bubble_id in by_id}
+    for bubble in bubbles:
+        bubble_id = _safe_text(bubble.get("id"))
+        if not bubble_id:
+            continue
+        for related_id in [*_safe_list_texts(bubble.get("related_ids")), _safe_text(bubble.get("anchor_id"))]:
+            if related_id and related_id in by_id and related_id != bubble_id:
+                adjacency.setdefault(bubble_id, set()).add(related_id)
+                adjacency.setdefault(related_id, set()).add(bubble_id)
+
+    visited: set[str] = set()
+    clusters: list[list[dict[str, Any]]] = []
+    sorted_ids = sorted(
+        by_id,
+        key=lambda bubble_id: (
+            -_safe_nonnegative_int(by_id[bubble_id].get("count"), 1),
+            -_safe_float(by_id[bubble_id].get("importance"), 0.0),
+            _safe_text(by_id[bubble_id].get("label")),
+        ),
+    )
+    for seed_id in sorted_ids:
+        if seed_id in visited:
+            continue
+        stack = [seed_id]
+        visited.add(seed_id)
+        cluster_ids: list[str] = []
+        while stack:
+            current_id = stack.pop()
+            cluster_ids.append(current_id)
+            for next_id in sorted(adjacency.get(current_id) or []):
+                if next_id in visited:
+                    continue
+                visited.add(next_id)
+                stack.append(next_id)
+        clusters.append([by_id[bubble_id] for bubble_id in cluster_ids])
+    return clusters
+
+
+def _safe_list_texts(raw: Any) -> list[str]:
+    return [_safe_text(value) for value in (raw if isinstance(raw, list) else []) if _safe_text(value)]
+
+
+def _ideation_bubble_has_number(raw: Any) -> bool:
+    return isinstance(raw, (int, float)) and math.isfinite(float(raw))
+
+
+def _ideation_bubble_cluster_anchor(cluster: list[dict[str, Any]]) -> dict[str, Any]:
+    if not cluster:
+        return {}
+    return sorted(
+        cluster,
+        key=lambda bubble: (
+            0 if _normalize_ideation_bubble_layout_zone(bubble.get("layout_zone")) == "core" else 1,
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )[0]
+
+
+def _ideation_bubble_cluster_zone(cluster: list[dict[str, Any]]) -> str:
+    if any(_normalize_ideation_bubble_layout_zone(bubble.get("layout_zone")) == "core" for bubble in cluster):
+        return "core"
+    if cluster and all(_normalize_ideation_bubble_layout_zone(bubble.get("layout_zone")) == "peripheral" for bubble in cluster):
+        return "peripheral"
+    return "default"
+
+
+def _ideation_bubble_cluster_move_limit(zone: str) -> float:
+    if zone == "core":
+        return IDEATION_BUBBLE_GRAPH_CORE_CLUSTER_MOVE_LIMIT
+    if zone == "peripheral":
+        return IDEATION_BUBBLE_GRAPH_PERIPHERAL_CLUSTER_MOVE_LIMIT
+    return IDEATION_BUBBLE_GRAPH_DEFAULT_CLUSTER_MOVE_LIMIT
+
+
+def _limit_ideation_bubble_layout_delta(
+    previous_x: float,
+    previous_y: float,
+    target_x: float,
+    target_y: float,
+    max_distance: float,
+) -> tuple[float, float]:
+    dx = target_x - previous_x
+    dy = target_y - previous_y
+    distance = math.sqrt(dx * dx + dy * dy)
+    if distance <= max_distance or distance < 0.001:
+        return target_x, target_y
+    ratio = max_distance / distance
+    return previous_x + dx * ratio, previous_y + dy * ratio
+
+
+def _clamp_ideation_bubble_cluster_box_xy(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> tuple[float, float]:
+    max_x = max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X, IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH - width - IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X)
+    max_y = max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y, IDEATION_BUBBLE_GRAPH_LAYOUT_HEIGHT - height - IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y)
+    return (
+        max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X, min(max_x, x)),
+        max(IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y, min(max_y, y)),
+    )
+
+
+def _ideation_bubble_cluster_box(
+    cluster: list[dict[str, Any]],
+    cluster_id: str,
+) -> dict[str, Any]:
+    anchor = _ideation_bubble_cluster_anchor(cluster)
+    sorted_bubbles = sorted(
+        cluster,
+        key=lambda bubble: (
+            0 if _safe_text(bubble.get("id")) == _safe_text(anchor.get("id")) else 1,
+            -_safe_nonnegative_int(bubble.get("size"), 1),
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )
+    placements: list[dict[str, Any]] = []
+    golden_angle = math.pi * (3 - math.sqrt(5))
+    for index, bubble in enumerate(sorted_bubbles):
+        bubble_id = _safe_text(bubble.get("id"))
+        size = max(1, _safe_nonnegative_int(bubble.get("size"), 1))
+        preserved_local = None
+        if (
+            _safe_text(bubble.get("cluster_id")) == cluster_id
+            and _ideation_bubble_has_number(bubble.get("local_x"))
+            and _ideation_bubble_has_number(bubble.get("local_y"))
+        ):
+            preserved_local = {
+                "bubble": bubble,
+                "x": float(bubble.get("local_x") or 0),
+                "y": float(bubble.get("local_y") or 0),
+                "size": size,
+            }
+        if index == 0:
+            placements.append(preserved_local or {"bubble": bubble, "x": 0.0, "y": 0.0, "size": size})
+            continue
+
+        if preserved_local and not any(
+            _ideation_bubble_layout_circles_overlap(
+                preserved_local,
+                placed,
+                IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP,
+            )
+            for placed in placements
+        ):
+            placements.append(preserved_local)
+            continue
+
+        anchor_id = _safe_text(bubble.get("anchor_id"))
+        related_ids = set(_safe_list_texts(bubble.get("related_ids")))
+        anchor = next(
+            (
+                placement
+                for placement in placements
+                if _safe_text(placement["bubble"].get("id")) == anchor_id
+                or _safe_text(placement["bubble"].get("id")) in related_ids
+            ),
+            placements[0],
+        )
+        seed_angle = _ideation_bubble_seed_ratio(f"{bubble_id}:{cluster_id}", 17) * math.pi * 2
+        chosen: dict[str, Any] | None = None
+        for attempt in range(120):
+            ring = attempt // 22
+            angle = seed_angle + attempt * golden_angle + index * 0.21
+            radius = (
+                max(1.0, float(anchor["size"])) / 2
+                + size / 2
+                + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP
+                + ring * 16
+            )
+            candidate = {
+                "bubble": bubble,
+                "x": float(anchor["x"]) + float(anchor["size"]) / 2 + math.cos(angle) * radius - size / 2,
+                "y": float(anchor["y"]) + float(anchor["size"]) / 2 + math.sin(angle) * radius - size / 2,
+                "size": size,
+            }
+            if not any(_ideation_bubble_layout_circles_overlap(candidate, placed, IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP) for placed in placements):
+                chosen = candidate
+                break
+        if chosen is None:
+            max_right = max(0.0, *[float(placement["x"]) + float(placement["size"]) for placement in placements])
+            chosen = {"bubble": bubble, "x": max_right + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP, "y": 0.0, "size": size}
+        placements.append(chosen)
+
+    min_x = min(float(placement["x"]) for placement in placements)
+    min_y = min(float(placement["y"]) for placement in placements)
+    max_x = max(float(placement["x"]) + float(placement["size"]) for placement in placements)
+    max_y = max(float(placement["y"]) + float(placement["size"]) for placement in placements)
+    normalized_placements = [
+        {
+            **placement,
+            "x": float(placement["x"]) - min_x,
+            "y": float(placement["y"]) - min_y,
+        }
+        for placement in placements
+    ]
+    previous_box_x_values: list[float] = []
+    previous_box_y_values: list[float] = []
+    cluster_x_values: list[float] = []
+    cluster_y_values: list[float] = []
+    for placement in normalized_placements:
+        bubble = placement.get("bubble")
+        if not isinstance(bubble, dict):
+            continue
+        if (
+            _safe_text(bubble.get("cluster_id")) == cluster_id
+            and _ideation_bubble_has_number(bubble.get("cluster_x"))
+            and _ideation_bubble_has_number(bubble.get("cluster_y"))
+        ):
+            cluster_x_values.append(float(bubble.get("cluster_x") or 0))
+            cluster_y_values.append(float(bubble.get("cluster_y") or 0))
+        if _ideation_bubble_has_number(bubble.get("x")) and _ideation_bubble_has_number(bubble.get("y")):
+            previous_box_x_values.append(float(bubble.get("x") or 0) - float(placement.get("x") or 0))
+            previous_box_y_values.append(float(bubble.get("y") or 0) - float(placement.get("y") or 0))
+
+    previous_x = (
+        sum(cluster_x_values) / len(cluster_x_values)
+        if cluster_x_values
+        else sum(previous_box_x_values) / len(previous_box_x_values)
+        if previous_box_x_values
+        else None
+    )
+    previous_y = (
+        sum(cluster_y_values) / len(cluster_y_values)
+        if cluster_y_values
+        else sum(previous_box_y_values) / len(previous_box_y_values)
+        if previous_box_y_values
+        else None
+    )
+    return {
+        "cluster_id": cluster_id,
+        "width": max_x - min_x,
+        "height": max_y - min_y,
+        "zone": _ideation_bubble_cluster_zone(cluster),
+        "previous_x": previous_x,
+        "previous_y": previous_y,
+        "placements": normalized_placements,
+    }
+
+
+def _place_ideation_bubble_cluster_boxes(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    placed_boxes: list[dict[str, Any]] = []
+    placed_bubbles: list[dict[str, Any]] = []
+    golden_angle = math.pi * (3 - math.sqrt(5))
+
+    for index, box in enumerate(boxes):
+        width = max(1.0, float(box.get("width") or 1))
+        height = max(1.0, float(box.get("height") or 1))
+        zone = _safe_text(box.get("zone"), "default")
+        if zone not in {"core", "default", "peripheral"}:
+            zone = "default"
+        seed_angle = _ideation_bubble_seed_ratio(str(box.get("cluster_id")), 23) * math.pi * 2
+        if index == 0 and zone == "core":
+            raw_x = IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - width / 2
+            raw_y = IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - height / 2
+        else:
+            radius_base = 92 if zone == "core" else 220 if zone == "default" else 360
+            radius_step = 44 if zone == "core" else 68 if zone == "default" else 82
+            radius = radius_base + math.sqrt(index + 1) * radius_step
+            angle = seed_angle + index * 1.03
+            raw_x = IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + math.cos(angle) * radius - width / 2
+            raw_y = IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y + math.sin(angle) * radius * 0.72 - height / 2
+        desired_x, desired_y = _clamp_ideation_bubble_cluster_box_xy(raw_x, raw_y, width, height)
+
+        previous_x = box.get("previous_x")
+        previous_y = box.get("previous_y")
+        if _ideation_bubble_has_number(previous_x) and _ideation_bubble_has_number(previous_y):
+            limited_x, limited_y = _limit_ideation_bubble_layout_delta(
+                float(previous_x),
+                float(previous_y),
+                desired_x,
+                desired_y,
+                _ideation_bubble_cluster_move_limit(zone),
+            )
+            target_x, target_y = _clamp_ideation_bubble_cluster_box_xy(limited_x, limited_y, width, height)
+        else:
+            target_x, target_y = desired_x, desired_y
+
+        chosen: tuple[float, float] | None = None
+        gap_candidates = [
+            IDEATION_BUBBLE_GRAPH_LAYOUT_CLUSTER_GAP,
+            84,
+            48,
+            18,
+            0,
+        ]
+
+        for gap in gap_candidates:
+            for attempt in range(180):
+                if attempt == 0:
+                    candidate_x, candidate_y = target_x, target_y
+                else:
+                    radius = 18 + math.sqrt(attempt) * 34
+                    angle = seed_angle + attempt * golden_angle
+                    candidate_x, candidate_y = _clamp_ideation_bubble_cluster_box_xy(
+                        target_x + math.cos(angle) * radius,
+                        target_y + math.sin(angle) * radius * 0.72,
+                        width,
+                        height,
+                    )
+                separated = all(
+                    candidate_x + width + gap < placed["x"]
+                    or placed["x"] + placed["width"] + gap < candidate_x
+                    or candidate_y + height + gap < placed["y"]
+                    or placed["y"] + placed["height"] + gap < candidate_y
+                    for placed in placed_boxes
+                )
+                if separated:
+                    chosen = (candidate_x, candidate_y)
+                    break
+            if chosen is not None:
+                break
+
+        if chosen is None:
+            chosen = _clamp_ideation_bubble_cluster_box_xy(target_x, target_y, width, height)
+
+        box_x, box_y = chosen
+        placed_boxes.append({"x": box_x, "y": box_y, "width": width, "height": height})
+        for placement in box.get("placements") or []:
+            bubble = placement.get("bubble")
+            if not isinstance(bubble, dict):
+                continue
+            placed_bubbles.append(
+                {
+                    "bubble": bubble,
+                    "x": box_x + float(placement.get("x") or 0),
+                    "y": box_y + float(placement.get("y") or 0),
+                    "local_x": float(placement.get("x") or 0),
+                    "local_y": float(placement.get("y") or 0),
+                    "cluster_x": box_x,
+                    "cluster_y": box_y,
+                    "size": float(placement.get("size") or bubble.get("size") or 1),
+                    "cluster_id": _safe_text(box.get("cluster_id")),
+                }
+            )
+    return placed_bubbles
+
+
+def _relax_ideation_bubble_layout(placements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    relaxed = [dict(placement) for placement in placements]
+    for iteration in range(80):
+        moved = False
+        for left_index in range(len(relaxed)):
+            for right_index in range(left_index + 1, len(relaxed)):
+                left = relaxed[left_index]
+                right = relaxed[right_index]
+                left_radius = max(1.0, float(left.get("size") or 1)) / 2
+                right_radius = max(1.0, float(right.get("size") or 1)) / 2
+                left_center_x = float(left.get("x") or 0) + left_radius
+                left_center_y = float(left.get("y") or 0) + left_radius
+                right_center_x = float(right.get("x") or 0) + right_radius
+                right_center_y = float(right.get("y") or 0) + right_radius
+                dx = right_center_x - left_center_x
+                dy = right_center_y - left_center_y
+                distance = math.sqrt(dx * dx + dy * dy)
+                min_distance = left_radius + right_radius + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP
+                if distance >= min_distance:
+                    continue
+                if distance < 0.001:
+                    angle = _ideation_bubble_seed_ratio(
+                        f"{_safe_text((left.get('bubble') or {}).get('id'))}:{_safe_text((right.get('bubble') or {}).get('id'))}:{iteration}",
+                        31,
+                    ) * math.pi * 2
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    distance = 1
+                overlap = min_distance - distance
+                push_x = (dx / distance) * overlap * 0.5
+                push_y = (dy / distance) * overlap * 0.5
+                left_share = right_radius / max(1.0, left_radius + right_radius)
+                right_share = 1 - left_share
+                left_x, left_y = _clamp_ideation_bubble_layout_xy(
+                    float(left.get("x") or 0) - push_x * left_share,
+                    float(left.get("y") or 0) - push_y * left_share,
+                    left_radius * 2,
+                )
+                right_x, right_y = _clamp_ideation_bubble_layout_xy(
+                    float(right.get("x") or 0) + push_x * right_share,
+                    float(right.get("y") or 0) + push_y * right_share,
+                    right_radius * 2,
+                )
+                left["x"] = left_x
+                left["y"] = left_y
+                right["x"] = right_x
+                right["y"] = right_y
+                moved = True
+        if not moved:
+            break
+    return relaxed
+
+
+def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+    ]
+    if not visible:
+        graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
+        return
+
+    max_count = max(1, *[_safe_nonnegative_int(bubble.get("count"), 1) for bubble in visible])
+    for bubble in visible:
+        bubble["size"] = _ideation_bubble_layout_size(bubble, max_count)
+
+    clusters = _ideation_bubble_layout_clusters(visible)
+    cluster_boxes: list[dict[str, Any]] = []
+    for cluster_index, cluster in enumerate(clusters):
+        anchor = _ideation_bubble_cluster_anchor(cluster)
+        anchor_key = _safe_text(anchor.get("id")) or _safe_text(anchor.get("label")) or str(cluster_index)
+        cluster_id = f"bubble-cluster-{_stable_short_id(anchor_key)}"
+        cluster_boxes.append(_ideation_bubble_cluster_box(cluster, cluster_id))
+
+    cluster_boxes.sort(
+        key=lambda box: (
+            0 if _safe_text(box.get("zone")) == "core" else 1 if _safe_text(box.get("zone")) == "default" else 2,
+            -max(
+                _safe_nonnegative_int((placement.get("bubble") or {}).get("count"), 1)
+                for placement in box.get("placements") or [{"bubble": {}}]
+            ),
+            -float(box.get("width") or 0) * float(box.get("height") or 0),
+            _safe_text(box.get("cluster_id")),
+        )
+    )
+
+    placements = _place_ideation_bubble_cluster_boxes(cluster_boxes)
+    for placement in placements:
+        bubble = placement.get("bubble")
+        if not isinstance(bubble, dict):
+            continue
+        size = max(1.0, float(placement.get("size") or bubble.get("size") or 1))
+        x, y = _clamp_ideation_bubble_layout_xy(float(placement.get("x") or 0), float(placement.get("y") or 0), size)
+        bubble["x"] = round(x, 2)
+        bubble["y"] = round(y, 2)
+        bubble["size"] = int(round(size))
+        bubble["cluster_id"] = _safe_text(placement.get("cluster_id")) or _safe_text(bubble.get("cluster_id"))
+        bubble["cluster_x"] = round(float(placement.get("cluster_x") or 0), 2)
+        bubble["cluster_y"] = round(float(placement.get("cluster_y") or 0), 2)
+        bubble["local_x"] = round(float(placement.get("local_x") or 0), 2)
+        bubble["local_y"] = round(float(placement.get("local_y") or 0), 2)
+
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+            bubble["cluster_id"] = _safe_text(bubble.get("cluster_id"))
+            continue
+        if bubble.get("x") is None or bubble.get("y") is None:
+            size = max(1, _safe_nonnegative_int(bubble.get("size"), 96))
+            x, y = _clamp_ideation_bubble_layout_xy(
+                IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - size / 2,
+                IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - size / 2,
+                size,
+            )
+            bubble["x"] = round(x, 2)
+            bubble["y"] = round(y, 2)
+            bubble["size"] = size
+            bubble["cluster_x"] = round(x, 2)
+            bubble["cluster_y"] = round(y, 2)
+            bubble["local_x"] = 0.0
+            bubble["local_y"] = 0.0
+
+    graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
+
+
+def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+    ]
+    if not visible:
+        return False
+
+    core_ids = _ideation_bubble_core_ids(graph)
+    _apply_ideation_bubble_layout_zones(graph, core_ids)
+    _apply_ideation_bubble_visual_state(graph, core_ids)
+    needs_layout = any(
+        not isinstance(bubble.get("x"), (int, float))
+        or not isinstance(bubble.get("y"), (int, float))
+        or not isinstance(bubble.get("size"), int)
+        or not _safe_text(bubble.get("cluster_id"))
+        or not _ideation_bubble_has_number(bubble.get("cluster_x"))
+        or not _ideation_bubble_has_number(bubble.get("cluster_y"))
+        or not _ideation_bubble_has_number(bubble.get("local_x"))
+        or not _ideation_bubble_has_number(bubble.get("local_y"))
+        for bubble in visible
+    )
+    if not needs_layout:
+        return False
+
+    _apply_ideation_bubble_server_layout(graph)
+    return True
+
+
 def _upsert_ideation_bubble_from_keyword(
     graph: dict[str, Any],
     keyword: dict[str, Any],
@@ -6311,6 +6977,12 @@ def _upsert_ideation_bubble_from_keyword(
         return ""
     bubble = by_text.get(_ideation_bubble_text_key(text))
     if bubble is None:
+        support_count = max(
+            _safe_nonnegative_int(keyword.get("support_count"), 0),
+            _safe_nonnegative_int(keyword.get("count"), 1),
+        )
+        if support_count < 2:
+            return ""
         bubble = {
             "id": f"ideation-bubble-{_stable_short_id(text)}",
             "label": text,
@@ -6488,7 +7160,11 @@ def _apply_ideation_bubble_graph_update(
 
     core_ids = _ideation_bubble_core_ids(next_graph)
     _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
+    _prune_archived_ideation_bubbles(next_graph)
+    core_ids = _ideation_bubble_core_ids(next_graph)
     _apply_ideation_bubble_layout_zones(next_graph, core_ids)
+    _apply_ideation_bubble_visual_state(next_graph, core_ids)
+    _apply_ideation_bubble_server_layout(next_graph)
     processed_ids = _dedup_preserve(
         [
             *(next_graph.get("processed_utterance_ids") or []),
@@ -10630,8 +11306,73 @@ def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]
             "finished_at": _safe_text(raw_value.get("finished_at")),
             "error": _safe_text(raw_value.get("error")),
             "version": version,
+            "input_transcript_revision": _safe_nonnegative_int(raw_value.get("input_transcript_revision")),
         }
     return normalized
+
+
+def _should_accept_problem_structure_patch(
+    current: dict[str, Any],
+    incoming: dict[str, Any],
+) -> bool:
+    current_revision = _safe_nonnegative_int(current.get("revision"))
+    incoming_revision = _safe_nonnegative_int(incoming.get("revision"))
+    if current_revision > 0 and incoming_revision < current_revision:
+        return False
+    if (
+        current_revision > 0
+        and incoming_revision == current_revision
+        and current.get("groups")
+        and not incoming.get("groups")
+    ):
+        return False
+    return True
+
+
+def _finish_canvas_artifact_generation_entry(
+    current: dict[str, Any],
+    artifact_key: str,
+    status: str,
+    generation_id: str,
+    requested_by: str,
+    saved_at: str,
+    error: str = "",
+) -> dict[str, Any]:
+    previous_version = _safe_nonnegative_int(current.get("version"))
+    next_version = previous_version + 1 if status == "ready" else previous_version
+    return {
+        "artifact_key": artifact_key,
+        "status": status,
+        "generation_id": generation_id or _safe_text(current.get("generation_id")),
+        "started_by": _safe_text(current.get("started_by")) or requested_by,
+        "started_at": _safe_text(current.get("started_at")) or saved_at,
+        "updated_at": saved_at,
+        "finished_at": saved_at,
+        "error": error if status == "failed" else "",
+        "version": next_version,
+        "input_transcript_revision": _safe_nonnegative_int(current.get("input_transcript_revision")),
+    }
+
+
+def _merge_canvas_artifact_generation_patch(
+    current_map: dict[str, dict[str, Any]],
+    incoming_map: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    merged = copy.deepcopy(current_map)
+    for key, incoming in incoming_map.items():
+        current = current_map.get(key) or {}
+        current_version = _safe_nonnegative_int(current.get("version"))
+        incoming_version = _safe_nonnegative_int(incoming.get("version"))
+        if current_version > incoming_version:
+            continue
+        if (
+            current_version == incoming_version
+            and _safe_text(current.get("status")) == "ready"
+            and _safe_text(incoming.get("status")) != "ready"
+        ):
+            continue
+        merged[key] = copy.deepcopy(incoming)
+    return merged
 
 
 def _summarize_canvas_node_positions_for_debug(
@@ -13906,6 +14647,8 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
         generation = copy.deepcopy(current)
         acquired = False
     else:
+        with RT.lock:
+            input_transcript_revision = _safe_nonnegative_int(getattr(RT, "transcript_version", 0))
         generation = {
             "artifact_key": artifact_key,
             "status": "generating",
@@ -13916,6 +14659,7 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
             "finished_at": "",
             "error": "",
             "version": int(current.get("version") or 0),
+            "input_transcript_revision": input_transcript_revision,
         }
         generation_map[artifact_key] = generation
         workspace["artifact_generation"] = generation_map
@@ -13927,6 +14671,90 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
     return {
         "ok": True,
         "acquired": acquired,
+        "generation": copy.deepcopy(generation),
+        "workspace": _canvas_workspace_response(workspace),
+    }
+
+
+@app.post("/api/canvas/artifact-generation/finish")
+def post_canvas_artifact_generation_finish(payload: CanvasArtifactGenerationFinishInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    artifact_key = _safe_text(payload.artifact_key)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+    if artifact_key not in _CANVAS_ARTIFACT_KEYS:
+        raise HTTPException(status_code=400, detail="invalid artifact_key")
+    status = _safe_text(payload.status)
+    if status not in {"ready", "failed"}:
+        raise HTTPException(status_code=400, detail="invalid status")
+
+    saved_at = _now_ts()
+    previous_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+    workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
+    generation_map = _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {})
+    current = generation_map.get(artifact_key) or {}
+    current_generation_id = _safe_text(current.get("generation_id"))
+    requested_generation_id = _safe_text(payload.generation_id)
+
+    if current_generation_id and requested_generation_id and current_generation_id != requested_generation_id:
+        return {
+            "ok": True,
+            "applied": False,
+            "generation": copy.deepcopy(current),
+            "workspace": _canvas_workspace_response(workspace),
+        }
+
+    generation_id = requested_generation_id or current_generation_id or f"{artifact_key}:{uuid4().hex}"
+    generation = _finish_canvas_artifact_generation_entry(
+        current,
+        artifact_key,
+        status,
+        generation_id,
+        _safe_text(payload.user_id),
+        saved_at,
+        _safe_text(payload.error),
+    )
+    generation_map[artifact_key] = generation
+    workspace["artifact_generation"] = generation_map
+
+    if status == "ready" and artifact_key == "problem-definition:structure":
+        if payload.problem_structure is None:
+            raise HTTPException(status_code=400, detail="problem_structure is required")
+        next_structure = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        previous_structure = _normalize_canvas_problem_structure_state(workspace.get("problem_structure"))
+        next_revision = max(
+            _safe_nonnegative_int(previous_structure.get("revision")) + 1,
+            _safe_nonnegative_int(generation.get("version")),
+        )
+        next_structure["phase"] = "structure"
+        next_structure["revision"] = next_revision
+        next_structure["source_generation_id"] = generation_id
+        next_structure["based_on_transcript_revision"] = _safe_nonnegative_int(
+            current.get("input_transcript_revision")
+        )
+        next_structure["updated_at"] = saved_at
+        workspace["problem_structure"] = next_structure
+
+    with RT.lock:
+        RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
+
+    _save_canvas_workspace_to_db(normalized_meeting_id, workspace)
+    print(
+        "[canvas artifact finish]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "artifact_key": artifact_key,
+            "status": status,
+            "generation_id": generation_id,
+            "version": _safe_nonnegative_int(generation.get("version")),
+            "problem_structure_revision": _safe_nonnegative_int(
+                (workspace.get("problem_structure") or {}).get("revision")
+            ),
+        },
+    )
+    return {
+        "ok": True,
+        "applied": True,
         "generation": copy.deepcopy(generation),
         "workspace": _canvas_workspace_response(workspace),
     }
@@ -13958,7 +14786,19 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "problem_groups" in provided_fields:
         workspace["problem_groups"] = _normalize_canvas_workspace_problem_groups(payload.problem_groups)
     if "problem_structure" in provided_fields:
-        workspace["problem_structure"] = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        incoming_problem_structure = _normalize_canvas_problem_structure_state(payload.problem_structure)
+        current_problem_structure = _normalize_canvas_problem_structure_state(workspace.get("problem_structure"))
+        if _should_accept_problem_structure_patch(current_problem_structure, incoming_problem_structure):
+            workspace["problem_structure"] = incoming_problem_structure
+        else:
+            print(
+                "[canvas workspace PATCH] ignored stale problem_structure",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "current_revision": _safe_nonnegative_int(current_problem_structure.get("revision")),
+                    "incoming_revision": _safe_nonnegative_int(incoming_problem_structure.get("revision")),
+                },
+            )
     if "solution_topics" in provided_fields:
         workspace["solution_topics"] = _normalize_canvas_workspace_solution_topics(payload.solution_topics)
     if "final_solution_summary" in provided_fields:
@@ -13968,7 +14808,10 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     if "node_positions" in provided_fields:
         workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions or {})
     if "artifact_generation" in provided_fields:
-        workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation or {})
+        workspace["artifact_generation"] = _merge_canvas_artifact_generation_patch(
+            _normalize_canvas_artifact_generation(workspace.get("artifact_generation") or {}),
+            _normalize_canvas_artifact_generation(payload.artifact_generation or {}),
+        )
     if "ideation_bubble_graph" in provided_fields:
         workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
     if "imported_state" in provided_fields:
