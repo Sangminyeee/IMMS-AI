@@ -123,6 +123,7 @@ import {
   SUMMARY_DOCUMENT_ARTIFACT,
   isCanvasArtifactGenerationStale,
   isCanvasArtifactGenerating,
+  normalizeArtifactGenerationStatus,
   normalizeCanvasArtifactGeneration,
   setCanvasArtifactGenerationState,
 } from "@/components/canvas/canvasArtifactGeneration";
@@ -132,6 +133,7 @@ import type {
   CanvasArtifactGenerationKey,
   CanvasArtifactGenerationMap,
   CanvasArtifactGenerationState,
+  CanvasArtifactGenerationStatus,
   CanvasCustomGroup,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
@@ -1899,6 +1901,53 @@ export default function MeetingCanvasTab({
     ],
   );
 
+  const commitSharedSummaryDocumentGeneration = useCallback(
+    async (payload: {
+      generationId: string;
+      status: "ready" | "failed";
+      error?: string;
+    }) => {
+      const result = await finishCanvasArtifactGeneration({
+        meeting_id: meetingId,
+        artifact_key: SUMMARY_DOCUMENT_ARTIFACT,
+        user_id: userEmail || userId,
+        generation_id: payload.generationId,
+        status: payload.status,
+        error: payload.error || "",
+      });
+      const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
+        result.workspace?.artifact_generation ||
+          setCanvasArtifactGenerationState(
+            latestSharedWorkspaceRef.current.artifactGeneration || artifactGeneration,
+            result.generation,
+          ),
+      );
+      latestSharedWorkspaceRef.current = {
+        ...latestSharedWorkspaceRef.current,
+        artifactGeneration: nextArtifactGeneration,
+      };
+      setArtifactGeneration(nextArtifactGeneration);
+      if (sharedSyncEnabled) {
+        forceBroadcastSharedCanvas({
+          artifactGeneration: nextArtifactGeneration,
+        });
+      }
+      return {
+        applied: result.applied,
+        artifactGeneration: nextArtifactGeneration,
+      };
+    },
+    [
+      artifactGeneration,
+      forceBroadcastSharedCanvas,
+      latestSharedWorkspaceRef,
+      meetingId,
+      sharedSyncEnabled,
+      userEmail,
+      userId,
+    ],
+  );
+
   useCanvasPersistence({
     agendaOverrides,
     applyingRemoteSharedSyncRef,
@@ -2363,6 +2412,18 @@ export default function MeetingCanvasTab({
     workspaceLoadedRef,
   });
 
+  const problemDefinitionArtifactGeneration = artifactGeneration[PROBLEM_DEFINITION_STEP1_ARTIFACT];
+  const problemStructureArtifactGeneration = artifactGeneration[PROBLEM_DEFINITION_STEP2_ARTIFACT];
+  const summaryArtifactGeneration = artifactGeneration[SUMMARY_DOCUMENT_ARTIFACT];
+  const problemDefinitionGenerationStatus: CanvasArtifactGenerationStatus =
+    normalizeArtifactGenerationStatus(problemDefinitionArtifactGeneration?.status);
+  const problemStructureGenerationStatus: CanvasArtifactGenerationStatus =
+    normalizeArtifactGenerationStatus(problemStructureArtifactGeneration?.status);
+  const summaryDocumentGenerationStatus: CanvasArtifactGenerationStatus =
+    normalizeArtifactGenerationStatus(summaryArtifactGeneration?.status);
+  const problemDefinitionGenerationError = problemDefinitionArtifactGeneration?.error || "";
+  const problemStructureGenerationError = problemStructureArtifactGeneration?.error || "";
+  const summaryDocumentGenerationError = summaryArtifactGeneration?.error || "";
   const sharedProblemDefinitionGenerating = isCanvasArtifactGenerating(
     artifactGeneration,
     PROBLEM_DEFINITION_STEP1_ARTIFACT,
@@ -2371,7 +2432,6 @@ export default function MeetingCanvasTab({
     artifactGeneration,
     PROBLEM_DEFINITION_STEP2_ARTIFACT,
   );
-  const summaryArtifactGeneration = artifactGeneration[SUMMARY_DOCUMENT_ARTIFACT];
   const currentArtifactGenerationUser = (userEmail || userId || "").trim();
   const summaryArtifactGenerationStartedBy = (summaryArtifactGeneration?.started_by || "").trim();
   const summaryArtifactGenerationStartedByCurrentUser =
@@ -2824,6 +2884,7 @@ export default function MeetingCanvasTab({
     setLocalEditPresenceTarget,
     sharedSyncEnabled,
     startSharedArtifactGeneration,
+    commitSharedSummaryDocumentGeneration,
     finishSharedArtifactGeneration,
     summaryDocumentDraftBlocks,
     summaryDocumentDraftDirty,
@@ -3759,6 +3820,8 @@ export default function MeetingCanvasTab({
       remoteEditPresenceByKey,
       summaryDocumentEditMode,
       summaryDocumentPending: effectiveSummaryDocumentPending,
+      summaryDocumentGenerationStatus,
+      summaryDocumentGenerationError,
       summaryDocumentSaving,
       solutionRightPaneRef,
     },
@@ -3766,10 +3829,14 @@ export default function MeetingCanvasTab({
       problemGroupsCount: problemGroups.length,
       problemStructureNodesCount: problemStructureNodes.length,
       problemDefinitionStagePending: effectiveProblemDefinitionStagePending,
+      problemDefinitionGenerationStatus,
+      problemDefinitionGenerationError,
       problemStructureSetupOpen,
       problemStructureDraftMethod,
       problemStructureDraftMode,
       problemStructurePending: effectiveProblemStructurePending,
+      problemStructureGenerationStatus,
+      problemStructureGenerationError,
       problemDefinitionPhase,
       problemStructureMethod,
       problemDefinitionMode,

@@ -86,6 +86,16 @@ type UseSummaryDocumentActionsOptions = {
     generation: CanvasArtifactGenerationState;
     artifactGeneration: CanvasArtifactGenerationMap;
   }>;
+  commitSharedSummaryDocumentGeneration: (
+    payload: {
+      generationId: string;
+      status: "ready" | "failed";
+      error?: string;
+    },
+  ) => Promise<{
+    applied: boolean;
+    artifactGeneration: CanvasArtifactGenerationMap;
+  }>;
   finishSharedArtifactGeneration: (
     artifactKey: CanvasArtifactGenerationKey,
     status: "ready" | "failed",
@@ -127,6 +137,7 @@ export function useSummaryDocumentActions({
   setLocalEditPresenceTarget,
   sharedSyncEnabled,
   startSharedArtifactGeneration,
+  commitSharedSummaryDocumentGeneration,
   finishSharedArtifactGeneration,
   summaryDocumentDraftBlocks,
   summaryDocumentDraftDirty,
@@ -336,6 +347,15 @@ export function useSummaryDocumentActions({
             result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
           structured: result.structured,
         });
+        const readyCommit = await commitSharedSummaryDocumentGeneration({
+          generationId,
+          status: "ready",
+        });
+        if (!readyCommit.applied) {
+          setActivityMessage("초기화 이후 도착한 이전 요약 생성 결과를 무시했습니다.");
+          return;
+        }
+        const readyArtifactGeneration = readyCommit.artifactGeneration;
 
         setFinalSummaryDocument(nextFinalSummary);
         setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
@@ -348,12 +368,8 @@ export function useSummaryDocumentActions({
           ...latestSharedWorkspaceRef.current,
           finalSolutionSummary: nextFinalSummary,
           importedState: persistedSharedImportedState,
+          artifactGeneration: readyArtifactGeneration,
         };
-        const readyArtifactGeneration = finishSharedArtifactGeneration(
-          SUMMARY_DOCUMENT_ARTIFACT,
-          "ready",
-          generationId,
-        );
         if (sharedSyncEnabled) {
           forceBroadcastSharedCanvas({
             finalSolutionSummary: nextFinalSummary,
@@ -384,19 +400,28 @@ export function useSummaryDocumentActions({
           setActivityMessage("초기화 이후 도착한 이전 요약 실패 응답을 무시했습니다.");
           return;
         }
-        const failedArtifactGeneration = finishSharedArtifactGeneration(
-          SUMMARY_DOCUMENT_ARTIFACT,
-          "failed",
-          generationId,
-          message,
-        );
-        if (meetingId) {
-          void saveCanvasWorkspacePatch({
-            meeting_id: meetingId,
-            artifact_generation: failedArtifactGeneration,
-          }).catch((saveError) => {
-            console.error("Failed to save failed summary document generation state:", saveError);
+        try {
+          await commitSharedSummaryDocumentGeneration({
+            generationId,
+            status: "failed",
+            error: message,
           });
+        } catch (commitError) {
+          const failedArtifactGeneration = finishSharedArtifactGeneration(
+            SUMMARY_DOCUMENT_ARTIFACT,
+            "failed",
+            generationId,
+            message,
+          );
+          if (meetingId) {
+            void saveCanvasWorkspacePatch({
+              meeting_id: meetingId,
+              artifact_generation: failedArtifactGeneration,
+            }).catch((saveError) => {
+              console.error("Failed to save failed summary document generation state:", saveError);
+            });
+          }
+          console.error("Failed to commit failed summary document generation state:", commitError);
         }
         setActivityMessage(`요약 문서 생성 실패: ${message}`);
       } finally {
@@ -406,6 +431,7 @@ export function useSummaryDocumentActions({
     },
     [
       buildSummaryDocumentFromResponse,
+      commitSharedSummaryDocumentGeneration,
       finalSummaryDocument.markdown,
       finalSummaryDocument.document_blocks,
       finalSummaryDocument.sections,
@@ -593,6 +619,15 @@ export function useSummaryDocumentActions({
           result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
         structured: result.structured || finalSummaryDocument.structured,
       });
+      const readyCommit = await commitSharedSummaryDocumentGeneration({
+        generationId,
+        status: "ready",
+      });
+      if (!readyCommit.applied) {
+        setActivityMessage("초기화 이후 도착한 이전 결론 재생성 결과를 무시했습니다.");
+        return;
+      }
+      const readyArtifactGeneration = readyCommit.artifactGeneration;
 
       setFinalSummaryDocument(nextFinalSummary);
       setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
@@ -604,12 +639,8 @@ export function useSummaryDocumentActions({
         ...latestSharedWorkspaceRef.current,
         finalSolutionSummary: nextFinalSummary,
         importedState: persistedSharedImportedState,
+        artifactGeneration: readyArtifactGeneration,
       };
-      const readyArtifactGeneration = finishSharedArtifactGeneration(
-        SUMMARY_DOCUMENT_ARTIFACT,
-        "ready",
-        generationId,
-      );
       if (sharedSyncEnabled) {
         forceBroadcastSharedCanvas({
           finalSolutionSummary: nextFinalSummary,
@@ -635,19 +666,28 @@ export function useSummaryDocumentActions({
         setActivityMessage("초기화 이후 도착한 이전 결론 재생성 실패 응답을 무시했습니다.");
         return;
       }
-      const failedArtifactGeneration = finishSharedArtifactGeneration(
-        SUMMARY_DOCUMENT_ARTIFACT,
-        "failed",
-        generationId,
-        message,
-      );
-      if (meetingId) {
-        void saveCanvasWorkspacePatch({
-          meeting_id: meetingId,
-          artifact_generation: failedArtifactGeneration,
-        }).catch((saveError) => {
-          console.error("Failed to save failed conclusion generation state:", saveError);
+      try {
+        await commitSharedSummaryDocumentGeneration({
+          generationId,
+          status: "failed",
+          error: message,
         });
+      } catch (commitError) {
+        const failedArtifactGeneration = finishSharedArtifactGeneration(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          "failed",
+          generationId,
+          message,
+        );
+        if (meetingId) {
+          void saveCanvasWorkspacePatch({
+            meeting_id: meetingId,
+            artifact_generation: failedArtifactGeneration,
+          }).catch((saveError) => {
+            console.error("Failed to save failed conclusion generation state:", saveError);
+          });
+        }
+        console.error("Failed to commit failed conclusion generation state:", commitError);
       }
       setActivityMessage(`결론 문서 재생성 실패: ${message}`);
     } finally {
@@ -657,6 +697,7 @@ export function useSummaryDocumentActions({
   }, [
     buildSummaryDocumentFromResponse,
     busy,
+    commitSharedSummaryDocumentGeneration,
     finalSummaryDocument,
     forceBroadcastSharedCanvas,
     latestSharedWorkspaceRef,

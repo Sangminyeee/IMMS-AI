@@ -752,6 +752,16 @@ function CurrentStagePanel({
   const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
   const hasProblemStructure = problem.problemStructureNodesCount > 0;
+  const problemDefinitionFailed = problem.problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problem.problemStructureGenerationStatus === "failed";
+  const currentProblemFailed =
+    stage === "problem-definition" && (isProblemExplore ? problemDefinitionFailed : problemStructureFailed);
+  const currentProblemError =
+    stage === "problem-definition"
+      ? isProblemExplore
+        ? problem.problemDefinitionGenerationError
+        : problem.problemStructureGenerationError
+      : "";
 
   let title = stageLabel(stage, problemDefinitionPhase);
   let description = (
@@ -774,7 +784,11 @@ function CurrentStagePanel({
         충분히 모이면 문제정의를 시작하세요.
       </>
     );
-    buttonLabel = "문제정의 시작하기";
+    buttonLabel = problem.problemDefinitionStagePending
+      ? "문제정의 생성 중"
+      : problemDefinitionFailed
+        ? "문제정의 다시 시작하기"
+        : "문제정의 시작하기";
     buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
     onButtonClick = () => header.handlers.onStageSelect("problem-definition");
   } else if (isProblemExplore) {
@@ -786,8 +800,12 @@ function CurrentStagePanel({
         남은 후보는 모두 다음 단계로 이동합니다.
       </>
     );
-    buttonLabel = problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기";
-    buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+    buttonLabel = problem.problemStructurePending
+      ? "구조화 생성 중"
+      : problemStructureFailed
+        ? "2단계 구조화 다시 시도"
+        : "2단계 · 구조화 시작하기";
+    buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
     onButtonClick = () => {
       void problemHandlers.onStartProblemStructure();
     };
@@ -833,7 +851,11 @@ function CurrentStagePanel({
           header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemDefinitionStagePending ? "1단계 재생성 중" : "1단계 재생성"}
+        {problem.problemDefinitionStagePending
+          ? "1단계 재생성 중"
+          : problemDefinitionFailed
+            ? "1단계 다시 생성"
+            : "1단계 재생성"}
       </span>
     </button>
   ) : null;
@@ -851,7 +873,11 @@ function CurrentStagePanel({
           header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0 ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemStructurePending ? "AI 묶는 중" : "AI 자동묶음"}
+        {problem.problemStructurePending
+          ? "AI 묶는 중"
+          : problemStructureFailed
+            ? "AI 묶기 재시도"
+            : "AI 자동묶음"}
       </span>
     </button>
   ) : null;
@@ -865,6 +891,12 @@ function CurrentStagePanel({
       <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
         {description}
       </p>
+      {currentProblemFailed ? (
+        <p className="mt-[10px] rounded-[10px] border border-[#fecaca] bg-[#fff5f5] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#dc2626]">
+          생성에 실패했습니다. 다시 생성 버튼으로 재시도할 수 있습니다.
+          {currentProblemError ? ` (${currentProblemError})` : ""}
+        </p>
+      ) : null}
       {buttonLabel && onButtonClick ? (
         <button
           type="button"
