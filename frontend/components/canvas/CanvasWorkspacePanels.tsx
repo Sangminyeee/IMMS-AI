@@ -28,6 +28,7 @@ import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAs
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ProblemDefinitionPhase = "explore" | "structure";
+export type CanvasDebugResetScope = "problem" | "summary" | "all";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
@@ -921,6 +922,8 @@ function RightAiPanel({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
@@ -929,6 +932,8 @@ function RightAiPanel({
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 }) {
   const {
     open: quickAskOpen,
@@ -943,7 +948,9 @@ function RightAiPanel({
   const quickAskHasMessages = quickAskMessages.length > 0;
   const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
   const [shareCopied, setShareCopied] = useState(false);
+  const [debugResetOpen, setDebugResetOpen] = useState(false);
   const shareCopiedResetTimerRef = useRef<number | null>(null);
+  const showDebugReset = header.view.stage === "ideation" && Boolean(onDebugResetWorkspace);
 
   useEffect(() => () => {
     if (shareCopiedResetTimerRef.current !== null) {
@@ -962,6 +969,12 @@ function RightAiPanel({
       setShareCopied(false);
       shareCopiedResetTimerRef.current = null;
     }, 1600);
+  };
+
+  const handleDebugReset = async (scope: CanvasDebugResetScope) => {
+    if (!onDebugResetWorkspace || debugResetBusy) return;
+    setDebugResetOpen(false);
+    await onDebugResetWorkspace(scope);
   };
 
   return (
@@ -987,17 +1000,55 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
-          aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
-          onClick={() => void handleShareClick()}
-        >
-          <ShareIcon className="h-[13px] w-[13px] shrink-0" />
-          <span className={panelButtonTextClasses.share} aria-live="polite">
-            {shareCopied ? "복사완료" : "공유"}
-          </span>
-        </button>
+        <div className="relative flex items-center gap-[8px]">
+          {showDebugReset ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={debugResetOpen}
+                aria-label="디버그 초기화 메뉴"
+                disabled={debugResetBusy}
+                onClick={() => setDebugResetOpen((current) => !current)}
+                className="inline-flex h-[32.4px] items-center justify-center rounded-[67.5px] border border-[rgba(1,163,255,0.33)] bg-white px-[12px] text-[#236cf3] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="moa-font-pretendard text-[10px] font-bold leading-[1.4] tracking-[-0.025px] text-current">
+                  초기화
+                </span>
+              </button>
+              {debugResetOpen ? (
+                <div className="absolute right-[76px] top-[calc(100%+8px)] z-30 w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
+                  {([
+                    ["problem", "문제정의 초기화"],
+                    ["summary", "요약 초기화"],
+                    ["all", "문제정의+요약"],
+                  ] as const).map(([scope, label]) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      className="block h-[30px] w-full rounded-[10px] px-[10px] text-left transition hover:bg-[#f4fbff]"
+                      onClick={() => void handleDebugReset(scope)}
+                    >
+                      <span className="moa-font-pretendard text-[11px] font-semibold leading-[1.4] tracking-[-0.028px] text-[#526070]">
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          <button
+            type="button"
+            className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
+            aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
+            onClick={() => void handleShareClick()}
+          >
+            <ShareIcon className="h-[13px] w-[13px] shrink-0" />
+            <span className={panelButtonTextClasses.share} aria-live="polite">
+              {shareCopied ? "복사완료" : "공유"}
+            </span>
+          </button>
+        </div>
       </header>
 
       <section className="relative z-10 shrink-0 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[21px]">
@@ -1109,6 +1160,8 @@ export type CanvasWorkspacePanelsProps = {
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
   onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
@@ -1130,6 +1183,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   quickAskState,
   quickAskHandlers,
   onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: CanvasWorkspacePanelsProps) {
   return (
     <div
@@ -1168,6 +1223,8 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
         onShareMeetingLink={onShareMeetingLink}
+        onDebugResetWorkspace={onDebugResetWorkspace}
+        debugResetBusy={debugResetBusy}
       />
     </div>
   );

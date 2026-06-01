@@ -235,6 +235,12 @@ export function useProblemDefinitionGeneration<
           existing_groups: forceRegenerate ? [] : buildExistingGroupsPayload(problemGroups),
           max_groups: 6,
         });
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 문제정의 생성 결과를 무시했습니다.");
+          return;
+        }
         const nextGroups = hydrateProblemGroups(result.groups || [], []).map(
           (group) =>
             ({
@@ -306,6 +312,12 @@ export function useProblemDefinitionGeneration<
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 문제정의 실패 응답을 무시했습니다.");
+          return;
+        }
         const failedArtifactGeneration = finishSharedArtifactGeneration(
           PROBLEM_DEFINITION_STEP1_ARTIFACT,
           "failed",

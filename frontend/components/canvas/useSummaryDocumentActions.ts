@@ -319,6 +319,12 @@ export function useSummaryDocumentActions({
             depth: node.depth,
           })),
         });
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 요약 생성 결과를 무시했습니다.");
+          return;
+        }
         const nextFinalSummary = buildSummaryDocumentFromResponse({
           markdown: result.markdown || "",
           documentBlocks: result.document_blocks || [],
@@ -375,6 +381,12 @@ export function useSummaryDocumentActions({
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const currentGenerationId =
+          latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
+        if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+          setActivityMessage("초기화 이후 도착한 이전 요약 실패 응답을 무시했습니다.");
+          return;
+        }
         const failedArtifactGeneration = finishSharedArtifactGeneration(
           SUMMARY_DOCUMENT_ARTIFACT,
           "failed",
@@ -570,6 +582,12 @@ export function useSummaryDocumentActions({
           depth: node.depth,
         })),
       });
+      const currentGenerationId =
+        latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
+      if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+        setActivityMessage("초기화 이후 도착한 이전 결론 재생성 결과를 무시했습니다.");
+        return;
+      }
       const nextFinalSummary = buildSummaryDocumentFromResponse({
         markdown: result.markdown || "",
         documentBlocks: result.document_blocks || [],
@@ -620,6 +638,12 @@ export function useSummaryDocumentActions({
       setActivityMessage(result.warning || (options?.refreshCache ? "요약 캐시를 새로 만들고 결론 문서를 다시 생성했습니다." : "결론 문서를 다시 생성했습니다."));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const currentGenerationId =
+        latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
+      if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+        setActivityMessage("초기화 이후 도착한 이전 결론 재생성 실패 응답을 무시했습니다.");
+        return;
+      }
       const failedArtifactGeneration = finishSharedArtifactGeneration(
         SUMMARY_DOCUMENT_ARTIFACT,
         "failed",
