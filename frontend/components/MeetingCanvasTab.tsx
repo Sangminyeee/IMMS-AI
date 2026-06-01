@@ -178,6 +178,18 @@ type ProblemGroupStatus = "draft" | "review" | "final";
 const CANVAS_DEBUG_RESET_ENABLED =
   process.env.NODE_ENV !== "production" ||
   process.env.NEXT_PUBLIC_ENABLE_CANVAS_DEBUG_TOOLS === "true";
+const PROBLEM_DEFINITION_LLM_CACHE_RESET_PREFIXES = [
+  "problem_taxonomy",
+  "problem_taxonomy_outline",
+  "problem_taxonomy_chunk_summary:",
+  "problem_taxonomy_overview_summary:",
+  "problem_grouping_rationale:",
+  "problem_structure",
+];
+const SUMMARY_DOCUMENT_LLM_CACHE_RESET_PREFIXES = [
+  "summary_document",
+  "summary_conclusion",
+];
 const CANVAS_LLM_FAILURE_RETRY_DELAY_MS = 60_000;
 const CANVAS_LLM_SILENCE_FLUSH_MS = 8_000;
 const COMPOSER_PERSONAL_NOTE_LINK_ID = "__composer_personal_note__";
@@ -3433,17 +3445,24 @@ export default function MeetingCanvasTab({
           solution: {},
         })
       : nodePositions;
+    const llmCacheResetPrefixes = [
+      ...(resetProblem ? PROBLEM_DEFINITION_LLM_CACHE_RESET_PREFIXES : []),
+      ...(resetSummary ? SUMMARY_DOCUMENT_LLM_CACHE_RESET_PREFIXES : []),
+    ];
 
     try {
-      const patchPayload = buildCurrentWorkspacePatchPayload({
-        stage: "ideation",
-        problemGroups: nextProblemGroups,
-        problemStructure: nextProblemStructure,
-        finalSolutionSummary: nextFinalSummaryDocument,
-        artifactGeneration: nextArtifactGeneration,
-        nodePositions: nextNodePositions,
-        importedState: persistedSharedImportedState,
-      });
+      const patchPayload = {
+        ...buildCurrentWorkspacePatchPayload({
+          stage: "ideation",
+          problemGroups: nextProblemGroups,
+          problemStructure: nextProblemStructure,
+          finalSolutionSummary: nextFinalSummaryDocument,
+          artifactGeneration: nextArtifactGeneration,
+          nodePositions: nextNodePositions,
+          importedState: persistedSharedImportedState,
+        }),
+        llm_cache_reset_prefixes: llmCacheResetPrefixes,
+      };
       await saveCanvasWorkspacePatch(patchPayload);
       writeSharedWorkspaceSessionCache(meetingId, patchPayload);
 

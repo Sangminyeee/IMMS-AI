@@ -423,6 +423,7 @@ export interface CanvasWorkspacePatchRequest {
   artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
+  llm_cache_reset_prefixes?: string[];
 }
 
 export interface CanvasFinalReportShareResponse {

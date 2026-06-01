@@ -979,7 +979,7 @@ function RightAiPanel({
 
   return (
     <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
-      <header className="relative z-10 flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
+      <header className="relative z-[80] flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
         <div className="flex items-center">
           {visibleParticipants.map((participant, index) => (
             <span
@@ -1016,7 +1016,7 @@ function RightAiPanel({
                 </span>
               </button>
               {debugResetOpen ? (
-                <div className="absolute right-[76px] top-[calc(100%+8px)] z-30 w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
+                <div className="absolute right-[76px] top-[calc(100%+8px)] z-[90] w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
                   {([
                     ["problem", "문제정의 초기화"],
                     ["summary", "요약 초기화"],

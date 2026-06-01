@@ -1579,6 +1579,49 @@ def _set_canvas_llm_cached_result(
     }
 
 
+def _reset_canvas_llm_cache_entries(
+    rt: "RuntimeStore",
+    meeting_id: str,
+    workspace: dict[str, Any],
+    prefixes: list[str] | None,
+) -> list[str]:
+    normalized_meeting_id = _safe_text(meeting_id)
+    normalized_prefixes = [_safe_text(prefix) for prefix in prefixes or [] if _safe_text(prefix)]
+    if not normalized_meeting_id or not normalized_prefixes:
+        return []
+
+    llm_cache = workspace.get("llm_cache")
+    if not isinstance(llm_cache, dict):
+        llm_cache = {}
+        workspace["llm_cache"] = llm_cache
+
+    def _matches(key: str) -> bool:
+        return any(key == prefix or key.startswith(prefix) for prefix in normalized_prefixes)
+
+    removed_keys: list[str] = []
+    for key in list(llm_cache.keys()):
+        normalized_key = _safe_text(key)
+        if _matches(normalized_key):
+            llm_cache.pop(key, None)
+            removed_keys.append(normalized_key)
+
+    meeting_entries = rt.canvas_llm_inflight_by_meeting.get(normalized_meeting_id)
+    if isinstance(meeting_entries, dict):
+        for key in list(meeting_entries.keys()):
+            normalized_key = _safe_text(key)
+            if not _matches(normalized_key):
+                continue
+            inflight = meeting_entries.pop(key, None)
+            if isinstance(inflight, dict) and isinstance(inflight.get("event"), threading.Event):
+                inflight["error"] = "LLM cache reset"
+                inflight["event"].set()
+            removed_keys.append(normalized_key)
+        if not meeting_entries:
+            rt.canvas_llm_inflight_by_meeting.pop(normalized_meeting_id, None)
+
+    return _dedup_preserve(removed_keys, limit=100)
+
+
 def _get_canvas_llm_inflight_entry(
     rt: "RuntimeStore",
     meeting_id: str,
@@ -1681,18 +1724,25 @@ def _run_canvas_llm_cached_request(
 
         workspace_snapshot: dict[str, Any] | None = None
         with rt.lock:
-            _set_canvas_llm_cached_result(
-                rt,
-                normalized_meeting_id,
-                normalized_cache_key,
-                normalized_signature,
-                result,
+            meeting_entries = rt.canvas_llm_inflight_by_meeting.get(normalized_meeting_id) or {}
+            inflight = meeting_entries.get(normalized_cache_key)
+            should_cache_result = (
+                isinstance(inflight, dict)
+                and _safe_text(inflight.get("signature")) == normalized_signature
+                and inflight.get("event") is wait_event
             )
+            if should_cache_result:
+                meeting_entries.pop(normalized_cache_key, None)
+                _set_canvas_llm_cached_result(
+                    rt,
+                    normalized_meeting_id,
+                    normalized_cache_key,
+                    normalized_signature,
+                    result,
+                )
             workspace_snapshot = copy.deepcopy(
                 _ensure_canvas_workspace_entry(rt, normalized_meeting_id),
             )
-            meeting_entries = rt.canvas_llm_inflight_by_meeting.get(normalized_meeting_id) or {}
-            inflight = meeting_entries.pop(normalized_cache_key, None)
             if isinstance(inflight, dict) and isinstance(inflight.get("event"), threading.Event):
                 inflight["event"].set()
             if not meeting_entries:
@@ -2612,6 +2662,7 @@ class CanvasWorkspacePatchInput(BaseModel):
     artifact_generation: dict[str, CanvasArtifactGenerationEntryInput] | None = None
     ideation_bubble_graph: dict[str, Any] | None = None
     imported_state: dict[str, Any] | None = None
+    llm_cache_reset_prefixes: list[str] | None = None
 
 
 class CanvasArtifactGenerationStartInput(BaseModel):
@@ -14818,6 +14869,16 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         workspace["imported_state"] = (
             copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
         )
+    if "llm_cache_reset_prefixes" in provided_fields:
+        with RT.lock:
+            reset_keys = _reset_canvas_llm_cache_entries(
+                RT,
+                normalized_meeting_id,
+                workspace,
+                payload.llm_cache_reset_prefixes or [],
+            )
+    else:
+        reset_keys = []
 
     with RT.lock:
         RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
@@ -14835,6 +14896,7 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
             "custom_groups": len(workspace.get("custom_groups") or []),
             "problem_structure_phase": _safe_text((workspace.get("problem_structure") or {}).get("phase")),
             "node_positions": _summarize_canvas_node_positions_for_debug(workspace.get("node_positions")),
+            "llm_cache_reset_count": len(reset_keys),
         },
     )
     return _canvas_workspace_response(workspace)
