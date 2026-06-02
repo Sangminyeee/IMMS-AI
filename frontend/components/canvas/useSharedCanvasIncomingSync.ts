@@ -35,6 +35,8 @@ import {
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
@@ -57,6 +59,8 @@ type ProblemGroupModel = CanvasProblemDefinitionGroup & {
 type SharedWorkspaceSnapshot = {
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig: CanvasDemoConfig;
+  demoBalanceClassification: CanvasDemoBalanceClassification;
   stage: CanvasStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -109,6 +113,8 @@ type UseSharedCanvasIncomingSyncOptions = {
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
   setMeetingGoalDrafts: (goal: string, context: string) => void;
+  setDemoConfig: Dispatch<SetStateAction<CanvasDemoConfig>>;
+  setDemoBalanceClassification: Dispatch<SetStateAction<CanvasDemoBalanceClassification>>;
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
   setProblemGroups: Dispatch<SetStateAction<ProblemGroupModel[]>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
@@ -285,6 +291,8 @@ export function useSharedCanvasIncomingSync({
   setImportedState,
   setImportOverrideActive,
   setMeetingGoalDrafts,
+  setDemoConfig,
+  setDemoBalanceClassification,
   setNodePositions,
   setProblemGroups,
   setProblemStructureGroups,
@@ -419,6 +427,8 @@ export function useSharedCanvasIncomingSync({
       lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
         meeting_goal: nextWorkspace.meetingGoal,
         meeting_goal_context: nextWorkspace.meetingGoalContext,
+        demo_config: nextWorkspace.demoConfig,
+        demo_balance_classification: nextWorkspace.demoBalanceClassification,
         stage: nextWorkspace.stage,
         agenda_overrides: nextWorkspace.agendaOverrides,
         canvas_items: nextWorkspace.canvasItems,
@@ -435,6 +445,8 @@ export function useSharedCanvasIncomingSync({
       lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
         meetingGoal: nextWorkspace.meetingGoal,
         meetingGoalContext: nextWorkspace.meetingGoalContext,
+        demoConfig: nextWorkspace.demoConfig,
+        demoBalanceClassification: nextWorkspace.demoBalanceClassification,
         stage: nextWorkspace.stage,
         agendaOverrides: nextWorkspace.agendaOverrides,
         canvasItems: nextWorkspace.canvasItems,
@@ -640,6 +652,9 @@ export function useSharedCanvasIncomingSync({
     const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
     const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
     const incomingMeetingGoalContext = incomingSharedCanvasSync.meeting_goal_context || "";
+    const incomingDemoConfig = incomingSharedCanvasSync.demo_config || currentWorkspace.demoConfig;
+    const incomingDemoBalanceClassification =
+      incomingSharedCanvasSync.demo_balance_classification || currentWorkspace.demoBalanceClassification || {};
     const nextIncomingCanvasItems = incomingCanvasItems;
     const currentNodePositionsSnapshot = liveNodePositionsRef.current;
 
@@ -680,6 +695,8 @@ export function useSharedCanvasIncomingSync({
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
       meeting_goal: incomingMeetingGoal,
       meeting_goal_context: incomingMeetingGoalContext,
+      demo_config: incomingDemoConfig,
+      demo_balance_classification: incomingDemoBalanceClassification,
       stage,
       agenda_overrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvas_items: nextIncomingCanvasItems,
@@ -697,6 +714,8 @@ export function useSharedCanvasIncomingSync({
     latestSharedWorkspaceRef.current = {
       meetingGoal: incomingMeetingGoal,
       meetingGoalContext: incomingMeetingGoalContext,
+      demoConfig: incomingDemoConfig,
+      demoBalanceClassification: incomingDemoBalanceClassification,
       stage,
       agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvasItems: nextIncomingCanvasItems,
@@ -729,6 +748,8 @@ export function useSharedCanvasIncomingSync({
     setSummaryDocumentDraftDirty(false);
     setSummaryDocumentEditMode(false);
     setMeetingGoalDrafts(incomingMeetingGoal, incomingMeetingGoalContext);
+    setDemoConfig(incomingDemoConfig);
+    setDemoBalanceClassification(incomingDemoBalanceClassification);
     onMeetingGoalChange(incomingMeetingGoal);
     onMeetingGoalContextChange(incomingMeetingGoalContext);
     setAgendaOverrides(incomingSharedCanvasSync.agenda_overrides || {});
@@ -745,6 +766,8 @@ export function useSharedCanvasIncomingSync({
     lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
       meetingGoal: incomingMeetingGoal,
       meetingGoalContext: incomingMeetingGoalContext,
+      demoConfig: incomingDemoConfig,
+      demoBalanceClassification: incomingDemoBalanceClassification,
       stage,
       agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvasItems: nextIncomingCanvasItems,
@@ -794,6 +817,8 @@ export function useSharedCanvasIncomingSync({
     setImportedState,
     setImportOverrideActive,
     setMeetingGoalDrafts,
+    setDemoBalanceClassification,
+    setDemoConfig,
     setNodePositions,
     setProblemGroups,
     setProblemStructureArtifactMeta,

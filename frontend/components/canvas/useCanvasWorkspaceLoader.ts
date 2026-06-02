@@ -5,6 +5,8 @@ import { getCanvasPersonalNotes, getCanvasWorkspaceState } from "@/lib/api";
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
@@ -120,6 +122,8 @@ type UseCanvasWorkspaceLoaderOptions<
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
   setLoadingProblemGroupIds: Dispatch<SetStateAction<string[]>>;
   setMeetingGoalDrafts: (goal: string, context: string) => void;
+  setDemoConfig: Dispatch<SetStateAction<CanvasDemoConfig>>;
+  setDemoBalanceClassification: Dispatch<SetStateAction<CanvasDemoBalanceClassification>>;
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
   setPersonalNotes: Dispatch<SetStateAction<TPersonalNote[]>>;
   setProblemDefinitionMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
@@ -179,6 +183,8 @@ export function useCanvasWorkspaceLoader<
   setImportOverrideActive,
   setLoadingProblemGroupIds,
   setMeetingGoalDrafts,
+  setDemoConfig,
+  setDemoBalanceClassification,
   setNodePositions,
   setPersonalNotes,
   setProblemDefinitionMode,
@@ -241,6 +247,8 @@ export function useCanvasWorkspaceLoader<
     setCustomGroups([]);
     setNodePositions({});
     setImportedState(null);
+    setDemoConfig({ enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" });
+    setDemoBalanceClassification({});
     setStage("ideation");
     setProblemDefinitionMode("");
     setProblemDefinitionPhase("explore");
@@ -341,6 +349,8 @@ export function useCanvasWorkspaceLoader<
           : saved.imported_state || null;
         const nextMeetingGoal = saved.meeting_goal || "";
         const nextMeetingGoalContext = saved.meeting_goal_context || "";
+        const nextDemoConfig = saved.demo_config || { enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" };
+        const nextDemoBalanceClassification = saved.demo_balance_classification || savedLocalCanvasState?.demo_balance_classification || {};
         const nextImportOverrideActive = shouldUseLocalCanvas
           ? Boolean(savedLocalCanvasState?.import_override_active && nextImportedState)
           : Boolean(saved.imported_state);
@@ -356,6 +366,8 @@ export function useCanvasWorkspaceLoader<
         setCanvasItems(nextCanvasItems);
         setCustomGroups(nextCustomGroups);
         setMeetingGoalDrafts(nextMeetingGoal, nextMeetingGoalContext);
+        setDemoConfig(nextDemoConfig);
+        setDemoBalanceClassification(nextDemoBalanceClassification);
         onMeetingGoalChange(nextMeetingGoal);
         onMeetingGoalContextChange(nextMeetingGoalContext);
         setSharedSyncEnabled(nextSharedSyncEnabled);
@@ -385,6 +397,8 @@ export function useCanvasWorkspaceLoader<
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           meeting_goal: nextMeetingGoal,
           meeting_goal_context: nextMeetingGoalContext,
+          demo_config: nextDemoConfig,
+          demo_balance_classification: nextDemoBalanceClassification,
           stage: displayStage,
           agenda_overrides: nextAgendaOverrides,
           canvas_items: nextCanvasItems,
@@ -401,6 +415,8 @@ export function useCanvasWorkspaceLoader<
         lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
           meetingGoal: nextMeetingGoal,
           meetingGoalContext: nextMeetingGoalContext,
+          demoConfig: nextDemoConfig,
+          demoBalanceClassification: nextDemoBalanceClassification,
           stage: displayStage,
           agendaOverrides: nextAgendaOverrides,
           canvasItems: nextCanvasItems,
@@ -454,6 +470,8 @@ export function useCanvasWorkspaceLoader<
         setSharedSyncEnabled(true);
         setNodePositions({});
         setImportedState(null);
+        setDemoConfig({ enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" });
+        setDemoBalanceClassification({});
         setStage("ideation");
         setProblemDefinitionMode("");
         setProblemDefinitionPhase("explore");
@@ -474,6 +492,8 @@ export function useCanvasWorkspaceLoader<
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
           meeting_goal: "",
           meeting_goal_context: "",
+          demo_config: { enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" },
+          demo_balance_classification: {},
           stage: "ideation",
           agenda_overrides: {},
           canvas_items: [],
@@ -490,6 +510,8 @@ export function useCanvasWorkspaceLoader<
         lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
           meetingGoal: "",
           meetingGoalContext: "",
+          demoConfig: { enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" },
+          demoBalanceClassification: {},
           stage: "ideation",
           agendaOverrides: {},
           canvasItems: [],
@@ -545,6 +567,8 @@ export function useCanvasWorkspaceLoader<
     setImportOverrideActive,
     setLoadingProblemGroupIds,
     setMeetingGoalDrafts,
+    setDemoConfig,
+    setDemoBalanceClassification,
     setNodePositions,
     setPersonalNotes,
     setProblemDefinitionMode,

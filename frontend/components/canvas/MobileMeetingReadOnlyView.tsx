@@ -39,6 +39,7 @@ type ProblemExploreListItem = {
 type MobileMeetingReadOnlyViewProps = {
   actualStage: CanvasStage;
   actualProblemPhase: ProblemDefinitionPhase;
+  demoBalanceMode?: boolean;
   finalSummaryDocument: CanvasFinalSolutionSummary;
   ideationBubbleVisuals: IdeationKeywordBubbleVisual[];
   meetingStatus: string;
@@ -64,15 +65,22 @@ const MOBILE_STAGE_TABS: Array<{ stage: MobileMeetingViewStage; label: string }>
   { stage: "problem-structure", label: "문제정의 2" },
   { stage: "summary", label: "요약" },
 ];
+const DEMO_MOBILE_STAGE_TABS: Array<{ stage: MobileMeetingViewStage; label: string }> = [
+  { stage: "ideation", label: "아이디어" },
+  { stage: "problem-explore", label: "문제정의" },
+  { stage: "summary", label: "요약" },
+];
 
-function actualMobileStage(stage: CanvasStage, phase: ProblemDefinitionPhase): MobileMeetingViewStage {
+function actualMobileStage(stage: CanvasStage, phase: ProblemDefinitionPhase, demoBalanceMode = false): MobileMeetingViewStage {
   if (stage === "ideation") return "ideation";
   if (stage === "solution") return "summary";
+  if (demoBalanceMode) return "problem-explore";
   return phase === "structure" ? "problem-structure" : "problem-explore";
 }
 
-function mobileStageTitle(stage: MobileMeetingViewStage) {
+function mobileStageTitle(stage: MobileMeetingViewStage, demoBalanceMode = false) {
   if (stage === "ideation") return "아이디어";
+  if (demoBalanceMode && (stage === "problem-explore" || stage === "problem-structure")) return "문제정의";
   if (stage === "problem-explore") return "문제정의 1단계";
   if (stage === "problem-structure") return "문제정의 2단계";
   return "요약 및 정리";
@@ -281,7 +289,7 @@ function MobileProblemExploreCard({
   );
 }
 
-function MobileProblemExploreList({ items }: { items: ProblemExploreListItem[] }) {
+function MobileProblemExploreList({ demoBalanceMode = false, items }: { demoBalanceMode?: boolean; items: ProblemExploreListItem[] }) {
   const [expandedId, setExpandedId] = useState<string>("");
   const totalChildren = items.reduce((sum, item) => sum + item.descendants.length, 0);
 
@@ -289,9 +297,13 @@ function MobileProblemExploreList({ items }: { items: ProblemExploreListItem[] }
     <section className="h-full overflow-y-auto bg-[#f8fbff] px-4 py-4">
       <div className="mx-auto max-w-[720px] space-y-3 pb-[calc(env(safe-area-inset-bottom)+18px)]">
         <MobileStageSummaryBar
-          title="문제정의 1단계"
+          title={demoBalanceMode ? "문제정의" : "문제정의 1단계"}
           meta={`분류 ${items.length}개 · 세부 후보 ${totalChildren}개`}
-          description="전체 회의 흐름에서 뽑힌 문제 후보를 분류 단위로 정리했습니다."
+          description={
+            demoBalanceMode
+              ? "A/B 선택 의견을 선택지별 논점과 근거 중심으로 정리했습니다."
+              : "전체 회의 흐름에서 뽑힌 문제 후보를 분류 단위로 정리했습니다."
+          }
         />
         {items.map((item, index) => (
           <MobileProblemExploreCard
@@ -703,6 +715,7 @@ function MobileEmptyState({ message, title }: { message: string; title: string }
 export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView({
   actualProblemPhase,
   actualStage,
+  demoBalanceMode = false,
   finalSummaryDocument,
   ideationBubbleVisuals,
   meetingStatus,
@@ -719,7 +732,8 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
   viewedStage,
 }: MobileMeetingReadOnlyViewProps) {
   const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
-  const currentActualMobileStage = actualMobileStage(actualStage, actualProblemPhase);
+  const stageTabs = demoBalanceMode ? DEMO_MOBILE_STAGE_TABS : MOBILE_STAGE_TABS;
+  const currentActualMobileStage = actualMobileStage(actualStage, actualProblemPhase, demoBalanceMode);
   const hasProblemExplore = problemGroups.length > 0;
   const hasProblemStructure = problemStructureGroups.length > 0;
   const hasSummaryDocument =
@@ -740,6 +754,12 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
   const ideationNodeSignature = ideationNodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}`).join("|");
 
   useEffect(() => {
+    if (demoBalanceMode && viewedStage === "problem-structure") {
+      onViewedStageChange("problem-explore");
+    }
+  }, [demoBalanceMode, onViewedStageChange, viewedStage]);
+
+  useEffect(() => {
     if (!flowRef.current || viewedStage !== "ideation") return;
     window.requestAnimationFrame(() => {
       void flowRef.current?.fitView({ duration: 260, padding: 0.22 });
@@ -749,10 +769,10 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
   let emptyTitle = "";
   let emptyMessage = "";
   if (viewedStage === "problem-explore" && !hasProblemExplore) {
-    emptyTitle = "문제정의 1단계";
+    emptyTitle = demoBalanceMode ? "문제정의" : "문제정의 1단계";
     emptyMessage = problemDefinitionPending
-      ? "문제정의 1단계를 생성 중입니다. 완료되면 자동으로 반영됩니다."
-      : "아직 문제정의 1단계가 생성되지 않았습니다.";
+      ? `${demoBalanceMode ? "문제정의" : "문제정의 1단계"}를 생성 중입니다. 완료되면 자동으로 반영됩니다.`
+      : `아직 ${demoBalanceMode ? "문제정의" : "문제정의 1단계"}가 생성되지 않았습니다.`;
   } else if (viewedStage === "problem-structure" && !hasProblemStructure) {
     emptyTitle = "문제정의 2단계";
     emptyMessage = problemStructurePending
@@ -792,7 +812,7 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
                   읽기 전용
                 </span>
                 <span className="truncate text-[10px] font-semibold leading-none tracking-[-0.02px] text-[#90a1b9]">
-                  현재 {mobileStageTitle(currentActualMobileStage)}
+                  현재 {mobileStageTitle(currentActualMobileStage, demoBalanceMode)}
                 </span>
               </div>
             </div>
@@ -802,8 +822,8 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
           </span>
         </div>
 
-        <nav className="mt-3 grid grid-cols-4 rounded-[18px] bg-[#eef4fb] p-1" aria-label="모바일 회의 단계">
-          {MOBILE_STAGE_TABS.map((tab) => {
+        <nav className={`mt-3 grid ${demoBalanceMode ? "grid-cols-3" : "grid-cols-4"} rounded-[18px] bg-[#eef4fb] p-1`} aria-label="모바일 회의 단계">
+          {stageTabs.map((tab) => {
             const active = tab.stage === viewedStage;
             const current = tab.stage === currentActualMobileStage;
             return (
@@ -843,7 +863,7 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
           ) : viewedStage === "summary" ? (
             <MobileSummaryDocument document={finalSummaryDocument} />
           ) : viewedStage === "problem-explore" ? (
-            <MobileProblemExploreList items={problemExploreItems} />
+            <MobileProblemExploreList demoBalanceMode={demoBalanceMode} items={problemExploreItems} />
           ) : viewedStage === "problem-structure" ? (
             <MobileProblemStructureList groups={problemStructureGroups} nodes={problemStructureNodes} />
           ) : showIdeationFlow ? (

@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { updateCanvasIdeationBubbleGraph } from "@/lib/api";
-import type { CanvasIdeationBubbleGraph } from "@/lib/types";
+import { normalizeCanvasDemoConfig, isDemoBalanceConfig } from "@/lib/demoMode";
+import type { CanvasDemoConfig, CanvasIdeationBubbleGraph } from "@/lib/types";
 import { buildIdeationKeywordBubbles, type IdeationKeywordBubble } from "@/components/canvas/CanvasIdeationBubbles";
 import { createEmptyIdeationBubbleGraph, normalizeIdeationBubbleGraphForWorkspace } from "@/components/canvas/canvasWorkspaceSerialization";
 
@@ -33,6 +34,10 @@ const IDEATION_KEYWORD_MAX_TOTAL_BUBBLES = 16;
 const IDEATION_KEYWORD_IDLE_FLUSH_MS = 10_000;
 const IDEATION_KEYWORD_MAX_WINDOW_MS = 25_000;
 const IDEATION_KEYWORD_MAX_KEYWORDS = 3;
+const DEMO_KEYWORD_BATCH_SIZE = 2;
+const DEMO_KEYWORD_IDLE_FLUSH_MS = 3_500;
+const DEMO_KEYWORD_MAX_WINDOW_MS = 8_500;
+const DEMO_KEYWORD_MAX_KEYWORDS = 6;
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -162,6 +167,7 @@ export function useIdeationKeywordBubbles({
   meetingTopic,
   meetingGoal,
   meetingGoalContext,
+  demoConfig,
   bubbleGraph,
   onBubbleGraphChange,
   stage,
@@ -172,12 +178,19 @@ export function useIdeationKeywordBubbles({
   meetingTopic: string;
   meetingGoal?: string;
   meetingGoalContext?: string;
+  demoConfig?: CanvasDemoConfig;
   bubbleGraph?: CanvasIdeationBubbleGraph;
   onBubbleGraphChange?: (graph: CanvasIdeationBubbleGraph) => void;
   stage: CanvasStage;
   updatesEnabled?: boolean;
 }) {
   const [statusMessage, setStatusMessage] = useState("");
+  const normalizedDemoConfig = useMemo(() => normalizeCanvasDemoConfig(demoConfig), [demoConfig]);
+  const demoBalanceMode = isDemoBalanceConfig(normalizedDemoConfig);
+  const batchSize = demoBalanceMode ? DEMO_KEYWORD_BATCH_SIZE : IDEATION_KEYWORD_BATCH_SIZE;
+  const idleFlushMs = demoBalanceMode ? DEMO_KEYWORD_IDLE_FLUSH_MS : IDEATION_KEYWORD_IDLE_FLUSH_MS;
+  const maxWindowMs = demoBalanceMode ? DEMO_KEYWORD_MAX_WINDOW_MS : IDEATION_KEYWORD_MAX_WINDOW_MS;
+  const maxKeywords = demoBalanceMode ? DEMO_KEYWORD_MAX_KEYWORDS : IDEATION_KEYWORD_MAX_KEYWORDS;
   const processedIdsRef = useRef<Set<string>>(new Set());
   const graphProcessedIdsRef = useRef<string[]>([]);
   const requestSeqRef = useRef(0);
@@ -246,29 +259,32 @@ export function useIdeationKeywordBubbles({
     }
 
     if (requestInFlightRef.current) {
-      deferStateUpdate(() => setStatusMessage("현재 STT 전사 기반 키워드 버블을 정리 중입니다."));
+      deferStateUpdate(() => setStatusMessage(demoBalanceMode ? "현재 STT 전사 및 A/B 키워드 추출 중입니다." : "현재 STT 전사 기반 키워드 버블을 정리 중입니다."));
       return undefined;
     }
 
     const runKeywordRequest = (reason: "batch" | "idle" | "window") => {
       const requestUtterances =
         reason === "batch"
-          ? pendingUtterances.slice(0, IDEATION_KEYWORD_BATCH_SIZE)
+          ? pendingUtterances.slice(0, batchSize)
           : pendingUtterances;
       if (requestUtterances.length === 0) return;
 
       const requestSeq = requestSeqRef.current + 1;
       requestSeqRef.current = requestSeq;
       requestInFlightRef.current = true;
-      setStatusMessage("현재 STT 전사 기반 키워드 추출 중입니다.");
+      setStatusMessage(demoBalanceMode ? "현재 STT 전사 및 A/B 키워드 추출 중입니다." : "현재 STT 전사 기반 키워드 추출 중입니다.");
 
       const bubbleGraphRequest: Parameters<typeof updateCanvasIdeationBubbleGraph>[0] = {
         meeting_id: meetingId,
         meeting_topic: meetingTopic,
         utterances: requestUtterances,
         context_cache: buildIdeationKeywordContextCache(ideationKeywordUtterances, requestUtterances),
-        max_keywords: IDEATION_KEYWORD_MAX_KEYWORDS,
+        max_keywords: maxKeywords,
       };
+      if (demoBalanceMode) {
+        bubbleGraphRequest.demo_config = normalizedDemoConfig;
+      }
       const cleanMeetingGoal = meetingGoal?.trim() || "";
       const cleanMeetingGoalContext = meetingGoalContext?.trim() || "";
       if (cleanMeetingGoal) {
@@ -333,35 +349,41 @@ export function useIdeationKeywordBubbles({
     };
 
     const elapsedMs = Date.now() - pendingWindowStartedAtRef.current;
-    if (pendingUtterances.length >= IDEATION_KEYWORD_BATCH_SIZE) {
+    if (pendingUtterances.length >= batchSize) {
       runKeywordRequest("batch");
       return undefined;
     }
-    if (elapsedMs >= IDEATION_KEYWORD_MAX_WINDOW_MS) {
+    if (elapsedMs >= maxWindowMs) {
       runKeywordRequest("window");
       return undefined;
     }
 
-    deferStateUpdate(() => setStatusMessage(`STT 전사를 모아 키워드 추출을 준비 중입니다. ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`));
+    deferStateUpdate(() => setStatusMessage(demoBalanceMode ? `STT 전사를 모아 A/B 키워드 추출을 준비 중입니다. ${pendingUtterances.length}/${batchSize}` : `STT 전사를 모아 키워드 추출을 준비 중입니다. ${pendingUtterances.length}/${batchSize}`));
     const timeoutMs = Math.max(
       250,
       Math.min(
-        IDEATION_KEYWORD_IDLE_FLUSH_MS,
-        IDEATION_KEYWORD_MAX_WINDOW_MS - elapsedMs,
+        idleFlushMs,
+        maxWindowMs - elapsedMs,
       ),
     );
     const timer = window.setTimeout(() => {
-      runKeywordRequest(timeoutMs >= IDEATION_KEYWORD_IDLE_FLUSH_MS ? "idle" : "window");
+      runKeywordRequest(timeoutMs >= idleFlushMs ? "idle" : "window");
     }, timeoutMs);
 
     return () => window.clearTimeout(timer);
   }, [
     ideationKeywordUtterances,
     meetingId,
+    batchSize,
+    demoBalanceMode,
+    idleFlushMs,
+    maxKeywords,
+    maxWindowMs,
     meetingGoal,
     meetingGoalContext,
     meetingTopic,
     normalizedBubbleGraph,
+    normalizedDemoConfig,
     onBubbleGraphChange,
     stage,
     updatesEnabled,

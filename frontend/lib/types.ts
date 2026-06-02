@@ -187,6 +187,8 @@ export interface CanvasProblemTaxonomyResponse {
   warning?: string;
   generated_at: string;
   groups: CanvasProblemDefinitionGroup[];
+  problem_structure?: CanvasProblemStructureState;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
 }
 
 export interface CanvasPersonalNote {
@@ -375,6 +377,8 @@ export interface CanvasWorkspaceStateResponse {
   meeting_id: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage: "ideation" | "problem-definition" | "solution";
   agenda_overrides?: Record<
     string,
@@ -404,6 +408,8 @@ export interface CanvasWorkspacePatchRequest {
   meeting_id: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage?: "ideation" | "problem-definition" | "solution";
   agenda_overrides?: Record<
     string,
@@ -449,6 +455,8 @@ export interface CanvasLocalState {
   shared_sync_enabled?: boolean;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   agenda_overrides?: Record<
     string,
     {
@@ -493,6 +501,8 @@ export interface CanvasRealtimeSyncPayload {
     | "summary_document";
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   updated_by: string;
   updated_at: string;
   stage: "ideation" | "problem-definition" | "solution";
@@ -514,6 +524,43 @@ export interface CanvasRealtimeSyncPayload {
   artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
+}
+
+export interface CanvasDemoConfig {
+  enabled?: boolean;
+  mode?: "normal" | "demo_balance" | string;
+  option_a?: string;
+  option_b?: string;
+  instruction?: string;
+}
+
+export interface CanvasDemoBalanceOpinion {
+  id?: string;
+  utterance_id?: string;
+  choice?: "a" | "b" | "unclassified" | string;
+  valid?: boolean;
+  confidence?: number;
+  reason_summary?: string;
+  keywords?: string[];
+  text?: string;
+}
+
+export interface CanvasDemoBalanceClassification {
+  version?: number;
+  mode?: "demo_balance" | string;
+  option_a?: string;
+  option_b?: string;
+  classified_at?: string;
+  source_signature?: string;
+  valid_a_count?: number;
+  valid_b_count?: number;
+  unclassified_count?: number;
+  opinions?: CanvasDemoBalanceOpinion[];
+  summary?: {
+    option_a_summary?: string;
+    option_b_summary?: string;
+    unclassified_summary?: string;
+  };
 }
 
 export interface CanvasEditPresencePayload {

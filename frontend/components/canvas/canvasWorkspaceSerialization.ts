@@ -5,6 +5,8 @@ import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArt
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasLocalState,
@@ -27,6 +29,8 @@ export type AgendaOverride = {
 export type WorkspaceFieldSignatures = {
   meeting_goal: string;
   meeting_goal_context: string;
+  demo_config: string;
+  demo_balance_classification: string;
   stage: string;
   agenda_overrides: string;
   canvas_items: string;
@@ -45,6 +49,8 @@ export type FullWorkspacePatchPayloadInput = {
   meetingId: string;
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig?: CanvasDemoConfig;
+  demoBalanceClassification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -110,6 +116,8 @@ export function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
   return {
     meeting_goal: "",
     meeting_goal_context: "",
+    demo_config: "",
+    demo_balance_classification: "",
     stage: "",
     agenda_overrides: "",
     canvas_items: "",
@@ -315,6 +323,8 @@ export function normalizeIdeationBubbleGraphForWorkspace(
 export function buildWorkspaceFieldSignatures(input: {
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig?: CanvasDemoConfig;
+  demoBalanceClassification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -332,6 +342,8 @@ export function buildWorkspaceFieldSignatures(input: {
   return {
     meeting_goal: input.meetingGoal.trim(),
     meeting_goal_context: input.meetingGoalContext.trim(),
+    demo_config: JSON.stringify(input.demoConfig || null),
+    demo_balance_classification: JSON.stringify(input.demoBalanceClassification || null),
     stage: input.stage,
     agenda_overrides: JSON.stringify(serializeAgendaOverrides(input.agendaOverrides)),
     canvas_items: JSON.stringify(buildWorkspaceCanvasItemsPayload(input.canvasItems)),
@@ -352,6 +364,8 @@ export function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadI
     meeting_id: input.meetingId,
     meeting_goal: input.meetingGoal.trim(),
     meeting_goal_context: input.meetingGoalContext.trim(),
+    demo_config: input.demoConfig,
+    demo_balance_classification: input.demoBalanceClassification,
     stage: input.stage,
     agenda_overrides: serializeAgendaOverrides(input.agendaOverrides),
     canvas_items: serializeSharedCanvasItems(input.canvasItems),
@@ -370,6 +384,8 @@ export function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadI
 export function buildSharedCanvasSignature(payload: {
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agenda_overrides: Record<string, unknown>;
   canvas_items?: unknown[];
@@ -386,6 +402,8 @@ export function buildSharedCanvasSignature(payload: {
   return JSON.stringify({
     meeting_goal: payload.meeting_goal,
     meeting_goal_context: payload.meeting_goal_context,
+    demo_config: payload.demo_config || null,
+    demo_balance_classification: payload.demo_balance_classification || null,
     agenda_overrides: payload.agenda_overrides,
     canvas_items: payload.canvas_items,
     custom_groups: payload.custom_groups,

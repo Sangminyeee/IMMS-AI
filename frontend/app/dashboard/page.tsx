@@ -13,6 +13,7 @@ import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import { useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCanvasWorkspaceState, saveCanvasWorkspacePatch } from "@/lib/api";
+import { buildDemoBalanceMeetingContext, buildDemoBalanceMeetingGoal, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import { supabase } from "@/lib/supabase";
 import type { CanvasFinalSolutionSummary, CanvasFinalSolutionSummaryTopic, CanvasSolutionTopicResponse } from "@/lib/types";
 
@@ -160,6 +161,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newMeetingTitle, setNewMeetingTitle] = useState("");
+  const [newMeetingDemoMode, setNewMeetingDemoMode] = useState(false);
+  const [newMeetingDemoOptionA, setNewMeetingDemoOptionA] = useState("");
+  const [newMeetingDemoOptionB, setNewMeetingDemoOptionB] = useState("");
   const [meetingSearchQuery, setMeetingSearchQuery] = useState("");
   const [meetingStatusFilter, setMeetingStatusFilter] = useState<MeetingStatusFilter>("all");
   const [selectedResultMeeting, setSelectedResultMeeting] = useState<DashboardMeeting | null>(null);
@@ -200,7 +204,7 @@ export default function DashboardPage() {
       }
 
       console.log("✅ Dashboard - Loaded meetings:", data?.length || 0);
-      setMeetings(data || []);
+      setMeetings((data || []) as DashboardMeeting[]);
     } catch (error) {
       console.error("Error loading meetings:", error);
       alert("회의 목록을 불러오는데 실패했습니다.");
@@ -215,9 +219,30 @@ export default function DashboardPage() {
       alert("회의 제목을 입력해주세요.");
       return;
     }
+    if (newMeetingDemoMode && (!newMeetingDemoOptionA.trim() || !newMeetingDemoOptionB.trim())) {
+      alert("시연용 밸런스 게임은 A, B 선택지를 모두 입력해야 만들 수 있습니다.");
+      return;
+    }
 
     try {
       console.log("📊 Dashboard - Creating new meeting:", newMeetingTitle);
+      const demoConfig = normalizeCanvasDemoConfig(
+        newMeetingDemoMode
+          ? {
+              enabled: true,
+              mode: "demo_balance",
+              option_a: newMeetingDemoOptionA,
+              option_b: newMeetingDemoOptionB,
+              instruction: "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요.",
+            }
+          : null,
+      );
+      const demoGoal = demoConfig.enabled
+        ? buildDemoBalanceMeetingGoal(newMeetingTitle, demoConfig.option_a || "", demoConfig.option_b || "")
+        : "";
+      const demoContext = demoConfig.enabled
+        ? buildDemoBalanceMeetingContext(demoConfig.option_a || "", demoConfig.option_b || "")
+        : "";
 
       const { data, error } = await supabase
         .from("meetings")
@@ -225,6 +250,7 @@ export default function DashboardPage() {
           {
             title: newMeetingTitle,
             host_id: user.id,
+            meeting_mode: demoConfig.enabled ? "demo_balance" : "normal",
             status: "scheduled",
           },
         ])
@@ -237,8 +263,19 @@ export default function DashboardPage() {
       }
 
       console.log("✅ Dashboard - Meeting created:", data.id);
+      if (demoConfig.enabled) {
+        await saveCanvasWorkspacePatch({
+          meeting_id: data.id,
+          demo_config: demoConfig,
+          meeting_goal: demoGoal,
+          meeting_goal_context: demoContext,
+        });
+      }
       setShowCreateModal(false);
       setNewMeetingTitle("");
+      setNewMeetingDemoMode(false);
+      setNewMeetingDemoOptionA("");
+      setNewMeetingDemoOptionB("");
 
       await loadMeetings();
       router.push(`/?meeting_id=${data.id}`);
@@ -488,11 +525,20 @@ export default function DashboardPage() {
       <DashboardCreateMeetingDialog
         open={showCreateModal}
         meetingTitle={newMeetingTitle}
+        demoMode={newMeetingDemoMode}
+        demoOptionA={newMeetingDemoOptionA}
+        demoOptionB={newMeetingDemoOptionB}
         onMeetingTitleChange={setNewMeetingTitle}
+        onDemoModeChange={setNewMeetingDemoMode}
+        onDemoOptionAChange={setNewMeetingDemoOptionA}
+        onDemoOptionBChange={setNewMeetingDemoOptionB}
         onCreate={() => void handleCreateMeeting()}
         onClose={() => {
           setShowCreateModal(false);
           setNewMeetingTitle("");
+          setNewMeetingDemoMode(false);
+          setNewMeetingDemoOptionA("");
+          setNewMeetingDemoOptionB("");
         }}
       />
 

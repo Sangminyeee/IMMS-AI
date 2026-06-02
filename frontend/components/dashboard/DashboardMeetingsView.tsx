@@ -553,11 +553,14 @@ function MobileMeetingCard({
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className={classNames("inline-flex h-[24px] items-center rounded-full px-3 text-white", statusClassName)}>
-          <span className="block text-[11px] font-semibold leading-none tracking-[-0.025px] text-white">
-            {getMeetingStatusLabel(meeting.status)}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={classNames("inline-flex h-[24px] items-center rounded-full px-3 text-white", statusClassName)}>
+            <span className="block text-[11px] font-semibold leading-none tracking-[-0.025px] text-white">
+              {getMeetingStatusLabel(meeting.status)}
+            </span>
           </span>
-        </span>
+          <MeetingModeTag meeting={meeting} size="mobile" />
+        </div>
         <div className="relative">
           <button
             type="button"
@@ -660,6 +663,38 @@ function MoreIcon({ className }: { className?: string }) {
   );
 }
 
+function MeetingModeTag({ meeting, size = "desktop" }: { meeting: DashboardMeeting; size?: "desktop" | "mobile" | "upcoming" }) {
+  const demoMode = String(meeting.meeting_mode || "normal").toLowerCase() === "demo_balance";
+  const sizeClassName =
+    size === "mobile"
+      ? "h-[24px] px-2.5"
+      : size === "upcoming"
+        ? "h-[24.5px] px-[9px]"
+        : "h-[25px] px-[8.5px]";
+  const textClassName =
+    size === "mobile"
+      ? "text-[11px] tracking-[-0.025px]"
+      : size === "upcoming"
+        ? "text-[10.5px] tracking-[-0.026px]"
+        : "text-[10.5px] tracking-[-0.026px]";
+
+  return (
+    <span
+      className={classNames(
+        "inline-flex shrink-0 items-center justify-center rounded-full border",
+        sizeClassName,
+        demoMode
+          ? "border-[#b8d9ff] bg-[#eff8ff] text-[#236cf3]"
+          : "border-[#e3e8f1] bg-white text-[#90a1b9]",
+      )}
+    >
+      <span className={classNames("moa-font-pretendard block whitespace-nowrap font-bold leading-none", textClassName)}>
+        {demoMode ? "시연용" : "일반"}
+      </span>
+    </span>
+  );
+}
+
 function UpcomingMeetingCard({
   featured,
   meeting,
@@ -683,6 +718,9 @@ function UpcomingMeetingCard({
       <h3 className="moa-dt-card-title absolute left-[21.42px] top-[15.99px] max-w-[330px] truncate whitespace-nowrap">
         {meeting.title}
       </h3>
+      <div className="absolute left-[21.42px] top-[56px]">
+        <MeetingModeTag meeting={meeting} size="upcoming" />
+      </div>
       <p className="moa-dt-card-date absolute left-[21.42px] top-[127.82px] max-w-[160px] truncate whitespace-nowrap">
         {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
       </p>
@@ -743,6 +781,9 @@ function MeetingListRow({
         <span className="mx-[12px] h-[19.654px] w-px shrink-0 bg-[var(--moa-row-divider)]" />
         <span className="moa-dt-row-date shrink-0 whitespace-nowrap">
           {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
+        </span>
+        <span className="ml-[10px] shrink-0">
+          <MeetingModeTag meeting={meeting} />
         </span>
       </button>
 

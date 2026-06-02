@@ -15,6 +15,7 @@ import {
   startCanvasArtifactGeneration,
   startCanvasProblemDiscussionWorkspace,
 } from "@/lib/api";
+import { isDemoBalanceConfig, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import { CanvasEndMeetingDialogs } from "@/components/canvas/CanvasEndMeetingDialogs";
 import { useCanvasEndMeetingDialogModels } from "@/components/canvas/useCanvasEndMeetingDialogModels";
 import { useCanvasHeaderActions } from "@/components/canvas/useCanvasHeaderActions";
@@ -139,6 +140,8 @@ import type {
   CanvasArtifactGenerationState,
   CanvasArtifactGenerationStatus,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
@@ -834,6 +837,14 @@ export default function MeetingCanvasTab({
   const [ideationBubbleGraph, setIdeationBubbleGraph] = useState<CanvasIdeationBubbleGraph>(() =>
     createEmptyIdeationBubbleGraph(),
   );
+  const [demoConfig, setDemoConfig] = useState<CanvasDemoConfig>({
+    enabled: false,
+    mode: "normal",
+    option_a: "",
+    option_b: "",
+    instruction: "",
+  });
+  const [demoBalanceClassification, setDemoBalanceClassification] = useState<CanvasDemoBalanceClassification>({});
   const [summaryDocumentEditMode, setSummaryDocumentEditMode] = useState(false);
   const [summaryDocumentDraftBlocks, setSummaryDocumentDraftBlocks] = useState<CanvasSummaryDocumentBlock[]>([]);
   const [summaryDocumentDraftMarkdown, setSummaryDocumentDraftMarkdown] = useState("");
@@ -1052,6 +1063,8 @@ export default function MeetingCanvasTab({
   const latestSharedWorkspaceRef = useRef<{
     meetingGoal: string;
     meetingGoalContext: string;
+    demoConfig: CanvasDemoConfig;
+    demoBalanceClassification: CanvasDemoBalanceClassification;
     stage: CanvasStage;
     agendaOverrides: Record<string, AgendaOverride>;
     canvasItems: CanvasItemViewModel[];
@@ -1066,6 +1079,8 @@ export default function MeetingCanvasTab({
   }>({
     meetingGoal: "",
     meetingGoalContext: "",
+    demoConfig: { enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" },
+    demoBalanceClassification: {},
     stage: "ideation",
     agendaOverrides: {},
     canvasItems: [],
@@ -1194,6 +1209,8 @@ export default function MeetingCanvasTab({
   );
   const activeMeetingGoal = meetingGoalDraft.trim();
   const activeMeetingGoalContext = meetingGoalContextDraft.trim();
+  const normalizedDemoConfig = useMemo(() => normalizeCanvasDemoConfig(demoConfig), [demoConfig]);
+  const demoBalanceMode = isDemoBalanceConfig(normalizedDemoConfig);
   const analysisMeetingGoal = activeMeetingGoal || (effectiveState?.meeting_goal || "").trim();
   const ideationKeywordMeetingTopic = analysisMeetingGoal || "회의 주제";
   const meetingTopicForAi = analysisMeetingGoal || meetingTitle.trim() || "회의 주제";
@@ -1211,6 +1228,7 @@ export default function MeetingCanvasTab({
     meetingGoalContext: activeMeetingGoalContext,
     bubbleGraph: ideationBubbleGraph,
     onBubbleGraphChange: handleIdeationBubbleGraphChange,
+    demoConfig: normalizedDemoConfig,
     stage,
     updatesEnabled: meetingStatus !== "completed" && ideationBubbleUpdatesEnabled,
   });
@@ -1484,6 +1502,8 @@ export default function MeetingCanvasTab({
     latestSharedWorkspaceRef.current = {
       meetingGoal: "",
       meetingGoalContext: "",
+      demoConfig: { enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" },
+      demoBalanceClassification: {},
       stage: "ideation",
       agendaOverrides: {},
       canvasItems: [],
@@ -1511,6 +1531,8 @@ export default function MeetingCanvasTab({
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
     setArtifactGeneration({});
     setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
+    setDemoConfig({ enabled: false, mode: "normal", option_a: "", option_b: "", instruction: "" });
+    setDemoBalanceClassification({});
     setProblemStructureArtifactMeta(createDefaultProblemStructureArtifactMeta());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
@@ -1558,6 +1580,8 @@ export default function MeetingCanvasTab({
     latestSharedWorkspaceRef.current = {
       meetingGoal: meetingGoalDraft.trim(),
       meetingGoalContext: meetingGoalContextDraft.trim(),
+      demoConfig: normalizedDemoConfig,
+      demoBalanceClassification,
       stage,
       agendaOverrides,
       canvasItems,
@@ -1578,6 +1602,8 @@ export default function MeetingCanvasTab({
     artifactGeneration,
     meetingGoalContextDraft,
     meetingGoalDraft,
+    normalizedDemoConfig,
+    demoBalanceClassification,
     ideationBubbleGraph,
     nodePositions,
     persistedSharedImportedState,
@@ -1665,6 +1691,8 @@ export default function MeetingCanvasTab({
     setImportOverrideActive,
     setLoadingProblemGroupIds,
     setMeetingGoalDrafts,
+    setDemoConfig,
+    setDemoBalanceClassification,
     setNodePositions,
     setPersonalNotes,
     setProblemDefinitionMode,
@@ -1773,6 +1801,8 @@ export default function MeetingCanvasTab({
     agendaOverrides,
     canvasItems,
     customGroups,
+    demoConfig: normalizedDemoConfig,
+    demoBalanceClassification,
     finalSummaryDocument,
     artifactGeneration,
     ideationBubbleGraph,
@@ -2419,6 +2449,8 @@ export default function MeetingCanvasTab({
     setImportedState,
     setImportOverrideActive,
     setMeetingGoalDrafts,
+    setDemoConfig,
+    setDemoBalanceClassification,
     setNodePositions,
     setProblemGroups,
     setProblemStructureArtifactMeta,
@@ -2835,6 +2867,7 @@ export default function MeetingCanvasTab({
     latestSharedWorkspaceRef,
     meetingId,
     meetingTopicForAi,
+    demoConfig: normalizedDemoConfig,
     nodePositions,
     persistedSharedImportedState,
     problemDefinitionStagePending,
@@ -2844,6 +2877,7 @@ export default function MeetingCanvasTab({
     setActivityMessage,
     setBusy,
     setCollapsedProblemGroupIds,
+    setDemoBalanceClassification,
     setEditingProblemGroupId,
     setNodePositions,
     setProblemDefinitionMode,
@@ -2887,6 +2921,8 @@ export default function MeetingCanvasTab({
     latestSharedWorkspaceRef,
     meetingId,
     meetingTopicForAi,
+    demoConfig: normalizedDemoConfig,
+    demoBalanceClassification,
     normalizeFinalSolutionSummaryPayload,
     persistedSharedImportedState,
     problemStructureGroups,
@@ -2929,7 +2965,11 @@ export default function MeetingCanvasTab({
           setSelectedProblemGroupId("");
           setSelectedNodeId("");
           setLeftPanelTab("detail");
-          setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.");
+          setActivityMessage(
+            demoBalanceMode
+              ? "문제 정의 단계에서 A/B 의견 정리가 먼저 필요합니다."
+              : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.",
+          );
           return;
         }
 
@@ -3006,6 +3046,7 @@ export default function MeetingCanvasTab({
       finalSummaryDocument.markdown,
       finalSummaryDocument.document_blocks,
       finalSummaryDocument.sections,
+      demoBalanceMode,
       flushProblemDiscussionBuffer,
       handleGenerateProblemDefinition,
       handleGenerateSummaryDocument,
@@ -3054,10 +3095,12 @@ export default function MeetingCanvasTab({
   const isProblemDefinitionExploreStage = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const problemCanvasToolbarActions = useMemo<ProblemCanvasToolbarAction[]>(
     () =>
-      problemDefinitionPhase === "structure"
+      demoBalanceMode
+        ? []
+        : problemDefinitionPhase === "structure"
         ? ["structure-back", "structure-ai-group", "structure-add-group"]
         : [],
-    [problemDefinitionPhase],
+    [demoBalanceMode, problemDefinitionPhase],
   );
 
   const problemToolbarActionLabel = useCallback((action: ProblemCanvasToolbarAction) => {
@@ -3451,8 +3494,9 @@ export default function MeetingCanvasTab({
     const nextGroupId = selectedProblemGroupId || problemGroups[0]?.group_id || "";
     setSelectedProblemGroupId(nextGroupId);
     setSelectedNodeId(nextGroupId ? `problem-${nextGroupId}` : "");
-    setActivityMessage("문제정의 1단계로 이동했습니다.");
+    setActivityMessage(demoBalanceMode ? "문제정의로 이동했습니다." : "문제정의 1단계로 이동했습니다.");
   }, [
+    demoBalanceMode,
     problemGroups,
     problemStructureGroups.length,
     selectedProblemGroupId,
@@ -3574,6 +3618,7 @@ export default function MeetingCanvasTab({
         })
       : problemStructureStatePayload;
     const nextFinalSummaryDocument = resetSummary ? createEmptyFinalSolutionSummary() : finalSummaryDocument;
+    const nextDemoBalanceClassification = resetProblem ? {} : demoBalanceClassification;
     const nextNodePositions = resetProblem
       ? normalizeCanvasNodePositionsForComputedIdeation({
           ...nodePositions,
@@ -3592,6 +3637,7 @@ export default function MeetingCanvasTab({
           stage: "ideation",
           problemGroups: nextProblemGroups,
           problemStructure: nextProblemStructure,
+          demoBalanceClassification: nextDemoBalanceClassification,
           finalSolutionSummary: nextFinalSummaryDocument,
           artifactGeneration: nextArtifactGeneration,
           nodePositions: nextNodePositions,
@@ -3639,6 +3685,7 @@ export default function MeetingCanvasTab({
         setSelectedProblemSourceNodeId("");
         setSelectedNodeId("");
         setNodePositions(nextNodePositions);
+        setDemoBalanceClassification(nextDemoBalanceClassification);
       }
 
       if (resetSummary) {
@@ -3659,6 +3706,7 @@ export default function MeetingCanvasTab({
         ...latestSharedWorkspaceRef.current,
         problemGroups: nextProblemGroups,
         problemStructure: nextProblemStructure,
+        demoBalanceClassification: nextDemoBalanceClassification,
         finalSolutionSummary: nextFinalSummaryDocument,
         artifactGeneration: nextArtifactGeneration,
         nodePositions: nextNodePositions,
@@ -3668,6 +3716,7 @@ export default function MeetingCanvasTab({
         forceBroadcastSharedCanvas({
           problemGroups: nextProblemGroups,
           problemStructure: nextProblemStructure,
+          demoBalanceClassification: nextDemoBalanceClassification,
           finalSolutionSummary: nextFinalSummaryDocument,
           artifactGeneration: nextArtifactGeneration,
           nodePositions: nextNodePositions,
@@ -3686,6 +3735,7 @@ export default function MeetingCanvasTab({
     artifactGeneration,
     buildCurrentWorkspacePatchPayload,
     debugResetBusy,
+    demoBalanceClassification,
     finalSummaryDocument,
     forceBroadcastSharedCanvas,
     latestSharedWorkspaceRef,
@@ -3700,6 +3750,7 @@ export default function MeetingCanvasTab({
     setArtifactGeneration,
     setBusy,
     setCollapsedProblemGroupIds,
+    setDemoBalanceClassification,
     setEditingProblemGroupId,
     setFinalSummaryDocument,
     setLocalEditPresenceTarget,
@@ -3849,6 +3900,7 @@ export default function MeetingCanvasTab({
       solutionRightPaneRef,
     },
     surfaceProblem: {
+      demoBalanceMode,
       problemGroupsCount: problemGroups.length,
       problemStructureNodesCount: problemStructureNodes.length,
       problemDefinitionStagePending: effectiveProblemDefinitionStagePending,
@@ -4004,6 +4056,7 @@ export default function MeetingCanvasTab({
         <MobileMeetingReadOnlyView
           actualStage={stage}
           actualProblemPhase={problemDefinitionPhase}
+          demoBalanceMode={demoBalanceMode}
           finalSummaryDocument={finalSummaryDocument}
           ideationBubbleVisuals={ideationBubbleVisuals}
           meetingStatus={meetingStatus}

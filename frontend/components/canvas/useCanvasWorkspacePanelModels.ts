@@ -107,6 +107,7 @@ export function useCanvasWorkspacePanelModels({
   ]);
 
   const surfaceProblem = useMemo<CanvasSurfaceProblemState>(() => ({
+    demoBalanceMode: incomingSurfaceProblem.demoBalanceMode,
     problemGroupsCount: incomingSurfaceProblem.problemGroupsCount,
     problemStructureNodesCount: incomingSurfaceProblem.problemStructureNodesCount,
     problemDefinitionStagePending: incomingSurfaceProblem.problemDefinitionStagePending,
@@ -128,6 +129,7 @@ export function useCanvasWorkspacePanelModels({
   }), [
     incomingSurfaceProblem.activeProblemGroupingRationale,
     incomingSurfaceProblem.activeProblemGroupingRationaleTitle,
+    incomingSurfaceProblem.demoBalanceMode,
     incomingSurfaceProblem.problemCanvasToolbarActions,
     incomingSurfaceProblem.problemDefinitionMode,
     incomingSurfaceProblem.problemDefinitionPhase,

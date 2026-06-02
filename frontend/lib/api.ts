@@ -46,6 +46,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export async function generateCanvasProblemTaxonomy(payload: {
   meeting_id: string;
   meeting_topic: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   debug_nonce?: string;
   refresh_chunk_summaries?: boolean;
   parent_group_id?: string;
@@ -144,6 +145,8 @@ export async function generateCanvasSummaryDocument(payload: {
   meeting_id: string;
   meeting_topic: string;
   refresh_chunk_summaries?: boolean;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
+  demo_balance_classification?: CanvasWorkspacePatchRequest["demo_balance_classification"];
   groups: Array<{
     id: string;
     title: string;
@@ -174,6 +177,8 @@ export async function generateCanvasSummaryConclusion(payload: {
   refresh_chunk_summaries?: boolean;
   regenerate_nonce?: string;
   current_summary?: CanvasFinalSolutionSummary;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
+  demo_balance_classification?: CanvasWorkspacePatchRequest["demo_balance_classification"];
   groups: Array<{
     id: string;
     title: string;
@@ -237,6 +242,7 @@ export async function extractCanvasIdeationKeywords(payload: {
   meeting_topic: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   utterances: Array<{
     id: string;
     speaker: string;
@@ -274,6 +280,7 @@ export async function updateCanvasIdeationBubbleGraph(payload: {
   meeting_topic: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   utterances: Array<{
     id: string;
     speaker: string;

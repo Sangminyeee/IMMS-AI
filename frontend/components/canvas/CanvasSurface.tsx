@@ -92,6 +92,7 @@ export type CanvasSurfaceSolutionState = {
 };
 
 export type CanvasSurfaceProblemState = {
+  demoBalanceMode?: boolean;
   problemGroupsCount: number;
   problemStructureNodesCount: number;
   problemDefinitionStagePending: boolean;
@@ -270,6 +271,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     solutionRightPaneRef,
   } = solution;
   const {
+    demoBalanceMode,
     problemGroupsCount,
     problemStructureNodesCount,
     problemDefinitionStagePending,
@@ -530,7 +532,7 @@ export const CanvasSurface = memo(function CanvasSurface({
           exiting={problemEmptyPresence.isExiting}
           message={
             problemDefinitionFailed
-              ? `문제정의 1단계 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
+              ? `${demoBalanceMode ? "문제정의" : "문제정의 1단계"} 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
               : busy
                 ? "문제 정의 그룹을 생성하는 중입니다."
                 : "문제 정의 그룹이 아직 없습니다."
@@ -548,7 +550,9 @@ export const CanvasSurface = memo(function CanvasSurface({
               ? `요약 문서 생성에 실패했습니다.${summaryDocumentGenerationError ? ` ${summaryDocumentGenerationError}` : ""}`
               : !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
-              : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
+              : demoBalanceMode
+                ? "문제정의에서 A/B 의견 정리가 있어야 요약 및 정리 문서를 만들 수 있습니다."
+                : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
           }
           tone="summary"
         />

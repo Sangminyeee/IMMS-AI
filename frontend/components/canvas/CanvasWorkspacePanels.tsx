@@ -106,9 +106,10 @@ export type CanvasWorkspaceParticipant = {
   title?: string;
 };
 
-function stageLabel(stage: CanvasStage, problemDefinitionPhase: ProblemDefinitionPhase) {
+function stageLabel(stage: CanvasStage, problemDefinitionPhase: ProblemDefinitionPhase, demoBalanceMode = false) {
   if (stage === "ideation") return "아이디어 발산";
   if (stage === "problem-definition") {
+    if (demoBalanceMode) return "문제정의";
     return problemDefinitionPhase === "structure" ? "문제정의 · 2단계" : "문제정의 · 1단계";
   }
   return "요약 및 정리";
@@ -226,10 +227,12 @@ function RecordingWaveIcon({ className = "" }: { className?: string }) {
 
 function StageSteps({
   activeStage,
+  demoBalanceMode,
   problemDefinitionPhase,
   onStageSelect,
 }: {
   activeStage: CanvasStage;
+  demoBalanceMode: boolean;
   problemDefinitionPhase: ProblemDefinitionPhase;
   onStageSelect: (stage: CanvasStage) => void;
 }) {
@@ -250,7 +253,7 @@ function StageSteps({
             <span className={`${panelButtonClasses.stageNumber} ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
               {stageNumber(item)}
             </span>
-            <span className={`ml-[8px] ${panelButtonTextClasses.stage} ${active ? "text-white" : "text-[#7c7c7c]"}`}>{stageLabel(item, problemDefinitionPhase)}</span>
+            <span className={`ml-[8px] ${panelButtonTextClasses.stage} ${active ? "text-white" : "text-[#7c7c7c]"}`}>{stageLabel(item, problemDefinitionPhase, demoBalanceMode)}</span>
             {!active ? <ChevronRightIcon className="ml-auto h-[12px] w-[7px] text-[#90a1b9]" /> : null}
           </button>
         );
@@ -735,9 +738,10 @@ function CurrentStagePanel({
 }) {
   const stage = header.view.stage;
   const problemDefinitionPhase = problem.problemDefinitionPhase as ProblemDefinitionPhase;
+  const isDemoBalance = Boolean(problem.demoBalanceMode);
   const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
   const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
-  const hasProblemStructure = problem.problemStructureNodesCount > 0;
+  const hasProblemStructure = !isDemoBalance && problem.problemStructureNodesCount > 0;
   const problemDefinitionFailed = problem.problemDefinitionGenerationStatus === "failed";
   const problemStructureFailed = problem.problemStructureGenerationStatus === "failed";
   const currentProblemFailed =
@@ -749,7 +753,7 @@ function CurrentStagePanel({
         : problem.problemStructureGenerationError
       : "";
 
-  let title = stageLabel(stage, problemDefinitionPhase);
+  let title = stageLabel(stage, problemDefinitionPhase, isDemoBalance);
   let description = (
     <>
       현재 회의 흐름을 확인하고,
@@ -778,23 +782,39 @@ function CurrentStagePanel({
     buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
     onButtonClick = () => header.handlers.onStageSelect("problem-definition");
   } else if (isProblemExplore) {
-    title = "문제정의 · 1단계";
-    description = (
-      <>
-        문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
-        <br />
-        남은 후보는 모두 다음 단계로 이동합니다.
-      </>
-    );
-    buttonLabel = problem.problemStructurePending
-      ? "구조화 생성 중"
-      : problemStructureFailed
-        ? "2단계 구조화 다시 시도"
-        : "2단계 · 구조화 시작하기";
-    buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
-    onButtonClick = () => {
-      void problemHandlers.onStartProblemStructure();
-    };
+    if (isDemoBalance) {
+      title = "문제정의";
+      description = (
+        <>
+          A/B 선택 의견을 확인하고,
+          <br />
+          요약 및 판정 리포트로 이동합니다.
+        </>
+      );
+      buttonLabel = "요약 및 정리 시작하기";
+      buttonDisabled = header.view.busy || problem.problemDefinitionStagePending || problem.problemStructureNodesCount === 0;
+      onButtonClick = () => {
+        void header.handlers.onStageSelect("solution");
+      };
+    } else {
+      title = "문제정의 · 1단계";
+      description = (
+        <>
+          문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
+          <br />
+          남은 후보는 모두 다음 단계로 이동합니다.
+        </>
+      );
+      buttonLabel = problem.problemStructurePending
+        ? "구조화 생성 중"
+        : problemStructureFailed
+          ? "2단계 구조화 다시 시도"
+          : "2단계 · 구조화 시작하기";
+      buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
+      onButtonClick = () => {
+        void problemHandlers.onStartProblemStructure();
+      };
+    }
   } else if (isProblemStructure) {
     title = "문제정의 · 2단계";
     description = (
@@ -837,11 +857,17 @@ function CurrentStagePanel({
           header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
         }`}
       >
-        {problem.problemDefinitionStagePending
-          ? "1단계 재생성 중"
-          : problemDefinitionFailed
-            ? "1단계 다시 생성"
-            : "1단계 재생성"}
+        {isDemoBalance
+          ? problem.problemDefinitionStagePending
+            ? "문제정의 재생성 중"
+            : problemDefinitionFailed
+              ? "문제정의 다시 생성"
+              : "문제정의 재생성"
+          : problem.problemDefinitionStagePending
+            ? "1단계 재생성 중"
+            : problemDefinitionFailed
+              ? "1단계 다시 생성"
+              : "1단계 재생성"}
       </span>
     </button>
   ) : null;
@@ -1077,6 +1103,7 @@ function RightAiPanel({
         <div className="mt-[21px]">
           <StageSteps
             activeStage={header.view.stage}
+            demoBalanceMode={Boolean(problem.demoBalanceMode)}
             problemDefinitionPhase={problem.problemDefinitionPhase}
             onStageSelect={header.handlers.onStageSelect}
           />

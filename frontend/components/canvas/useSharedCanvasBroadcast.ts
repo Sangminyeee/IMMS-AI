@@ -5,6 +5,7 @@ import {
   buildFullWorkspacePatchPayload,
   buildSharedCanvasSignature,
   buildWorkspaceProblemGroupsPayload,
+  normalizeCanvasNodePositionsForComputedIdeation,
   serializeAgendaOverrides,
   serializeCustomGroups,
   serializeSharedCanvasItems,
@@ -17,6 +18,8 @@ import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArt
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
@@ -35,6 +38,8 @@ type UseSharedCanvasBroadcastOptions = {
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
   customGroups: CanvasCustomGroup[];
+  demoConfig: CanvasDemoConfig;
+  demoBalanceClassification: CanvasDemoBalanceClassification;
   finalSummaryDocument: CanvasFinalSolutionSummary;
   artifactGeneration: CanvasArtifactGenerationMap;
   ideationBubbleGraph: CanvasIdeationBubbleGraph;
@@ -91,6 +96,8 @@ export function useSharedCanvasBroadcast({
   agendaOverrides,
   canvasItems,
   customGroups,
+  demoConfig,
+  demoBalanceClassification,
   finalSummaryDocument,
   artifactGeneration,
   ideationBubbleGraph,
@@ -118,6 +125,8 @@ export function useSharedCanvasBroadcast({
         meetingId,
         meetingGoal: overrides.meetingGoal ?? meetingGoalDraft,
         meetingGoalContext: overrides.meetingGoalContext ?? meetingGoalContextDraft,
+        demoConfig: overrides.demoConfig ?? demoConfig,
+        demoBalanceClassification: overrides.demoBalanceClassification ?? demoBalanceClassification,
         stage: overrides.stage ?? stage,
         agendaOverrides: overrides.agendaOverrides ?? agendaOverrides,
         canvasItems: overrides.canvasItems ?? canvasItems,
@@ -137,6 +146,8 @@ export function useSharedCanvasBroadcast({
       agendaOverrides,
       canvasItems,
       customGroups,
+      demoBalanceClassification,
+      demoConfig,
       finalSummaryDocument,
       artifactGeneration,
       ideationBubbleGraph,
@@ -160,6 +171,8 @@ export function useSharedCanvasBroadcast({
       const snapshot = {
         meeting_goal: (overrides?.meetingGoal ?? meetingGoalDraft).trim(),
         meeting_goal_context: (overrides?.meetingGoalContext ?? meetingGoalContextDraft).trim(),
+        demo_config: overrides?.demoConfig ?? demoConfig,
+        demo_balance_classification: overrides?.demoBalanceClassification ?? demoBalanceClassification,
         stage: SHARED_CANVAS_SYNC_STAGE,
         agenda_overrides: serializeAgendaOverrides(overrides?.agendaOverrides ?? agendaOverrides),
         canvas_items: serializeSharedCanvasItems(overrides?.canvasItems ?? canvasItems),
@@ -170,6 +183,7 @@ export function useSharedCanvasBroadcast({
         final_solution_summary: buildFinalSolutionSummaryPayload(overrides?.finalSolutionSummary ?? finalSummaryDocument),
         artifact_generation: normalizeCanvasArtifactGeneration(overrides?.artifactGeneration ?? artifactGeneration),
         ideation_bubble_graph: overrides?.ideationBubbleGraph ?? ideationBubbleGraph,
+        node_positions: normalizeCanvasNodePositionsForComputedIdeation(overrides?.nodePositions ?? nodePositions),
         imported_state:
           overrides && "importedState" in overrides
             ? (overrides.importedState ?? null)
@@ -192,6 +206,8 @@ export function useSharedCanvasBroadcast({
         updated_at: new Date().toISOString(),
         meeting_goal: snapshot.meeting_goal,
         meeting_goal_context: snapshot.meeting_goal_context,
+        demo_config: snapshot.demo_config,
+        demo_balance_classification: snapshot.demo_balance_classification,
         stage: snapshot.stage,
         agenda_overrides: snapshot.agenda_overrides,
         canvas_items: snapshot.canvas_items,
@@ -202,6 +218,7 @@ export function useSharedCanvasBroadcast({
         final_solution_summary: snapshot.final_solution_summary,
         artifact_generation: snapshot.artifact_generation,
         ideation_bubble_graph: snapshot.ideation_bubble_graph,
+        node_positions: snapshot.node_positions,
         imported_state: snapshot.imported_state,
       });
     },
@@ -209,6 +226,8 @@ export function useSharedCanvasBroadcast({
       agendaOverrides,
       canvasItems,
       customGroups,
+      demoBalanceClassification,
+      demoConfig,
       finalSummaryDocument,
       artifactGeneration,
       ideationBubbleGraph,

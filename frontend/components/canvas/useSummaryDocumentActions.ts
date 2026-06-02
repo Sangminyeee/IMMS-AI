@@ -17,6 +17,8 @@ import type {
   CanvasArtifactGenerationKey,
   CanvasArtifactGenerationMap,
   CanvasArtifactGenerationState,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasEditPresencePayload,
   CanvasSummaryDocumentBlock,
@@ -57,6 +59,8 @@ type UseSummaryDocumentActionsOptions = {
   latestSharedWorkspaceRef: MutableRefObject<SharedWorkspaceSnapshot>;
   meetingId: string;
   meetingTopicForAi: string;
+  demoConfig?: CanvasDemoConfig;
+  demoBalanceClassification?: CanvasDemoBalanceClassification;
   normalizeFinalSolutionSummaryPayload: (
     raw?: CanvasFinalSolutionSummary | null,
   ) => CanvasFinalSolutionSummary;
@@ -117,6 +121,8 @@ export function useSummaryDocumentActions({
   latestSharedWorkspaceRef,
   meetingId,
   meetingTopicForAi,
+  demoConfig,
+  demoBalanceClassification,
   normalizeFinalSolutionSummaryPayload,
   persistedSharedImportedState,
   problemStructureGroups,
@@ -275,7 +281,11 @@ export function useSummaryDocumentActions({
         setSelectedProblemGroupId("");
         setSelectedNodeId("");
         setSummaryDocumentPending(false);
-        setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.");
+        setActivityMessage(
+          demoConfig?.mode === "demo_balance"
+            ? "문제 정의 단계에서 A/B 의견 정리가 먼저 필요합니다."
+            : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 생성할 수 있습니다.",
+        );
         return;
       }
 
@@ -313,6 +323,8 @@ export function useSummaryDocumentActions({
           meeting_id: meetingId,
           meeting_topic: meetingTopicForAi,
           refresh_chunk_summaries: options?.refreshCache || undefined,
+          demo_config: demoConfig,
+          demo_balance_classification: demoBalanceClassification,
           groups: eligibleGroups.map((group) => ({
             id: group.id,
             title: group.title,
@@ -439,6 +451,8 @@ export function useSummaryDocumentActions({
       latestSharedWorkspaceRef,
       meetingId,
       meetingTopicForAi,
+      demoConfig,
+      demoBalanceClassification,
       persistedSharedImportedState,
       problemStructureGroups,
       problemStructureNodes,
@@ -550,7 +564,11 @@ export function useSummaryDocumentActions({
       setSelectedProblemGroupId("");
       setSelectedNodeId("");
       setSummaryDocumentPending(false);
-      setActivityMessage("문제정의 2단계에서 확정된 분류가 있어야 결론 문서를 다시 생성할 수 있습니다.");
+      setActivityMessage(
+        demoConfig?.mode === "demo_balance"
+          ? "문제 정의 단계에서 A/B 의견 정리가 먼저 필요합니다."
+          : "문제정의 2단계에서 확정된 분류가 있어야 결론 문서를 다시 생성할 수 있습니다.",
+      );
       return;
     }
 
@@ -585,6 +603,8 @@ export function useSummaryDocumentActions({
         refresh_chunk_summaries: options?.refreshCache || undefined,
         regenerate_nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         current_summary: finalSummaryDocument,
+        demo_config: demoConfig,
+        demo_balance_classification: demoBalanceClassification,
         groups: eligibleGroups.map((group) => ({
           id: group.id,
           title: group.title,
@@ -703,6 +723,8 @@ export function useSummaryDocumentActions({
     latestSharedWorkspaceRef,
     meetingId,
     meetingTopicForAi,
+    demoConfig,
+    demoBalanceClassification,
     persistedSharedImportedState,
     problemStructureGroups,
     problemStructureNodes,
