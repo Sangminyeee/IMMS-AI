@@ -294,8 +294,11 @@ export function normalizeCanvasNodePositionsForComputedIdeation(
 
 export function createEmptyIdeationBubbleGraph(): CanvasIdeationBubbleGraph {
   return {
-    version: 1,
+    version: 2,
+    layout_mode: "orbit",
     update_cycle: 0,
+    layout_revision: 0,
+    clusters: [],
     bubbles: [],
     processed_utterance_ids: [],
     updated_at: "",
@@ -308,11 +311,40 @@ export function normalizeIdeationBubbleGraphForWorkspace(
   if (!graph || typeof graph !== "object") {
     return createEmptyIdeationBubbleGraph();
   }
+  const clusters = Array.isArray(graph.clusters)
+    ? graph.clusters
+        .filter((cluster) => cluster && typeof cluster === "object" && typeof cluster.id === "string")
+        .map((cluster) => ({
+          id: cluster.id,
+          center_bubble_id: cluster.center_bubble_id || "",
+          x: Number.isFinite(Number(cluster.x)) ? Number(cluster.x) : undefined,
+          y: Number.isFinite(Number(cluster.y)) ? Number(cluster.y) : undefined,
+          radius: Number.isFinite(Number(cluster.radius)) ? Number(cluster.radius) : undefined,
+          rings: Array.isArray(cluster.rings)
+            ? cluster.rings.map((ring) => Number(ring)).filter((ring) => Number.isFinite(ring) && ring > 0)
+            : [],
+          zone: cluster.zone || "default",
+          bubble_ids: Array.isArray(cluster.bubble_ids)
+            ? cluster.bubble_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
+            : [],
+        }))
+    : [];
   return {
-    version: Number(graph.version || 1),
+    version: Number(graph.version || 2),
+    layout_mode: graph.layout_mode || "orbit",
     update_cycle: Number(graph.update_cycle || 0),
     layout_revision: Number(graph.layout_revision || 0),
-    bubbles: Array.isArray(graph.bubbles) ? graph.bubbles : [],
+    clusters,
+    bubbles: Array.isArray(graph.bubbles)
+      ? graph.bubbles.map((bubble) => ({
+          ...bubble,
+          role: bubble.role || "satellite",
+          orbit_center_id: bubble.orbit_center_id || "",
+          orbit_ring: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : 0,
+          orbit_angle: Number.isFinite(Number(bubble.orbit_angle)) ? Number(bubble.orbit_angle) : undefined,
+          orbit_radius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
+        }))
+      : [],
     processed_utterance_ids: Array.isArray(graph.processed_utterance_ids)
       ? graph.processed_utterance_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
       : [],

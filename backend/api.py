@@ -6649,7 +6649,8 @@ def _normalize_ideation_keyword_operations(
     return merge_keywords, remove_keywords
 
 
-IDEATION_BUBBLE_GRAPH_VERSION = 1
+IDEATION_BUBBLE_GRAPH_VERSION = 2
+IDEATION_BUBBLE_GRAPH_LAYOUT_MODE = "orbit"
 IDEATION_BUBBLE_GRAPH_MAX_BUBBLES = 80
 IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT = 2000
 IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 5
@@ -6667,13 +6668,16 @@ IDEATION_BUBBLE_GRAPH_LAYOUT_CLUSTER_GAP = 118
 IDEATION_BUBBLE_GRAPH_CORE_CLUSTER_MOVE_LIMIT = 68
 IDEATION_BUBBLE_GRAPH_DEFAULT_CLUSTER_MOVE_LIMIT = 118
 IDEATION_BUBBLE_GRAPH_PERIPHERAL_CLUSTER_MOVE_LIMIT = 152
+IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS = 3
 
 
 def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": 0,
         "layout_revision": 0,
+        "clusters": [],
         "bubbles": [],
         "processed_utterance_ids": [],
         "updated_at": "",
@@ -6688,6 +6692,11 @@ def _normalize_ideation_bubble_state(raw: Any) -> str:
 def _normalize_ideation_bubble_layout_zone(raw: Any) -> str:
     zone = _safe_text(raw, "default").lower()
     return zone if zone in {"core", "default", "peripheral", "archived"} else "default"
+
+
+def _normalize_ideation_bubble_role(raw: Any) -> str:
+    role = _safe_text(raw, "satellite").lower()
+    return role if role in {"center", "satellite", "dot"} else "satellite"
 
 
 def _ideation_bubble_text_key(raw: Any) -> str:
@@ -6758,6 +6767,10 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
             item.get("last_seen_cycle") or item.get("lastSeenCycle"),
             0,
         )
+        orbit_center_id = _safe_text(item.get("orbit_center_id") or item.get("orbitCenterId"))
+        raw_orbit_ring = item.get("orbit_ring") if item.get("orbit_ring") is not None else item.get("orbitRing")
+        raw_orbit_angle = item.get("orbit_angle") if item.get("orbit_angle") is not None else item.get("orbitAngle")
+        raw_orbit_radius = item.get("orbit_radius") if item.get("orbit_radius") is not None else item.get("orbitRadius")
         bubbles.append(
             {
                 "id": bubble_id,
@@ -6778,6 +6791,11 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "cluster_y": _safe_float(cluster_y, 0.0) if cluster_y is not None else None,
                 "local_x": _safe_float(local_x, 0.0) if local_x is not None else None,
                 "local_y": _safe_float(local_y, 0.0) if local_y is not None else None,
+                "role": _normalize_ideation_bubble_role(item.get("role")),
+                "orbit_center_id": orbit_center_id,
+                "orbit_ring": _safe_nonnegative_int(raw_orbit_ring, 0) if raw_orbit_ring is not None else 0,
+                "orbit_angle": _safe_float(raw_orbit_angle, 0.0) if raw_orbit_angle is not None else None,
+                "orbit_radius": _safe_float(raw_orbit_radius, 0.0) if raw_orbit_radius is not None else None,
                 "display_state": display_state,
                 "layout_zone": _normalize_ideation_bubble_layout_zone(
                     item.get("layout_zone") or item.get("layoutZone")
@@ -6815,11 +6833,67 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
     for item in bubbles:
         if item.get("anchor_id") not in bubble_ids:
             item["anchor_id"] = ""
+        if item.get("orbit_center_id") not in bubble_ids:
+            item["orbit_center_id"] = ""
         item["related_ids"] = [
             related_id
             for related_id in item.get("related_ids", [])
             if related_id in bubble_ids and related_id != item["id"]
         ][:12]
+
+    clusters: list[dict[str, Any]] = []
+    used_cluster_ids: set[str] = set()
+    for index, item in enumerate(raw.get("clusters") or []):
+        if not isinstance(item, dict):
+            continue
+        center_id = _safe_text(
+            item.get("center_bubble_id")
+            or item.get("centerBubbleId")
+            or item.get("center_id")
+            or item.get("centerId")
+        )
+        if center_id and center_id not in bubble_ids:
+            center_id = ""
+        cluster_id = _safe_text(item.get("id") or item.get("cluster_id") or item.get("clusterId"))
+        if not cluster_id:
+            cluster_id = f"bubble-cluster-{_stable_short_id(center_id or str(index))}"
+        cluster_id_base = cluster_id
+        suffix = 2
+        while cluster_id in used_cluster_ids:
+            cluster_id = f"{cluster_id_base}-{suffix}"
+            suffix += 1
+        used_cluster_ids.add(cluster_id)
+        raw_x = item.get("x")
+        raw_y = item.get("y")
+        raw_radius = item.get("radius")
+        raw_rings = item.get("rings")
+        rings: list[float] = []
+        if isinstance(raw_rings, list):
+            for ring in raw_rings[:4]:
+                radius_value = ring.get("radius") if isinstance(ring, dict) else ring
+                radius = _safe_float(radius_value, 0.0)
+                if radius > 0:
+                    rings.append(round(radius, 2))
+        cluster_bubble_ids = _dedup_preserve(
+            [
+                _safe_text(value)
+                for value in (item.get("bubble_ids") or item.get("bubbleIds") or [])
+                if _safe_text(value) in bubble_ids
+            ],
+            limit=IDEATION_BUBBLE_GRAPH_MAX_BUBBLES,
+        )
+        clusters.append(
+            {
+                "id": cluster_id,
+                "center_bubble_id": center_id,
+                "x": _safe_float(raw_x, 0.0) if raw_x is not None else None,
+                "y": _safe_float(raw_y, 0.0) if raw_y is not None else None,
+                "radius": _safe_float(raw_radius, 0.0) if raw_radius is not None else None,
+                "rings": rings,
+                "zone": _normalize_ideation_bubble_layout_zone(item.get("zone")),
+                "bubble_ids": cluster_bubble_ids,
+            }
+        )
 
     processed_ids = _dedup_preserve(
         [
@@ -6831,8 +6905,10 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
     )
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": _safe_nonnegative_int(raw.get("update_cycle") or raw.get("updateCycle"), 0),
         "layout_revision": _safe_nonnegative_int(raw.get("layout_revision") or raw.get("layoutRevision"), 0),
+        "clusters": clusters,
         "bubbles": bubbles,
         "processed_utterance_ids": processed_ids,
         "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
@@ -7484,7 +7560,316 @@ def _relax_ideation_bubble_layout(placements: list[dict[str, Any]]) -> list[dict
     return relaxed
 
 
+def _ideation_bubble_rank_tuple(bubble: dict[str, Any]) -> tuple[int, float, float, str]:
+    return (
+        _safe_nonnegative_int(bubble.get("count"), 1),
+        _safe_float(bubble.get("importance"), 0.0),
+        _safe_float(bubble.get("activity"), 0.0),
+        _safe_text(bubble.get("label")),
+    )
+
+
+def _split_large_ideation_bubble_orbit_cluster(cluster: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if len(cluster) <= 7:
+        return [cluster]
+
+    ranked = sorted(
+        cluster,
+        key=lambda bubble: (
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            -_safe_float(bubble.get("activity"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )
+    target_count = min(
+        IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS,
+        max(2, math.ceil(len(ranked) / 7)),
+    )
+    seeds = ranked[:target_count]
+    buckets: list[list[dict[str, Any]]] = [[seed] for seed in seeds]
+    seed_ids = [_safe_text(seed.get("id")) for seed in seeds]
+
+    for bubble in ranked[target_count:]:
+        related_ids = set(_safe_list_texts(bubble.get("related_ids")))
+        anchor_id = _safe_text(bubble.get("anchor_id"))
+        chosen_index: int | None = None
+        for index, seed_id in enumerate(seed_ids):
+            if seed_id and (seed_id == anchor_id or seed_id in related_ids):
+                chosen_index = index
+                break
+        if chosen_index is None:
+            chosen_index = min(range(len(buckets)), key=lambda index: len(buckets[index]))
+        buckets[chosen_index].append(bubble)
+
+    return buckets
+
+
+def _ideation_bubble_orbit_clusters(visible: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    expanded: list[list[dict[str, Any]]] = []
+    for cluster in _ideation_bubble_layout_clusters(visible):
+        expanded.extend(_split_large_ideation_bubble_orbit_cluster(cluster))
+
+    expanded.sort(
+        key=lambda cluster: (
+            0 if _ideation_bubble_cluster_zone(cluster) == "core" else 1,
+            -max(_safe_nonnegative_int(bubble.get("count"), 1) for bubble in cluster),
+            -max(_safe_float(bubble.get("importance"), 0.0) for bubble in cluster),
+            _safe_text(_ideation_bubble_cluster_anchor(cluster).get("label")),
+        )
+    )
+    if len(expanded) <= IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS:
+        return expanded
+
+    primary = [list(cluster) for cluster in expanded[:IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS]]
+    primary_id_sets = [
+        {_safe_text(bubble.get("id")) for bubble in cluster if _safe_text(bubble.get("id"))}
+        for cluster in primary
+    ]
+    for extra_cluster in expanded[IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS:]:
+        anchor = _ideation_bubble_cluster_anchor(extra_cluster)
+        anchor_id = _safe_text(anchor.get("anchor_id"))
+        related_ids = set(_safe_list_texts(anchor.get("related_ids")))
+        chosen_index: int | None = None
+        for index, id_set in enumerate(primary_id_sets):
+            if (anchor_id and anchor_id in id_set) or related_ids.intersection(id_set):
+                chosen_index = index
+                break
+        if chosen_index is None:
+            chosen_index = min(range(len(primary)), key=lambda index: len(primary[index]))
+        primary[chosen_index].extend(extra_cluster)
+        primary_id_sets[chosen_index].update(
+            _safe_text(bubble.get("id"))
+            for bubble in extra_cluster
+            if _safe_text(bubble.get("id"))
+        )
+    return primary
+
+
+def _ideation_bubble_orbit_cluster_id(cluster: list[dict[str, Any]], fallback_index: int) -> str:
+    anchor = _ideation_bubble_cluster_anchor(cluster)
+    anchor_key = _safe_text(anchor.get("id")) or _safe_text(anchor.get("label")) or str(fallback_index)
+    return f"bubble-orbit-{_stable_short_id(anchor_key)}"
+
+
+def _ideation_bubble_orbit_previous_center(
+    graph: dict[str, Any],
+    cluster_id: str,
+) -> tuple[float, float] | None:
+    for cluster in graph.get("clusters") or []:
+        if not isinstance(cluster, dict):
+            continue
+        if _safe_text(cluster.get("id")) != cluster_id:
+            continue
+        if _ideation_bubble_has_number(cluster.get("x")) and _ideation_bubble_has_number(cluster.get("y")):
+            return float(cluster.get("x") or 0), float(cluster.get("y") or 0)
+    return None
+
+
+def _ideation_bubble_orbit_desired_center(index: int, total: int) -> tuple[float, float]:
+    if total <= 1:
+        return IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 10
+    if total == 2:
+        centers = [
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - 235, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 95),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 275, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y + 70),
+        ]
+    else:
+        centers = [
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - 310, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 120),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 315, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 70),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 10, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y + 220),
+        ]
+    return centers[min(index, len(centers) - 1)]
+
+
+def _clamp_ideation_bubble_orbit_center(x: float, y: float, radius: float) -> tuple[float, float]:
+    margin_x = IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X + radius
+    margin_y = IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y + radius
+    max_x = max(margin_x, IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH - margin_x)
+    max_y = max(margin_y, IDEATION_BUBBLE_GRAPH_LAYOUT_HEIGHT - margin_y)
+    return (
+        max(margin_x, min(max_x, x)),
+        max(margin_y, min(max_y, y)),
+    )
+
+
+def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
+    bubble_id = _safe_text(bubble.get("id"))
+    if bubble_id == center_id:
+        return "center"
+    if bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic":
+        return "satellite"
+    layout_zone = _normalize_ideation_bubble_layout_zone(bubble.get("layout_zone"))
+    count = _safe_nonnegative_int(bubble.get("count"), 1)
+    importance = _safe_float(bubble.get("importance"), 0.0)
+    relevance = _safe_float(bubble.get("relevance"), 1.0)
+    if layout_zone == "peripheral" and count <= 2 and importance < 0.52:
+        return "dot"
+    if count <= 1 and importance < 0.42 and relevance < 0.72:
+        return "dot"
+    return "satellite"
+
+
+def _ideation_bubble_orbit_size(bubble: dict[str, Any], max_count: int, role: str) -> int:
+    base = _ideation_bubble_layout_size(bubble, max_count)
+    if role == "center":
+        return int(round(max(120, min(176, base * 0.88))))
+    if role == "dot":
+        return int(round(max(18, min(34, base * 0.18))))
+    return int(round(max(58, min(100, base * 0.55))))
+
+
+def _ideation_bubble_orbit_rings(center_size: int, cluster_size: int, total_clusters: int) -> list[float]:
+    scale = 0.88 if total_clusters >= 3 else 1.0
+    first = max(142.0, min(198.0, center_size * 0.72 + 82.0)) * scale
+    second = first + (88.0 if total_clusters >= 3 else 104.0)
+    rings = [round(first, 2)]
+    if cluster_size > 3:
+        rings.append(round(second, 2))
+    return rings
+
+
+def _place_ideation_bubble_orbit_cluster(
+    graph: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    cluster_id: str,
+    cluster_index: int,
+    total_clusters: int,
+    max_count: int,
+) -> dict[str, Any]:
+    anchor = _ideation_bubble_cluster_anchor(cluster)
+    center_id = _safe_text(anchor.get("id"))
+    sorted_bubbles = sorted(
+        cluster,
+        key=lambda bubble: (
+            0 if _safe_text(bubble.get("id")) == center_id else 1,
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            -_safe_float(bubble.get("activity"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )
+
+    for bubble in sorted_bubbles:
+        role = _ideation_bubble_orbit_role(bubble, center_id)
+        bubble["role"] = role
+        bubble["size"] = _ideation_bubble_orbit_size(bubble, max_count, role)
+
+    center = sorted_bubbles[0]
+    center_size = max(1, _safe_nonnegative_int(center.get("size"), 140))
+    rings = _ideation_bubble_orbit_rings(center_size, len(sorted_bubbles), total_clusters)
+    orbit_radius = max(rings or [center_size / 2]) + 54
+    desired_x, desired_y = _ideation_bubble_orbit_desired_center(cluster_index, total_clusters)
+    desired_x, desired_y = _clamp_ideation_bubble_orbit_center(desired_x, desired_y, orbit_radius)
+    previous_center = _ideation_bubble_orbit_previous_center(graph, cluster_id)
+    if previous_center:
+        move_limit = _ideation_bubble_cluster_move_limit(_ideation_bubble_cluster_zone(cluster))
+        center_x, center_y = _limit_ideation_bubble_layout_delta(
+            previous_center[0],
+            previous_center[1],
+            desired_x,
+            desired_y,
+            move_limit,
+        )
+        center_x, center_y = _clamp_ideation_bubble_orbit_center(center_x, center_y, orbit_radius)
+    else:
+        center_x, center_y = desired_x, desired_y
+
+    placements: list[dict[str, Any]] = []
+    center_x_top = center_x - center_size / 2
+    center_y_top = center_y - center_size / 2
+    placements.append(
+        {
+            "bubble": center,
+            "x": center_x_top,
+            "y": center_y_top,
+            "size": center_size,
+            "orbit_ring": 0,
+            "orbit_angle": 0.0,
+            "orbit_radius": 0.0,
+        }
+    )
+
+    satellites = sorted_bubbles[1:]
+    slot_count = max(4, len(satellites))
+    golden_angle = math.pi * (3 - math.sqrt(5))
+    base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
+    for index, bubble in enumerate(satellites):
+        bubble_id = _safe_text(bubble.get("id"))
+        size = max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+        role = _normalize_ideation_bubble_role(bubble.get("role"))
+        preferred_ring_index = 1 if index < max(4, math.ceil(slot_count * 0.56)) else 2
+        if role == "dot" and len(rings) > 1:
+            preferred_ring_index = 2
+        radius = rings[min(preferred_ring_index - 1, len(rings) - 1)]
+        seed_jitter = (_ideation_bubble_seed_ratio(f"{bubble_id}:{cluster_id}", 89) - 0.5) * 0.34
+        angle = base_angle + index * (math.pi * 2 / slot_count) + seed_jitter
+        chosen: dict[str, Any] | None = None
+        for attempt in range(36):
+            attempt_angle = angle + attempt * golden_angle
+            attempt_radius = radius + (attempt // 12) * 18
+            raw_x = center_x + math.cos(attempt_angle) * attempt_radius - size / 2
+            raw_y = center_y + math.sin(attempt_angle) * attempt_radius - size / 2
+            candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+            candidate = {
+                "bubble": bubble,
+                "x": candidate_x,
+                "y": candidate_y,
+                "size": size,
+                "orbit_ring": preferred_ring_index,
+                "orbit_angle": attempt_angle,
+                "orbit_radius": attempt_radius,
+            }
+            if not any(
+                _ideation_bubble_layout_circles_overlap(
+                    candidate,
+                    placed,
+                    IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP,
+                )
+                for placed in placements
+            ):
+                chosen = candidate
+                break
+        placements.append(chosen or candidate)
+
+    bubble_ids: list[str] = []
+    for placement in placements:
+        bubble = placement.get("bubble")
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id:
+            bubble_ids.append(bubble_id)
+        size = max(1.0, float(placement.get("size") or bubble.get("size") or 1))
+        x, y = _clamp_ideation_bubble_layout_xy(float(placement.get("x") or 0), float(placement.get("y") or 0), size)
+        bubble["x"] = round(x, 2)
+        bubble["y"] = round(y, 2)
+        bubble["size"] = int(round(size))
+        bubble["cluster_id"] = cluster_id
+        bubble["cluster_x"] = round(center_x, 2)
+        bubble["cluster_y"] = round(center_y, 2)
+        bubble["local_x"] = round(x - center_x, 2)
+        bubble["local_y"] = round(y - center_y, 2)
+        bubble["orbit_center_id"] = center_id if bubble_id != center_id else ""
+        bubble["orbit_ring"] = _safe_nonnegative_int(placement.get("orbit_ring"), 0)
+        bubble["orbit_angle"] = round(float(placement.get("orbit_angle") or 0.0), 6)
+        bubble["orbit_radius"] = round(float(placement.get("orbit_radius") or 0.0), 2)
+
+    return {
+        "id": cluster_id,
+        "center_bubble_id": center_id,
+        "x": round(center_x, 2),
+        "y": round(center_y, 2),
+        "radius": round(orbit_radius, 2),
+        "rings": rings,
+        "zone": _ideation_bubble_cluster_zone(cluster),
+        "bubble_ids": _dedup_preserve(bubble_ids, limit=IDEATION_BUBBLE_GRAPH_MAX_BUBBLES),
+    }
+
+
 def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
+    graph["layout_mode"] = IDEATION_BUBBLE_GRAPH_LAYOUT_MODE
     visible = [
         bubble
         for bubble in (graph.get("bubbles") or [])
@@ -7492,54 +7877,30 @@ def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
         and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
     ]
     if not visible:
+        graph["clusters"] = []
         graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
         return
 
     max_count = max(1, *[_safe_nonnegative_int(bubble.get("count"), 1) for bubble in visible])
-    for bubble in visible:
-        bubble["size"] = _ideation_bubble_layout_size(bubble, max_count)
-
-    clusters = _ideation_bubble_layout_clusters(visible)
-    cluster_boxes: list[dict[str, Any]] = []
-    for cluster_index, cluster in enumerate(clusters):
-        anchor = _ideation_bubble_cluster_anchor(cluster)
-        anchor_key = _safe_text(anchor.get("id")) or _safe_text(anchor.get("label")) or str(cluster_index)
-        cluster_id = f"bubble-cluster-{_stable_short_id(anchor_key)}"
-        cluster_boxes.append(_ideation_bubble_cluster_box(cluster, cluster_id))
-
-    cluster_boxes.sort(
-        key=lambda box: (
-            0 if _safe_text(box.get("zone")) == "core" else 1 if _safe_text(box.get("zone")) == "default" else 2,
-            -max(
-                _safe_nonnegative_int((placement.get("bubble") or {}).get("count"), 1)
-                for placement in box.get("placements") or [{"bubble": {}}]
-            ),
-            -float(box.get("width") or 0) * float(box.get("height") or 0),
-            _safe_text(box.get("cluster_id")),
+    clusters = _ideation_bubble_orbit_clusters(visible)
+    graph["clusters"] = [
+        _place_ideation_bubble_orbit_cluster(
+            graph,
+            cluster,
+            _ideation_bubble_orbit_cluster_id(cluster, cluster_index),
+            cluster_index,
+            len(clusters),
+            max_count,
         )
-    )
-
-    placements = _place_ideation_bubble_cluster_boxes(cluster_boxes)
-    for placement in placements:
-        bubble = placement.get("bubble")
-        if not isinstance(bubble, dict):
-            continue
-        size = max(1.0, float(placement.get("size") or bubble.get("size") or 1))
-        x, y = _clamp_ideation_bubble_layout_xy(float(placement.get("x") or 0), float(placement.get("y") or 0), size)
-        bubble["x"] = round(x, 2)
-        bubble["y"] = round(y, 2)
-        bubble["size"] = int(round(size))
-        bubble["cluster_id"] = _safe_text(placement.get("cluster_id")) or _safe_text(bubble.get("cluster_id"))
-        bubble["cluster_x"] = round(float(placement.get("cluster_x") or 0), 2)
-        bubble["cluster_y"] = round(float(placement.get("cluster_y") or 0), 2)
-        bubble["local_x"] = round(float(placement.get("local_x") or 0), 2)
-        bubble["local_y"] = round(float(placement.get("local_y") or 0), 2)
+        for cluster_index, cluster in enumerate(clusters)
+    ]
 
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
         if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
             bubble["cluster_id"] = _safe_text(bubble.get("cluster_id"))
+            bubble["role"] = _normalize_ideation_bubble_role(bubble.get("role"))
             continue
         if bubble.get("x") is None or bubble.get("y") is None:
             size = max(1, _safe_nonnegative_int(bubble.get("size"), 96))
@@ -7555,6 +7916,11 @@ def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
             bubble["cluster_y"] = round(y, 2)
             bubble["local_x"] = 0.0
             bubble["local_y"] = 0.0
+            bubble["role"] = _normalize_ideation_bubble_role(bubble.get("role"))
+            bubble["orbit_center_id"] = _safe_text(bubble.get("orbit_center_id"))
+            bubble["orbit_ring"] = _safe_nonnegative_int(bubble.get("orbit_ring"), 0)
+            bubble["orbit_angle"] = _safe_float(bubble.get("orbit_angle"), 0.0)
+            bubble["orbit_radius"] = _safe_float(bubble.get("orbit_radius"), 0.0)
 
     graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
 
@@ -7572,6 +7938,7 @@ def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
     core_ids = _ideation_bubble_core_ids(graph)
     _apply_ideation_bubble_layout_zones(graph, core_ids)
     _apply_ideation_bubble_visual_state(graph, core_ids)
+    graph["layout_mode"] = IDEATION_BUBBLE_GRAPH_LAYOUT_MODE
     needs_layout = any(
         not isinstance(bubble.get("x"), (int, float))
         or not isinstance(bubble.get("y"), (int, float))
@@ -7581,8 +7948,12 @@ def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
         or not _ideation_bubble_has_number(bubble.get("cluster_y"))
         or not _ideation_bubble_has_number(bubble.get("local_x"))
         or not _ideation_bubble_has_number(bubble.get("local_y"))
+        or not _safe_text(bubble.get("role"))
+        or not isinstance(bubble.get("orbit_ring"), int)
+        or not _ideation_bubble_has_number(bubble.get("orbit_angle"))
+        or not _ideation_bubble_has_number(bubble.get("orbit_radius"))
         for bubble in visible
-    )
+    ) or not isinstance(graph.get("clusters"), list) or not graph.get("clusters")
     if not needs_layout:
         return False
 

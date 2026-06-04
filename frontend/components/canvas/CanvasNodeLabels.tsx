@@ -29,6 +29,7 @@ type IdeationKeywordBubble = {
   activity?: number;
   opacity?: number;
   emphasis?: "primary" | "default";
+  role?: "center" | "satellite" | "dot" | string;
 };
 
 function clampNumber(value: number, min: number, max: number) {
@@ -77,9 +78,18 @@ export function getIdeationKeywordBubbleFontSize(text: string, size: number) {
 }
 
 export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble, size: number) {
+  if (bubble.role === "dot") {
+    return (
+      <div
+        className="h-full w-full rounded-full border border-white/90 bg-[radial-gradient(circle_at_38%_34%,#ffffff_0%,#dff5ff_48%,#a8dcff_100%)] shadow-[0_0.52px_6.75px_rgba(1,163,255,0.24)]"
+        aria-hidden="true"
+      />
+    );
+  }
+
   const fontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
   const offTopic = bubble.offTopic || bubble.kind === "off_topic";
-  const primary = !offTopic && bubble.emphasis === "primary";
+  const primary = !offTopic && (bubble.emphasis === "primary" || bubble.role === "center");
   const borderWidth = Number(clampNumber(size / 94, 0.517, 1.041).toFixed(3));
   const normalShadowAlpha = size >= 92 ? 0.4 : 0.2;
   const normalShadowY = Number(clampNumber(size * 0.00532, 0.259, 0.521).toFixed(3));
@@ -88,13 +98,13 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
     ? "border-[#ef4e4e]/45 bg-[#fff5f5]"
     : primary
       ? "border-white bg-[radial-gradient(circle_at_50%_45%,#1fc8ff_0%,#01a3ff_42%,#236cf3_100%)]"
-      : "border-white bg-[#fbfbfb]";
+      : "border-white bg-[radial-gradient(circle_at_42%_32%,#ffffff_0%,#f8fcff_46%,#dff4ff_100%)]";
   const bubbleStyle: React.CSSProperties = {
     borderWidth,
     boxShadow: offTopic
       ? `0 ${normalShadowY}px 6.75px rgba(239,78,78,0.22)`
       : primary
-        ? "0 0.521px 6.75px rgba(1,163,255,0.4)"
+        ? "0 0.521px 6.75px rgba(1,163,255,0.4), 0 16px 34px rgba(35,108,243,0.15)"
         : `0 ${normalShadowY}px ${normalShadowBlur}px rgba(1,163,255,${normalShadowAlpha})`,
   };
   return (
@@ -108,7 +118,7 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
         </span>
       ) : null}
       <strong
-        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#505050]"}`}
+        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#236cf3]"}`}
         style={{
           fontSize,
           lineHeight: 1.4,

@@ -30,6 +30,11 @@ export type IdeationKeywordBubble = {
   layoutY?: number;
   layoutSize?: number;
   clusterId?: string;
+  role?: "center" | "satellite" | "dot" | string;
+  orbitCenterId?: string;
+  orbitRing?: number;
+  orbitAngle?: number;
+  orbitRadius?: number;
   activity?: number;
   opacity?: number;
   layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
@@ -877,7 +882,7 @@ function getIdeationBubbleVisualSize(
 }
 
 function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
-  return !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.durable);
+  return !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.role === "center" || bubble.durable);
 }
 
 function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {

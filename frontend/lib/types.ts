@@ -791,6 +791,19 @@ export interface CanvasIdeationKeywordResponse {
 
 export type CanvasIdeationBubbleDisplayState = "active" | "dimmed" | "archived";
 export type CanvasIdeationBubbleLayoutZone = "core" | "default" | "peripheral" | "archived";
+export type CanvasIdeationBubbleLayoutMode = "orbit" | "organic" | string;
+export type CanvasIdeationBubbleRole = "center" | "satellite" | "dot" | string;
+
+export interface CanvasIdeationBubbleGraphCluster {
+  id: string;
+  center_bubble_id?: string;
+  x?: number;
+  y?: number;
+  radius?: number;
+  rings?: number[];
+  zone?: CanvasIdeationBubbleLayoutZone | string;
+  bubble_ids?: string[];
+}
 
 export interface CanvasIdeationBubbleGraphBubble {
   id: string;
@@ -811,6 +824,11 @@ export interface CanvasIdeationBubbleGraphBubble {
   cluster_y?: number;
   local_x?: number;
   local_y?: number;
+  role?: CanvasIdeationBubbleRole;
+  orbit_center_id?: string;
+  orbit_ring?: number;
+  orbit_angle?: number;
+  orbit_radius?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
@@ -827,8 +845,10 @@ export interface CanvasIdeationBubbleGraphBubble {
 
 export interface CanvasIdeationBubbleGraph {
   version: number;
+  layout_mode?: CanvasIdeationBubbleLayoutMode;
   update_cycle: number;
   layout_revision?: number;
+  clusters?: CanvasIdeationBubbleGraphCluster[];
   bubbles: CanvasIdeationBubbleGraphBubble[];
   processed_utterance_ids: string[];
   updated_at?: string;
