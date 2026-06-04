@@ -446,9 +446,9 @@ export const CanvasSurface = memo(function CanvasSurface({
           {snapshot.stage === "ideation" ? (
             <Background
               id="ideation-grid"
-              bgColor="#fbfbfb"
-              color="#e9eef5"
-              gap={18}
+              bgColor="#fdfdfd"
+              color="#edf5fb"
+              gap={16}
               size={1}
               variant={BackgroundVariant.Lines}
             />

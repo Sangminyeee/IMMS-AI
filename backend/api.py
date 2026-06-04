@@ -7714,10 +7714,10 @@ def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
 def _ideation_bubble_orbit_size(bubble: dict[str, Any], max_count: int, role: str) -> int:
     base = _ideation_bubble_layout_size(bubble, max_count)
     if role == "center":
-        return int(round(max(120, min(176, base * 0.88))))
+        return int(round(max(122, min(154, base * 0.82))))
     if role == "dot":
-        return int(round(max(18, min(34, base * 0.18))))
-    return int(round(max(58, min(100, base * 0.55))))
+        return int(round(max(18, min(21, base * 0.13))))
+    return int(round(max(64, min(88, base * 0.52))))
 
 
 def _ideation_bubble_orbit_rings(center_size: int, cluster_size: int, total_clusters: int) -> list[float]:

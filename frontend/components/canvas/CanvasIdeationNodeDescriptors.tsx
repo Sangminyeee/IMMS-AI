@@ -30,8 +30,8 @@ function makeOrbitGuideLabel(radius: number, dotSeed: string, dimmed = false) {
     <div
       className="relative h-full w-full rounded-full border border-dashed"
       style={{
-        borderColor: dimmed ? "rgba(1,163,255,0.12)" : "rgba(1,163,255,0.2)",
-        background: "radial-gradient(circle, rgba(1,163,255,0.035) 0%, rgba(1,163,255,0) 64%)",
+        borderColor: dimmed ? "rgba(1,163,255,0.1)" : "rgba(1,163,255,0.18)",
+        background: "radial-gradient(circle, rgba(157,229,255,0.04) 0%, rgba(1,163,255,0) 66%)",
       }}
     >
       {dotAngles.map((angle, index) => {
@@ -39,7 +39,7 @@ function makeOrbitGuideLabel(radius: number, dotSeed: string, dimmed = false) {
         return (
           <span
             key={`${dotSeed}-${index}`}
-            className="absolute left-1/2 top-1/2 rounded-full bg-[#01a3ff]/25 shadow-[0_0_10px_rgba(1,163,255,0.18)]"
+            className="absolute left-1/2 top-1/2 rounded-full bg-[#9de5ff]/55 shadow-[0_0_12px_rgba(91,173,255,0.18)]"
             style={{
               width: dotSize,
               height: dotSize,
@@ -54,8 +54,10 @@ function makeOrbitGuideLabel(radius: number, dotSeed: string, dimmed = false) {
 
 function buildEmptyOrbitGuideDescriptors(): CanvasNodeDescriptor[] {
   const emptyGuides = [
-    { id: "ideation-orbit-idle-primary", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 - 140, centerY: 410, radius: 245 },
-    { id: "ideation-orbit-idle-secondary", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 + 225, centerY: 560, radius: 185 },
+    { id: "ideation-orbit-idle-primary-outer", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 - 180, centerY: 410, radius: 273 },
+    { id: "ideation-orbit-idle-primary-inner", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 - 180, centerY: 410, radius: 180 },
+    { id: "ideation-orbit-idle-secondary-outer", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 + 260, centerY: 595, radius: 250 },
+    { id: "ideation-orbit-idle-secondary-inner", centerX: CANVAS_IDEATION_BUBBLE_PLANE_WIDTH / 2 + 260, centerY: 595, radius: 166 },
   ];
   return emptyGuides.map((guide) => ({
     id: guide.id,

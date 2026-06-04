@@ -30,6 +30,8 @@ type IdeationKeywordBubble = {
   opacity?: number;
   emphasis?: "primary" | "default";
   role?: "center" | "satellite" | "dot" | string;
+  orbitAngle?: number;
+  orbitRing?: number;
 };
 
 function clampNumber(value: number, min: number, max: number) {
@@ -81,31 +83,50 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
   if (bubble.role === "dot") {
     return (
       <div
-        className="h-full w-full rounded-full border border-white/90 bg-[radial-gradient(circle_at_38%_34%,#ffffff_0%,#dff5ff_48%,#a8dcff_100%)] shadow-[0_0.52px_6.75px_rgba(1,163,255,0.24)]"
+        className="h-full w-full rounded-full border border-white/90 bg-[linear-gradient(158deg,#9de5ff_43%,#b2eaff_61%,#fdfeff_87%)] shadow-[0_0.462px_20.787px_rgba(91,173,255,0.18)]"
         aria-hidden="true"
       />
     );
   }
 
-  const fontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
   const offTopic = bubble.offTopic || bubble.kind === "off_topic";
   const primary = !offTopic && (bubble.emphasis === "primary" || bubble.role === "center");
+  const fittedFontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
+  const roleScaledFontSize = primary
+    ? Math.round(size * 0.126)
+    : Math.round(size * 0.165);
+  const fontSize = primary
+    ? clampNumber(Math.max(fittedFontSize, roleScaledFontSize), 12, 21)
+    : clampNumber(Math.min(fittedFontSize + 3, roleScaledFontSize), 10, 15);
   const borderWidth = Number(clampNumber(size / 94, 0.517, 1.041).toFixed(3));
-  const normalShadowAlpha = size >= 92 ? 0.4 : 0.2;
   const normalShadowY = Number(clampNumber(size * 0.00532, 0.259, 0.521).toFixed(3));
-  const normalShadowBlur = size < 60 ? 4.542 : 6.75;
+  const satelliteIsMedium = size >= 78;
+  const satelliteVariantKey = Array.from(bubble.id || bubble.text).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const satelliteUsesSoftSweep = satelliteIsMedium && (bubble.orbitRing === 1 || satelliteVariantKey % 2 === 0);
+  const backgroundImage = offTopic
+    ? undefined
+    : primary
+      ? "radial-gradient(ellipse 68% 68% at 84.3% 14.9%, #011aff 0%, #013dff 25%, #015fff 50%, #0181ff 75%, #01a3ff 100%)"
+      : satelliteIsMedium
+        ? satelliteUsesSoftSweep
+          ? "linear-gradient(232.095deg, #09caff 0.194%, #e8faff 81.224%)"
+          : "linear-gradient(169.603deg, #09caff 7.752%, #b2eaff 49.345%, #fdfeff 95.14%)"
+        : "linear-gradient(153.493deg, #f4ffff 16.639%, #bdedff 69.555%, #fdfeff 83.198%)";
   const bubbleClassName = offTopic
     ? "border-[#ef4e4e]/45 bg-[#fff5f5]"
     : primary
-      ? "border-white bg-[radial-gradient(circle_at_50%_45%,#1fc8ff_0%,#01a3ff_42%,#236cf3_100%)]"
-      : "border-white bg-[radial-gradient(circle_at_42%_32%,#ffffff_0%,#f8fcff_46%,#dff4ff_100%)]";
+      ? "border-white"
+      : "border-white";
   const bubbleStyle: React.CSSProperties = {
+    backgroundImage,
     borderWidth,
     boxShadow: offTopic
       ? `0 ${normalShadowY}px 6.75px rgba(239,78,78,0.22)`
       : primary
-        ? "0 0.521px 6.75px rgba(1,163,255,0.4), 0 16px 34px rgba(35,108,243,0.15)"
-        : `0 ${normalShadowY}px ${normalShadowBlur}px rgba(1,163,255,${normalShadowAlpha})`,
+        ? "0 3.244px 12.016px rgba(1,163,255,0.3), inset 0 3.244px 37.877px rgba(255,255,255,0.22)"
+        : satelliteIsMedium
+          ? "0 0.462px 10.394px rgba(91,173,255,0.18)"
+          : "0 0.361px 8.116px rgba(91,173,255,0.18)",
   };
   return (
     <div
@@ -118,11 +139,12 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
         </span>
       ) : null}
       <strong
-        className={`max-w-full whitespace-nowrap font-bold antialiased ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#236cf3]"}`}
+        className={`max-w-full whitespace-nowrap antialiased ${primary ? "font-bold" : "font-medium"} ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#004fe2]"}`}
         style={{
           fontSize,
           lineHeight: 1.4,
           maxWidth: Math.max(44, Math.round(size * 0.82)),
+          textShadow: primary ? "0 0 3.244px #01a3ff" : undefined,
           textRendering: "geometricPrecision",
           wordBreak: "keep-all",
         }}
