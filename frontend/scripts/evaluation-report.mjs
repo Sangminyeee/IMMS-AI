@@ -13,8 +13,6 @@ const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_OUTPUT_DIR = path.join(repoRoot, "output", "evaluation");
 const DEFAULT_STT_TIMEOUT_MS = 180_000;
 const DEFAULT_SUMMARY_TIMEOUT_MS = 240_000;
-const DEFAULT_GEMINI_TIMEOUT_MS = 90_000;
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 function parseArgs(argv) {
   const args = {};
@@ -52,12 +50,10 @@ STT accuracy / latency:
   --meeting-goal=<text>       Optional STT refinement meeting goal.
   --meeting-context=<text>    Optional STT refinement context terms.
 
-Summary latency / quality:
+Summary latency:
   --summary-payload=<path>    JSON payload for a summary API call.
   --summary-endpoint=<name>   summary-document | summary-conclusion. Default: summary-document.
-  --transcript=<path>         Full transcript/source text for quality judging.
-  --summary=<path>            Existing summary markdown/text/json to judge.
-  --judge=<mode>              none | gemini. Default: none.
+  --transcript=<path>         Full transcript/source text for normalized speed metrics.
 
 Multi-client smoke report:
   --multiclient-report=<path> Existing report-*.json from smoke:multiclient-canvas. Repeatable.
@@ -67,13 +63,10 @@ Common:
   --output-dir=<path>         Report directory. Default: ${DEFAULT_OUTPUT_DIR}
   --stt-timeout-ms=<ms>       Default: ${DEFAULT_STT_TIMEOUT_MS}
   --summary-timeout-ms=<ms>   Default: ${DEFAULT_SUMMARY_TIMEOUT_MS}
-  --gemini-timeout-ms=<ms>    Default: ${DEFAULT_GEMINI_TIMEOUT_MS}
-  --gemini-model=<model>      Default: ${DEFAULT_GEMINI_MODEL}
 
 Examples:
   npm run report:evaluation -- --audio=../samples/demo.wav --reference=../samples/demo-script.txt
-  npm run report:evaluation -- --transcript=../samples/transcript.txt --summary=../samples/summary.md --judge=gemini
-  npm run report:evaluation -- --summary-payload=../samples/summary-payload.json --transcript=../samples/transcript.txt --judge=gemini
+  npm run report:evaluation -- --summary-payload=../samples/summary-payload.json --transcript=../samples/transcript.txt
 `);
 }
 
@@ -102,16 +95,9 @@ function buildOptions() {
   if (!["summary-document", "summary-conclusion"].includes(summaryEndpointName)) {
     throw new Error("--summary-endpoint는 summary-document 또는 summary-conclusion 이어야 합니다.");
   }
-  const judge = String(optionValue(args, "judge", "none")).toLowerCase();
-  if (!["none", "gemini"].includes(judge)) {
-    throw new Error("--judge는 none 또는 gemini 이어야 합니다.");
-  }
   return {
     audioPaths: asArray(args.audio).map((entry) => path.resolve(String(entry))),
     backendUrl,
-    geminiModel: String(optionValue(args, "gemini-model", DEFAULT_GEMINI_MODEL)),
-    geminiTimeoutMs: toInt(optionValue(args, "gemini-timeout-ms"), DEFAULT_GEMINI_TIMEOUT_MS),
-    judge,
     meetingContext: String(optionValue(args, "meeting-context", "")),
     meetingGoal: String(optionValue(args, "meeting-goal", "")),
     multiclientReports: asArray(args["multiclient-report"]).map((entry) => path.resolve(String(entry))),
@@ -119,7 +105,6 @@ function buildOptions() {
     referencePath: args.reference ? path.resolve(String(args.reference)) : "",
     sttTimeoutMs: toInt(optionValue(args, "stt-timeout-ms"), DEFAULT_STT_TIMEOUT_MS),
     summaryEndpointName,
-    summaryPath: args.summary ? path.resolve(String(args.summary)) : "",
     summaryPayloadPath: args["summary-payload"] ? path.resolve(String(args["summary-payload"])) : "",
     summaryTimeoutMs: toInt(optionValue(args, "summary-timeout-ms"), DEFAULT_SUMMARY_TIMEOUT_MS),
     transcriptPath: args.transcript ? path.resolve(String(args.transcript)) : "",
@@ -207,12 +192,6 @@ async function readTextIfPresent(filePath) {
 async function readJson(filePath) {
   const raw = await fs.readFile(filePath, "utf8");
   return JSON.parse(raw);
-}
-
-function truncateText(value, maxLength) {
-  const text = String(value || "");
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}\n...[truncated ${text.length - maxLength} chars]`;
 }
 
 function extractSummaryText(value) {
@@ -362,9 +341,9 @@ function sourceCharCountFromSummaryPayload(payload, transcriptText) {
   return compactWhitespace(chunks.join(" ")).length;
 }
 
-async function runSummaryGeneration(options, transcriptText) {
+async function runSummaryGeneration(options, transcriptText, preloadedPayload = null) {
   if (!options.summaryPayloadPath) return null;
-  const payload = await readJson(options.summaryPayloadPath);
+  const payload = preloadedPayload || (await readJson(options.summaryPayloadPath));
   const endpoint = `${options.backendUrl}/api/canvas/${options.summaryEndpointName}`;
   const response = await postJson(endpoint, payload, options.summaryTimeoutMs);
   const summaryText = extractSummaryText(response.body);
@@ -383,99 +362,6 @@ async function runSummaryGeneration(options, transcriptText) {
     used_llm: Boolean(response.body.used_llm),
     warning: response.body.warning || "",
   };
-}
-
-function buildJudgePrompt({ transcriptText, summaryText }) {
-  return `너는 회의 요약 품질을 평가하는 독립 평가자다. 출력은 JSON 하나만 반환한다.
-
-[평가 목표]
-- 요약이 원문 회의 내용을 얼마나 충실하게 반영했는지 평가한다.
-- 입력에 없는 사실을 만들었는지 확인한다.
-- 핵심 논점 누락, 중복, 장황함, 구조적 가독성을 평가한다.
-- 점수는 발표/보고서용 참고 지표이며, 절대적 정답이 아니라 LLM-as-judge 평가다.
-
-[평가 기준]
-- faithfulness: 원문에 없는 내용을 만들지 않았는가
-- coverage: 핵심 논점과 결론을 충분히 포함했는가
-- structure: 흐름, 제목, 표/목록 구조가 읽기 쉬운가
-- conciseness: 중복과 불필요한 장황함이 적은가
-- actionability: 결정/쟁점/후속 확인 사항이 구분되는가
-- readability: 최종 회의 문서로 읽기 자연스러운가
-
-[출력 JSON 스키마]
-{
-  "overall_score": 0,
-  "scores": {
-    "faithfulness": 0,
-    "coverage": 0,
-    "structure": 0,
-    "conciseness": 0,
-    "actionability": 0,
-    "readability": 0
-  },
-  "strengths": ["..."],
-  "issues": ["..."],
-  "missing_points": ["..."],
-  "overstatements": ["..."],
-  "verdict": "짧은 총평"
-}
-
-[원문 회의 내용]
-${truncateText(transcriptText, 30000)}
-
-[평가할 요약]
-${truncateText(summaryText, 18000)}
-
-JSON만 반환해라.`;
-}
-
-async function callGeminiJudge(options, transcriptText, summaryText) {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
-  if (!apiKey) {
-    return {
-      error: "GEMINI_API_KEY 또는 GOOGLE_API_KEY가 없어 품질 점수를 계산하지 않았습니다.",
-      provider: "gemini",
-    };
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.geminiTimeoutMs);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    options.geminiModel,
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const started = performance.now();
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildJudgePrompt({ transcriptText, summaryText }) }] }],
-        generationConfig: {
-          maxOutputTokens: 1600,
-          responseMimeType: "application/json",
-          temperature: 0.1,
-        },
-      }),
-      signal: controller.signal,
-    });
-    const body = await response.json().catch(() => ({}));
-    const text = body?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
-    let parsed = {};
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { raw_text: text };
-    }
-    return {
-      elapsed_ms: Math.round(performance.now() - started),
-      http_ok: response.ok,
-      http_status: response.status,
-      model: options.geminiModel,
-      provider: "gemini",
-      result: parsed,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function percentile(values, p) {
@@ -571,6 +457,21 @@ function markdownTable(headers, rows) {
   ].join("\n");
 }
 
+function buildPostMeetingSummaryEvaluationTable() {
+  return markdownTable(
+    ["평가 항목", "판정(O/X)", "오류 유형", "메모"],
+    [
+      ["핵심 논점이 빠지지 않고 포함되었는가", "", "누락", ""],
+      ["원문에 없는 사실, 담당자, 일정, 결정이 추가되지 않았는가", "", "환각/과장", ""],
+      ["논의가 진행된 흐름이 자연스럽게 반영되었는가", "", "흐름 오류", ""],
+      ["결론이 실제 회의에서 정리된 방향과 일치하는가", "", "결론 오류", ""],
+      ["확정/미정/추가 확인 사항이 구분되어 있는가", "", "상태 구분 오류", ""],
+      ["같은 내용이 불필요하게 반복되지 않았는가", "", "중복/장황함", ""],
+      ["제목, 문단, 목록, 표 구성이 읽기 쉬운가", "", "가독성", ""],
+    ],
+  );
+}
+
 function buildMarkdownReport(report) {
   const sections = [];
   sections.push(`# IMMS-AI 성능 평가 리포트`);
@@ -583,7 +484,7 @@ function buildMarkdownReport(report) {
       [
         ["STT 평가 케이스", report.stt.length],
         ["요약 API 측정", report.summary_generation ? "실행" : "미실행"],
-        ["요약 품질 Judge", report.summary_quality?.result ? "실행" : "미실행"],
+        ["요약 품질 평가", "사후 사용자 평가표로 기록"],
         ["Multi-client smoke report", report.multiclient.length],
       ],
     ),
@@ -635,47 +536,11 @@ function buildMarkdownReport(report) {
     }
   }
 
-  if (report.summary_quality?.result) {
-    const result = report.summary_quality.result;
-    sections.push(``);
-    sections.push(`## 요약 품질 점수`);
-    sections.push(`Judge: ${report.summary_quality.provider} / ${report.summary_quality.model || "-"}`);
-    sections.push(
-      markdownTable(
-        ["항목", "점수"],
-        [
-          ["Overall", result.overall_score ?? "-"],
-          ["Faithfulness", result.scores?.faithfulness ?? "-"],
-          ["Coverage", result.scores?.coverage ?? "-"],
-          ["Structure", result.scores?.structure ?? "-"],
-          ["Conciseness", result.scores?.conciseness ?? "-"],
-          ["Actionability", result.scores?.actionability ?? "-"],
-          ["Readability", result.scores?.readability ?? "-"],
-        ],
-      ),
-    );
-    if (result.verdict) {
-      sections.push(``);
-      sections.push(`총평: ${result.verdict}`);
-    }
-    for (const [title, values] of [
-      ["강점", result.strengths],
-      ["이슈", result.issues],
-      ["누락 가능성", result.missing_points],
-      ["과장 가능성", result.overstatements],
-    ]) {
-      if (!Array.isArray(values) || !values.length) continue;
-      sections.push(``);
-      sections.push(`### ${title}`);
-      sections.push(values.map((item) => `- ${item}`).join("\n"));
-    }
-    sections.push(``);
-    sections.push(`> 이 점수는 LLM-as-judge 기준의 참고 지표입니다. 최종 보고서에서는 사람 평가 또는 샘플 검수 결과와 함께 제시하는 것이 안전합니다.`);
-  } else if (report.summary_quality?.error) {
-    sections.push(``);
-    sections.push(`## 요약 품질 점수`);
-    sections.push(report.summary_quality.error);
-  }
+  sections.push(``);
+  sections.push(`## 사후 사용자 요약 품질 평가표`);
+  sections.push(buildPostMeetingSummaryEvaluationTable());
+  sections.push(``);
+  sections.push(`Summary Error Rate = X 판정 항목 수 / 전체 평가 항목 수`);
 
   if (report.multiclient.length) {
     sections.push(``);
@@ -718,31 +583,8 @@ async function main() {
   const referenceText = await readTextIfPresent(options.referencePath);
   const transcriptText = await readTextIfPresent(options.transcriptPath);
   const stt = await runSttEvaluations(options, referenceText);
-  const summaryGeneration = await runSummaryGeneration(options, transcriptText);
-
-  let summaryText = "";
-  if (summaryGeneration?.generated_summary_text) {
-    summaryText = summaryGeneration.generated_summary_text;
-  } else if (options.summaryPath) {
-    const rawSummary = await readTextIfPresent(options.summaryPath);
-    try {
-      summaryText = extractSummaryText(JSON.parse(rawSummary));
-    } catch {
-      summaryText = rawSummary;
-    }
-  }
-
-  let summaryQuality = null;
-  if (options.judge === "gemini") {
-    if (!transcriptText || !summaryText) {
-      summaryQuality = {
-        error: "--judge=gemini에는 --transcript와 --summary 또는 --summary-payload 결과가 필요합니다.",
-        provider: "gemini",
-      };
-    } else {
-      summaryQuality = await callGeminiJudge(options, transcriptText, summaryText);
-    }
-  }
+  const summaryPayload = options.summaryPayloadPath ? await readJson(options.summaryPayloadPath) : null;
+  const summaryGeneration = await runSummaryGeneration(options, transcriptText, summaryPayload);
 
   const multiclient = await loadSmokeSummaries(options);
   const report = {
@@ -750,19 +592,16 @@ async function main() {
     options: {
       audio_paths: options.audioPaths,
       backend_url: options.backendUrl,
-      judge: options.judge,
       meeting_context_present: Boolean(options.meetingContext),
       meeting_goal_present: Boolean(options.meetingGoal),
       multiclient_reports: options.multiclientReports,
       reference_path: options.referencePath,
       summary_endpoint: options.summaryEndpointName,
-      summary_path: options.summaryPath,
       summary_payload_path: options.summaryPayloadPath,
       transcript_path: options.transcriptPath,
     },
     stt,
     summary_generation: summaryGeneration,
-    summary_quality: summaryQuality,
     multiclient,
   };
 
