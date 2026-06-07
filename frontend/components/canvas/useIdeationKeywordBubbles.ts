@@ -259,6 +259,11 @@ export function useIdeationKeywordBubbles({
       deferStateUpdate(() => setStatusMessage(""));
       return undefined;
     }
+    if (demoBalanceMode) {
+      pendingWindowStartedAtRef.current = 0;
+      deferStateUpdate(() => setStatusMessage(""));
+      return undefined;
+    }
     if (!pendingWindowStartedAtRef.current) {
       pendingWindowStartedAtRef.current = Date.now();
     }

@@ -2320,6 +2320,13 @@ class SttFlowSummaryInput(BaseModel):
     max_chars: int = Field(default=30, ge=8, le=60)
 
 
+class SttTranscriptRefineInput(BaseModel):
+    raw_text: str = ""
+    meeting_goal: str = ""
+    meeting_goal_context: str = ""
+    context_pack: dict[str, Any] = Field(default_factory=dict)
+
+
 class CanvasPlacementConfirmInput(BaseModel):
     tool: str = "note"
     ui_x: float = 0.0
@@ -12772,6 +12779,28 @@ def post_stt_flow_summary(payload: SttFlowSummaryInput):
     return _generate_stt_flow_summary(payload)
 
 
+@app.post("/api/stt/refine-transcript")
+def post_stt_refine_transcript(payload: SttTranscriptRefineInput):
+    text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
+        payload.raw_text,
+        meeting_goal=payload.meeting_goal,
+        meeting_goal_context=payload.meeting_goal_context,
+        context_pack=payload.context_pack,
+    )
+    return {
+        "text": _safe_text(text),
+        "raw_text": _safe_text(payload.raw_text),
+        "refined_text": _safe_text(text),
+        "refine_used_llm": refine_used_llm,
+        "refine_warning": refine_warning,
+        "confidence": refine_meta.get("confidence"),
+        "corrections": refine_meta.get("corrections") or [],
+        "uncertain_terms": refine_meta.get("uncertain_terms") or [],
+        "context_terms": refine_meta.get("context_terms") or [],
+        "context_pack_summary": refine_meta.get("context_pack_summary") or {},
+    }
+
+
 @app.post("/api/transcript/import-json-dir")
 def post_import_json_dir(payload: ImportDirInput):
     with RT.lock:
@@ -15730,8 +15759,11 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             existing_keyword_rows,
             normalized_keywords,
         )
+        is_demo_balance = _is_demo_balance_config(demo_config)
         if not normalized_keywords and not merge_keywords and not remove_keywords:
             warning = "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
+            if is_demo_balance:
+                return _response(graph, True, warning, signature, workspace)
 
         next_graph = _apply_ideation_bubble_graph_update(
             graph,
@@ -15739,12 +15771,14 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             normalized_keywords,
             merge_keywords,
             remove_keywords,
-            allow_single_support=_is_demo_balance_config(demo_config),
-            decay_profile="demo_balance" if _is_demo_balance_config(demo_config) else "normal",
+            allow_single_support=is_demo_balance,
+            decay_profile="demo_balance" if is_demo_balance else "normal",
         )
         saved_at = _now_ts()
         next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
         next_workspace["ideation_bubble_graph"] = next_graph
+        if is_demo_balance:
+            next_workspace["demo_config"] = demo_config
         with RT.lock:
             RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
         _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
@@ -16409,35 +16443,30 @@ async def post_transcribe_chunk(
         print(
             f"[STT] transcribe chunk start model={WHISPER_MODEL_NAME} "
             f"bytes={len(blob)} suffix={suffix} "
-            f"refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
+            f"raw_first=true refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
         )
         raw_text = _transcribe_with_whisper(blob, suffix=suffix)
         parsed_context_pack = _parse_stt_context_pack(context_pack)
-        text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
-            raw_text,
-            meeting_goal=meeting_goal,
-            meeting_goal_context=meeting_goal_context,
-            context_pack=parsed_context_pack,
-        )
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        context_pack_summary = _summarize_stt_context_pack(parsed_context_pack)
         print(
             f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
             f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
-            f"raw_chars={len(_safe_text(raw_text))} refined_chars={len(_safe_text(text))} "
-            f"refine_used_llm={refine_used_llm} context_pack={refine_meta.get('context_pack_summary')}"
+            f"raw_chars={len(_safe_text(raw_text))} refine_deferred=true "
+            f"context_pack={context_pack_summary}"
         )
         
         return {
-            "text": _safe_text(text),
+            "text": _safe_text(raw_text),
             "raw_text": _safe_text(raw_text),
-            "refined_text": _safe_text(text),
-            "refine_used_llm": refine_used_llm,
-            "refine_warning": refine_warning,
-            "confidence": refine_meta.get("confidence"),
-            "corrections": refine_meta.get("corrections") or [],
-            "uncertain_terms": refine_meta.get("uncertain_terms") or [],
-            "context_terms": refine_meta.get("context_terms") or [],
-            "context_pack_summary": refine_meta.get("context_pack_summary") or {},
+            "refined_text": "",
+            "refine_used_llm": False,
+            "refine_warning": "LLM 보정은 비동기 처리됩니다.",
+            "confidence": None,
+            "corrections": [],
+            "uncertain_terms": [],
+            "context_terms": [],
+            "context_pack_summary": context_pack_summary,
             "language": "ko",
             "elapsed_ms": elapsed_ms,
             "model": WHISPER_MODEL_NAME,

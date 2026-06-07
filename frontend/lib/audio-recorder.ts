@@ -301,6 +301,7 @@ function trimLongSilence(samples: Float32Array, sampleRate: number): TrimmedPcmC
 export class AudioRecorder {
   private stream: MediaStream | null = null
   private recordingInterval = 7000
+  private minSttSendDurationMs = MIN_STT_SEND_DURATION_MS
   private onChunkReady: ((chunk: RecordedAudioChunk) => void) | null = null
   private onMeterReady: ((metrics: AudioChunkMetrics) => void) | null = null
 
@@ -398,11 +399,11 @@ export class AudioRecorder {
       (this.pendingPcmChunk.samples.length / Math.max(this.pendingPcmChunk.sourceSampleRate, 1)) * 1000,
     )
 
-    if (pendingDurationMs < MIN_STT_SEND_DURATION_MS) {
+    if (pendingDurationMs < this.minSttSendDurationMs) {
       console.info("[STT] trimmed chunk held until next chunk", {
         chunkIndex,
         pendingDurationMs,
-        minSendDurationMs: MIN_STT_SEND_DURATION_MS,
+        minSendDurationMs: this.minSttSendDurationMs,
         removedSilenceMs: this.pendingPcmChunk.removedSilenceMs,
         combinedChunkCount: this.pendingPcmChunk.chunkIndexes.length,
       })
@@ -420,7 +421,7 @@ export class AudioRecorder {
     const pending = this.pendingPcmChunk
     const pendingDurationMs = Math.round((pending.samples.length / Math.max(pending.sourceSampleRate, 1)) * 1000)
 
-    if (!force && pendingDurationMs < MIN_STT_SEND_DURATION_MS) {
+    if (!force && pendingDurationMs < this.minSttSendDurationMs) {
       return
     }
 
@@ -715,5 +716,17 @@ export class AudioRecorder {
       intervalMs,
       minFlushDurationMs: MIN_FLUSH_DURATION_MS,
     })
+  }
+
+  setRealtimeModeOptions(options: { intervalMs?: number; minSendDurationMs?: number }) {
+    const nextIntervalMs = Number(options.intervalMs)
+    if (Number.isFinite(nextIntervalMs) && nextIntervalMs >= 1000) {
+      this.setRecordingInterval(Math.round(nextIntervalMs))
+    }
+
+    const nextMinSendDurationMs = Number(options.minSendDurationMs)
+    if (Number.isFinite(nextMinSendDurationMs)) {
+      this.minSttSendDurationMs = Math.max(MIN_FLUSH_DURATION_MS, Math.round(nextMinSendDurationMs))
+    }
   }
 }

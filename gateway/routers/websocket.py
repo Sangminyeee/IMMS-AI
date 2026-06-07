@@ -22,6 +22,8 @@ latest_canvas_workspace_by_meeting: Dict[str, Dict[str, Any]] = {}
 CANVAS_WORKSPACE_SYNC_FIELDS = {
     "meeting_goal",
     "meeting_goal_context",
+    "demo_config",
+    "demo_balance_classification",
     "agenda_overrides",
     "canvas_items",
     "custom_groups",
@@ -59,10 +61,13 @@ TRANSCRIPT_PERSISTENCE_RETRYING = "retrying"
 TRANSCRIPT_PERSISTENCE_PERSISTED = "persisted"
 TRANSCRIPT_PERSISTENCE_FAILED = "persist_failed"
 TRANSCRIPT_EVENT_CREATED = "transcript_created"
+TRANSCRIPT_EVENT_REFINED = "transcript_refined"
 TRANSCRIPT_EVENT_PERSISTENCE_UPDATED = "transcript_persistence_updated"
 TRANSCRIPT_SELECT_FIELDS_WITH_STAGE = "id, meeting_id, user_id, speaker, text, timestamp, created_at, canvas_stage, canvas_target_id"
 TRANSCRIPT_SELECT_FIELDS_BASE = "id, meeting_id, user_id, speaker, text, timestamp, created_at"
 fusion_states: Dict[str, Dict[str, Any]] = {}
+DEMO_BUBBLE_COALESCE_MS = 750
+DEMO_BUBBLE_MAX_KEYWORDS = 6
 
 
 def _float_meta(meta: dict[str, Any], *keys: str, default: float = 0.0) -> float:
@@ -101,6 +106,40 @@ def normalize_audio_meta(raw_meta: Any) -> dict[str, Any]:
     }
 
 
+def normalize_demo_config(raw: Any) -> dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(source.get("enabled")),
+        "mode": str(source.get("mode") or "normal"),
+        "option_a": str(source.get("option_a") or source.get("optionA") or "").strip(),
+        "option_b": str(source.get("option_b") or source.get("optionB") or "").strip(),
+        "instruction": str(source.get("instruction") or "").strip(),
+    }
+
+
+def is_demo_balance_config(raw: Any) -> bool:
+    config = normalize_demo_config(raw)
+    return (
+        (config.get("enabled") or config.get("mode") == "demo_balance")
+        and bool(config.get("option_a"))
+        and bool(config.get("option_b"))
+    )
+
+
+def build_ideation_context_cache(state: Dict[str, Any], *, exclude_id: str = "", limit: int = 80) -> str:
+    recent = [
+        item
+        for item in (state.get("recent_transcripts") or [])
+        if str(item.get("canvas_stage") or item.get("stage") or "ideation") == "ideation"
+        and str(item.get("id") or "") != exclude_id
+        and str(item.get("text") or "").strip()
+    ][-limit:]
+    return "\n".join(
+        f"{index + 1}. {str(item.get('speaker') or '참가자')}: {str(item.get('text') or '').strip()}"
+        for index, item in enumerate(recent)
+    )
+
+
 def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
     state = fusion_states.get(meeting_id)
     if state is None:
@@ -114,6 +153,9 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
             "flow_summaries": [],
             "flow_summary_seq": 0,
             "recent_transcripts": [],
+            "demo_bubble_lock": asyncio.Lock(),
+            "demo_bubble_queue": [],
+            "demo_bubble_task": None,
             "last_winner_user_id": None,
             "last_winner_bucket": None,
             "device_profiles": {},
@@ -211,13 +253,15 @@ def remember_recent_transcript(state: Dict[str, Any], transcript: dict[str, Any]
     rows = state.get("recent_transcripts")
     if not isinstance(rows, list):
         rows = []
-    rows.append({
+    row = {
         "id": str(transcript.get("id") or ""),
         "speaker": str(transcript.get("speaker") or "참가자"),
         "text": str(transcript.get("text") or "").strip(),
         "timestamp": str(transcript.get("timestamp") or transcript.get("created_at") or ""),
         "canvas_stage": str(transcript.get("canvas_stage") or "ideation"),
-    })
+    }
+    rows = [item for item in rows if str(item.get("id") or "") != row["id"]]
+    rows.append(row)
     state["recent_transcripts"] = rows[-limit:]
 
 
@@ -415,7 +459,7 @@ def build_stt_progress_summary(stage: str, data: dict[str, Any]) -> str:
     if stage == "audio_candidate_dropped":
         return "입력이 작아 전사하지 않음"
     if stage == "transcription_audio_prepared":
-        return "7초 발화 청크 준비됨 · 전사 준비 중"
+        return "발화 청크 준비됨 · 전사 준비 중"
     if stage == "transcription_started":
         return "Whisper 전사 중 · 잠시만 기다려 주세요"
     if stage == "transcription_empty":
@@ -527,6 +571,101 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
         "elapsed_ms": elapsed_ms,
         "backend_elapsed_ms": result.get("elapsed_ms"),
     }
+
+
+async def refine_transcript_text_async(
+    *,
+    meeting_id: str,
+    user_id: str,
+    transient_id: str,
+    speaker: str,
+    raw_text: str,
+    audio_started_at: str,
+    audio_ended_at: str,
+    chunk_index: Any,
+    canvas_stage: str,
+    canvas_target_id: str,
+    context_pack: dict[str, Any],
+    meeting_goal: str,
+    meeting_goal_context: str,
+):
+    clean_raw = str(raw_text or "").strip()
+    if not clean_raw:
+        return
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(
+                f"{AI_BACKEND_URL}/api/stt/refine-transcript",
+                json={
+                    "raw_text": clean_raw,
+                    "meeting_goal": meeting_goal,
+                    "meeting_goal_context": meeting_goal_context,
+                    "context_pack": context_pack,
+                },
+            )
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        if response.status_code >= 400:
+            print(
+                f"[STT][gateway] refine failed status={response.status_code} elapsed_ms={elapsed_ms} "
+                f"body={response.text[:200]!r}",
+                flush=True,
+            )
+            return
+        payload = response.json()
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        print(f"[STT][gateway] refine exception elapsed_ms={elapsed_ms} error={exc}", flush=True)
+        return
+
+    refined_text = str(payload.get("text") or payload.get("refined_text") or "").strip()
+    if not refined_text or refined_text == clean_raw:
+        return
+
+    transcript = build_transcript_record(
+        {},
+        fallback_id=transient_id,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        speaker=speaker,
+        text=refined_text,
+        timestamp=str(audio_started_at),
+        audio_started_at=audio_started_at,
+        audio_ended_at=audio_ended_at,
+        chunk_index=chunk_index,
+        canvas_stage=canvas_stage,
+        canvas_target_id=canvas_target_id,
+        persisted=False,
+        persistence_status=TRANSCRIPT_PERSISTENCE_SAVING,
+    )
+    message = {
+        "type": TRANSCRIPT_EVENT_REFINED,
+        "meeting_id": meeting_id,
+        "transient_id": transient_id,
+        "transcript": transcript,
+        "canvas_stage": canvas_stage,
+        "canvas_target_id": canvas_target_id,
+        "raw_text": clean_raw,
+        "refined_text": refined_text,
+        "refine_used_llm": bool(payload.get("refine_used_llm")),
+        "refine_warning": payload.get("refine_warning") or "",
+        "refine_confidence": payload.get("confidence"),
+        "corrections": payload.get("corrections") or [],
+        "uncertain_terms": payload.get("uncertain_terms") or [],
+        "context_pack_summary": payload.get("context_pack_summary") or {},
+        "refine_elapsed_ms": elapsed_ms,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    await broadcast_to_meeting(meeting_id, message)
+    remember_recent_transcript(get_fusion_state(meeting_id), transcript)
+    await enqueue_demo_bubble_update(meeting_id, {**transcript, "id": f"{transient_id}:refined"})
+    asyncio.create_task(update_refined_transcript_text_with_retry(
+        meeting_id=meeting_id,
+        user_id=user_id,
+        speaker=speaker,
+        timestamp=str(audio_started_at),
+        refined_text=refined_text,
+    ))
 
 
 async def request_flow_summary(turns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1047,6 +1186,7 @@ async def transcribe_and_broadcast_winner(
     await broadcast_to_meeting(meeting_id, transcript_message)
     remember_recent_transcript(state, finalized_transcript)
     remember_stt_refine_feedback(state, transcription)
+    await enqueue_demo_bubble_update(meeting_id, finalized_transcript)
     asyncio.create_task(maybe_generate_flow_summary(meeting_id, finalized_transcript))
     asyncio.create_task(
         persist_transcript_with_retry(
@@ -1062,6 +1202,23 @@ async def transcribe_and_broadcast_winner(
             canvas_stage=canvas_stage,
             canvas_target_id=canvas_target_id,
             transcription=transcription,
+        )
+    )
+    asyncio.create_task(
+        refine_transcript_text_async(
+            meeting_id=meeting_id,
+            user_id=winner["user_id"],
+            transient_id=transient_id,
+            speaker=winner["speaker"],
+            raw_text=raw_transcribed_text,
+            audio_started_at=audio_started_at,
+            audio_ended_at=audio_ended_at,
+            chunk_index=chunk_index,
+            canvas_stage=canvas_stage,
+            canvas_target_id=canvas_target_id,
+            context_pack=context_pack,
+            meeting_goal=meeting_goal,
+            meeting_goal_context=meeting_goal_context,
         )
     )
 
@@ -1149,6 +1306,7 @@ async def flush_audio_bucket(meeting_id: str, bucket_id: int):
 async def queue_audio_for_fusion(meeting_id: str, candidate: dict[str, Any]):
     state = get_fusion_state(meeting_id)
     bucket_id = int(candidate["started_at_ms"] // FUSION_BUCKET_MS)
+    dropped_buckets: list[int] = []
 
     async with state["lock"]:
         candidate["device_profile"] = dict(state["device_profiles"].get(candidate["user_id"], {}))
@@ -1162,6 +1320,28 @@ async def queue_audio_for_fusion(meeting_id: str, candidate: dict[str, Any]):
         )
         if bucket_id not in state["tasks"]:
             state["tasks"][bucket_id] = asyncio.create_task(flush_audio_bucket(meeting_id, bucket_id))
+        workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+        if is_demo_balance_config((workspace or {}).get("demo_config") if isinstance(workspace, dict) else None):
+            active_bucket_ids = sorted(int(value) for value in state.get("tasks", {}).keys())
+            buckets_to_keep = set(active_bucket_ids[-3:])
+            for stale_bucket_id in active_bucket_ids:
+                if stale_bucket_id in buckets_to_keep:
+                    continue
+                state["buckets"].pop(stale_bucket_id, None)
+                task = state["tasks"].pop(stale_bucket_id, None)
+                if task and not task.done():
+                    task.cancel()
+                dropped_buckets.append(stale_bucket_id)
+
+    for stale_bucket_id in dropped_buckets:
+        await send_stt_debug(
+            meeting_id,
+            None,
+            "transcription_audio_buffered",
+            bucket_id=stale_bucket_id,
+            reason="demo_backlog_drop",
+            retained_recent_buckets=3,
+        )
 
 
 async def persist_canvas_workspace(meeting_id: str, workspace: dict[str, Any]):
@@ -1248,6 +1428,143 @@ async def broadcast_to_meeting(meeting_id: str, message: dict, exclude_user: str
     # 연결 끊긴 사용자 제거
     for conn_info in disconnected:
         active_connections[meeting_id].remove(conn_info)
+
+
+async def broadcast_demo_bubble_graph(meeting_id: str, graph: dict[str, Any], workspace: dict[str, Any]):
+    now = datetime.utcnow().isoformat()
+    latest_canvas_workspace_by_meeting[meeting_id] = {
+        **copy.deepcopy(workspace),
+        "meeting_id": meeting_id,
+        "stage": "ideation",
+        "ideation_bubble_graph": copy.deepcopy(graph),
+    }
+    sync_payload = {
+        "sync_id": f"ideation-bubble-graph-{int(datetime.utcnow().timestamp() * 1000)}",
+        "meeting_id": meeting_id,
+        "sync_scope": "ideation_bubble_graph",
+        "updated_by": "__server__",
+        "updated_at": now,
+        "stage": "ideation",
+        "ideation_bubble_graph": copy.deepcopy(graph),
+    }
+    await broadcast_to_meeting(meeting_id, {
+        "type": "canvas_sync",
+        "data": sync_payload,
+        "meeting_id": meeting_id,
+        "user_id": "__server__",
+        "timestamp": now,
+    })
+
+
+async def request_demo_bubble_graph_update(meeting_id: str, rows: list[dict[str, str]], state: Dict[str, Any]):
+    if not rows:
+        return
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+    if not isinstance(workspace, dict):
+        workspace = await fetch_canvas_workspace(meeting_id)
+        if isinstance(workspace, dict):
+            latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
+    if not isinstance(workspace, dict):
+        return
+
+    demo_config = normalize_demo_config(workspace.get("demo_config"))
+    if not is_demo_balance_config(demo_config):
+        return
+
+    context_cache = build_ideation_context_cache(state, exclude_id=str(rows[-1].get("id") or ""))
+    payload = {
+        "meeting_id": meeting_id,
+        "meeting_topic": str(workspace.get("meeting_goal") or "밸런스게임"),
+        "meeting_goal": str(workspace.get("meeting_goal") or ""),
+        "meeting_goal_context": str(workspace.get("meeting_goal_context") or ""),
+        "demo_config": demo_config,
+        "utterances": rows,
+        "context_cache": context_cache,
+        "max_keywords": DEMO_BUBBLE_MAX_KEYWORDS,
+    }
+
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(
+                f"{AI_BACKEND_URL}/api/canvas/ideation-bubble-graph/update",
+                json=payload,
+            )
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        if response.status_code >= 400:
+            print(
+                f"[Bubble][gateway] update failed status={response.status_code} "
+                f"elapsed_ms={elapsed_ms} body={response.text[:240]!r}",
+                flush=True,
+            )
+            return
+        result = response.json()
+        graph = result.get("bubble_graph") if isinstance(result, dict) else None
+        if not isinstance(graph, dict):
+            return
+        print(
+            "[Bubble][gateway] demo graph updated",
+            {
+                "meeting_id": meeting_id,
+                "rows": len(rows),
+                "used_llm": bool(result.get("used_llm")),
+                "warning": result.get("warning") or "",
+                "elapsed_ms": elapsed_ms,
+                "cycle": graph.get("update_cycle"),
+                "bubbles": len(graph.get("bubbles") or []),
+            },
+            flush=True,
+        )
+        if result.get("used_llm"):
+            next_workspace = copy.deepcopy(workspace)
+            next_workspace["ideation_bubble_graph"] = graph
+            next_workspace["demo_config"] = demo_config
+            await broadcast_demo_bubble_graph(meeting_id, graph, next_workspace)
+    except Exception as exc:
+        print(f"[Bubble][gateway] demo graph update exception meeting_id={meeting_id} error={exc}", flush=True)
+
+
+async def flush_demo_bubble_queue(meeting_id: str):
+    await asyncio.sleep(DEMO_BUBBLE_COALESCE_MS / 1000)
+    state = get_fusion_state(meeting_id)
+    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
+        rows = list(state.get("demo_bubble_queue") or [])
+        state["demo_bubble_queue"] = []
+        state["demo_bubble_task"] = None
+
+    if rows:
+        await request_demo_bubble_graph_update(meeting_id, rows[-4:], state)
+
+    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
+        if state.get("demo_bubble_queue") and state.get("demo_bubble_task") is None:
+            state["demo_bubble_task"] = asyncio.create_task(flush_demo_bubble_queue(meeting_id))
+
+
+async def enqueue_demo_bubble_update(meeting_id: str, transcript: dict[str, Any]):
+    if str(transcript.get("canvas_stage") or "ideation") != "ideation":
+        return
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+    if not isinstance(workspace, dict):
+        workspace = await fetch_canvas_workspace(meeting_id)
+        if isinstance(workspace, dict):
+            latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
+    if not is_demo_balance_config((workspace or {}).get("demo_config") if isinstance(workspace, dict) else None):
+        return
+    row = {
+        "id": str(transcript.get("id") or ""),
+        "speaker": str(transcript.get("speaker") or "참가자"),
+        "text": str(transcript.get("text") or "").strip(),
+        "timestamp": str(transcript.get("timestamp") or transcript.get("created_at") or datetime.utcnow().isoformat()),
+    }
+    if not row["id"] or not row["text"]:
+        return
+    state = get_fusion_state(meeting_id)
+    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
+        queue = [item for item in (state.get("demo_bubble_queue") or []) if item.get("id") != row["id"]]
+        queue.append(row)
+        state["demo_bubble_queue"] = queue[-12:]
+        if state.get("demo_bubble_task") is None:
+            state["demo_bubble_task"] = asyncio.create_task(flush_demo_bubble_queue(meeting_id))
 
 
 async def send_stt_debug(meeting_id: str, user_id: str | None, stage: str, **data):
@@ -1355,6 +1672,47 @@ async def save_transcript(
     }
 
 
+async def update_refined_transcript_text_with_retry(
+    *,
+    meeting_id: str,
+    user_id: str,
+    speaker: str,
+    timestamp: str,
+    refined_text: str,
+):
+    clean_text = str(refined_text or "").strip()
+    if not clean_text:
+        return
+    for attempt, delay in enumerate((0.0, 2.0, 6.0), start=1):
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            supabase = get_supabase()
+            response = (
+                supabase.table("transcripts")
+                .update({"text": clean_text})
+                .eq("meeting_id", meeting_id)
+                .eq("user_id", user_id)
+                .eq("speaker", speaker)
+                .eq("timestamp", timestamp)
+                .execute()
+            )
+            rows = response.data or []
+            if rows:
+                print(
+                    f"[STT][gateway] refined transcript persisted meeting_id={meeting_id} "
+                    f"user_id={user_id} attempt={attempt}",
+                    flush=True,
+                )
+                return
+        except Exception as exc:
+            print(
+                f"[STT][gateway] refined transcript update failed attempt={attempt} "
+                f"meeting_id={meeting_id} error={exc}",
+                flush=True,
+            )
+
+
 @router.websocket("/ws/{meeting_id}")
 async def websocket_endpoint(
     websocket: WebSocket, 
@@ -1417,6 +1775,8 @@ async def websocket_endpoint(
                 'imported_state': current_workspace.get('imported_state'),
                 'meeting_goal': current_workspace.get('meeting_goal') or '',
                 'meeting_goal_context': current_workspace.get('meeting_goal_context') or '',
+                'demo_config': current_workspace.get('demo_config') or {},
+                'demo_balance_classification': current_workspace.get('demo_balance_classification') or {},
             })
         except Exception as e:
             print(f"❌ Failed to send initial canvas sync to {user_id}: {e}")

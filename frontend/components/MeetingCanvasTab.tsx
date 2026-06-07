@@ -391,6 +391,7 @@ type MeetingCanvasTabProps = {
     stage: CanvasStage;
     targetId?: string;
     selectedNodeId?: string;
+    demoBalanceMode?: boolean;
   }) => void;
   recordingStatusText?: string;
 };
@@ -1456,9 +1457,11 @@ export default function MeetingCanvasTab({
             ? selectedAgendaId || agendaModels[0]?.id || ""
             : "",
       selectedNodeId,
+      demoBalanceMode,
     });
   }, [
     agendaModels,
+    demoBalanceMode,
     onCanvasStageContextChange,
     selectedAgendaId,
     selectedNodeId,

@@ -84,7 +84,18 @@ interface CanvasStageContext {
   stage: "ideation" | "problem-definition" | "solution";
   targetId?: string;
   selectedNodeId?: string;
+  demoBalanceMode?: boolean;
 }
+
+const NORMAL_STT_RECORDER_OPTIONS = {
+  intervalMs: 7000,
+  minSendDurationMs: 4000,
+};
+
+const DEMO_BALANCE_STT_RECORDER_OPTIONS = {
+  intervalMs: 1800,
+  minSendDurationMs: 900,
+};
 
 function createCalibrationAccumulator(): CalibrationAccumulator {
   return {
@@ -552,6 +563,70 @@ function HomeContent() {
       showLiveSpeechPreview(speaker, text, nextTimestamp);
     });
 
+    wsClient.on("transcript_refined", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      const transcriptPayload = isRecord(payload.transcript) ? payload.transcript : payload;
+      const transientId = readString(payload.transient_id);
+      const transcriptId = readString(transcriptPayload.id, transientId);
+      const speaker = readString(transcriptPayload.speaker, "알 수 없음");
+      const text = readString(transcriptPayload.text || payload.refined_text);
+      if (!text.trim()) return;
+      const nextTimestamp = readString(
+        transcriptPayload.timestamp || transcriptPayload.created_at,
+        new Date().toISOString(),
+      );
+      const canvasStage = readString(transcriptPayload.canvas_stage || payload.canvas_stage, "ideation");
+      const canvasTargetId = readString(transcriptPayload.canvas_target_id || payload.canvas_target_id);
+
+      console.info("[STT] 전사 보정 수신", {
+        transientId,
+        transcriptId,
+        speaker,
+        preview: text,
+        rawText: payload.raw_text,
+        refineUsedLlm: payload.refine_used_llm,
+        refineElapsedMs: payload.refine_elapsed_ms,
+      });
+
+      setTranscripts((prev) => {
+        let matched = false;
+        const nextRows = prev.map((row) => {
+          const sameId = Boolean(transcriptId && row.id === transcriptId);
+          const sameTransient = Boolean(transientId && row.id === transientId);
+          const sameTurn = Boolean(speaker && row.speaker === speaker && row.timestamp === nextTimestamp);
+          if (!sameId && !sameTransient && !sameTurn) return row;
+          matched = true;
+          const nextId = row.id && row.id !== transientId ? row.id : transcriptId || row.id;
+          return {
+            ...row,
+            id: nextId,
+            speaker,
+            text,
+            timestamp: nextTimestamp,
+            canvas_stage: canvasStage || row.canvas_stage,
+            canvas_target_id: canvasTargetId || row.canvas_target_id,
+            transcript_status: "final",
+          };
+        });
+        if (!matched) {
+          nextRows.push({
+            id: transcriptId || `${nextTimestamp}-${speaker}-${text}`,
+            speaker,
+            text,
+            timestamp: nextTimestamp,
+            canvas_stage: canvasStage,
+            canvas_target_id: canvasTargetId,
+            transcript_status: "final",
+            persisted: false,
+            persistence_status: "saving",
+          });
+        }
+        return dedupeTranscripts(nextRows);
+      });
+    });
+
     wsClient.on("transcript_persistence_updated", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload)) return;
@@ -588,11 +663,12 @@ function HomeContent() {
           const sameContent = Boolean(speaker && text && row.speaker === speaker && row.text === text && row.timestamp === nextTimestamp);
           if (!sameId && !sameTransient && !sameContent) return row;
           matched = true;
+          const nextText = row.text && text && row.text !== text ? row.text : text || row.text;
           return {
             ...row,
             id: transcriptId || row.id,
             speaker: speaker || row.speaker,
-            text: text || row.text,
+            text: nextText,
             timestamp: nextTimestamp || row.timestamp,
             canvas_stage: canvasStage || row.canvas_stage,
             canvas_target_id: canvasTargetId || row.canvas_target_id,
@@ -1070,6 +1146,9 @@ function HomeContent() {
     }
 
     clearIdeationBubbleFinalization();
+    const recorderOptions = canvasStageContextRef.current.demoBalanceMode
+      ? DEMO_BALANCE_STT_RECORDER_OPTIONS
+      : NORMAL_STT_RECORDER_OPTIONS;
     if (!audioRecorderRef.current) {
       const recorder = new AudioRecorder();
       const initialized = await recorder.initialize();
@@ -1077,17 +1156,19 @@ function HomeContent() {
         alert("마이크 접근 권한이 필요합니다.");
         return;
       }
-      recorder.setRecordingInterval(7000);
+      recorder.setRealtimeModeOptions(recorderOptions);
       recorder.setMeterCallback(accumulateCalibrationMetrics);
       audioRecorderRef.current = recorder;
     } else {
-      audioRecorderRef.current.setRecordingInterval(7000);
+      audioRecorderRef.current.setRealtimeModeOptions(recorderOptions);
       audioRecorderRef.current.setMeterCallback(accumulateCalibrationMetrics);
     }
 
     beginCalibration();
     console.info("[STT] 녹음 파이프라인 시작", {
-      intervalMs: 7000,
+      intervalMs: recorderOptions.intervalMs,
+      minSendDurationMs: recorderOptions.minSendDurationMs,
+      demoBalanceMode: canvasStageContextRef.current.demoBalanceMode || false,
       mode: "pcm-wav-chunk",
       wsConnected: wsClientRef.current?.isConnected() || false,
     });
