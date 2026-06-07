@@ -205,7 +205,10 @@ class GeminiClient:
             raise RuntimeError("Gemini 모델명이 설정되지 않았습니다.")
 
         timeout_sec = max(20, int(os.environ.get("GEMINI_TIMEOUT_SEC", "60")))
-        max_retries = max(1, int(os.environ.get("GEMINI_MAX_RETRIES", "4")))
+        if model_override:
+            max_retries = max(1, int(os.environ.get("GEMINI_FAST_MAX_RETRIES", "1")))
+        else:
+            max_retries = max(1, int(os.environ.get("GEMINI_MAX_RETRIES", "2")))
         retry_base = max(0.2, float(os.environ.get("GEMINI_RETRY_BASE_SEC", "1.0")))
         fallback_env_name = "GEMINI_FAST_FALLBACK_MODELS" if model_override else "GEMINI_FALLBACK_MODELS"
         fallback_default = "gemini-2.5-flash-lite,gemini-2.5-flash" if model_override else "gemini-2.5-flash,gemini-2.5-flash-lite"
@@ -214,7 +217,10 @@ class GeminiClient:
             for m in os.environ.get(fallback_env_name, fallback_default).split(",")
             if m.strip()
         ]
-        model_candidates = [primary_model] + [m for m in fallback_models if m != primary_model]
+        if model_override:
+            model_candidates = [primary_model]
+        else:
+            model_candidates = [primary_model] + [m for m in fallback_models if m != primary_model]
 
         last_error_msg = "알 수 없는 오류"
         last_status = 0
@@ -226,14 +232,7 @@ class GeminiClient:
                 "maxOutputTokens": max_tokens,
             }
             if response_mime_type:
-                if model_name.startswith("gemini-3"):
-                    generation_config["responseFormat"] = {
-                        "text": {
-                            "mimeType": response_mime_type,
-                        }
-                    }
-                else:
-                    generation_config["responseMimeType"] = response_mime_type
+                generation_config["responseMimeType"] = response_mime_type
             normalized_thinking = (thinking_level or "").strip().lower()
             if normalized_thinking and model_name.startswith("gemini-3"):
                 generation_config["thinkingConfig"] = {
@@ -336,10 +335,13 @@ class GeminiClient:
                 temperature=0.0,
                 max_tokens=64,
             )
-            parsed = _extract_json(raw)
-            ok = bool(parsed.get("ok", False))
-            msg = str(parsed.get("message", "pong"))
-            return {"ok": ok, "message": msg, "mode": "live", "response_preview": parsed}
+            parsed = _extract_json(raw) or _extract_json_loose(raw) or _extract_balanced_json(raw)
+            raw_message = str(raw or "").strip()
+            msg = str(parsed.get("message") or raw_message or "pong")
+            # This is only a connectivity/API-key preflight. Some Gemini models answer
+            # the tiny ping prompt with a JSON string such as "Here" instead of the
+            # requested object, but a successful _call already proves the API is usable.
+            return {"ok": True, "message": msg[:200], "mode": "live", "response_preview": parsed or raw_message[:500]}
         except Exception as exc:
             return {"ok": False, "message": str(exc), "mode": "live"}
 

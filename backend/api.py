@@ -2875,6 +2875,8 @@ class RuntimeStore:
     transcript: list[dict[str, str]] = field(default_factory=list)
     agenda_outcomes: list[dict[str, Any]] = field(default_factory=list)
     llm_enabled: bool = False
+    llm_connect_retry_after_monotonic: float = 0.0
+    llm_connect_retry_note: str = ""
     last_analyzed_count: int = 0
     agenda_seq: int = 0
     stt_chunk_seq: int = 0
@@ -2918,6 +2920,9 @@ class RuntimeStore:
         self.window_size = 12
         self.transcript = []
         self.agenda_outcomes = []
+        self.llm_enabled = False
+        self.llm_connect_retry_after_monotonic = 0.0
+        self.llm_connect_retry_note = ""
         self.last_analyzed_count = 0
         self.agenda_seq = 0
         self.stt_chunk_seq = 0
@@ -12315,17 +12320,37 @@ def _ensure_llm_ready(rt: RuntimeStore) -> tuple[Any, bool, str]:
 
     if not _safe_text(getattr(client, "api_key", "")):
         rt.llm_enabled = False
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 300
+        rt.llm_connect_retry_note = "LLM API 키가 없어 로컬 결과를 사용했습니다."
         return client, False, "LLM API 키가 없어 로컬 결과를 사용했습니다."
+
+    now_monotonic = time.monotonic()
+    retry_after = float(getattr(rt, "llm_connect_retry_after_monotonic", 0.0) or 0.0)
+    if not bool(client.connected) and retry_after > now_monotonic:
+        remaining = max(1, round(retry_after - now_monotonic))
+        note = _safe_text(
+            getattr(rt, "llm_connect_retry_note", ""),
+            "LLM 연결 재시도 대기 중입니다.",
+        )
+        return client, False, f"{note} ({remaining}초 후 재시도)"
 
     try:
         result = client.connect()
         rt.llm_enabled = bool(result.get("ok"))
         if rt.llm_enabled and client.connected:
+            rt.llm_connect_retry_after_monotonic = 0.0
+            rt.llm_connect_retry_note = ""
             return client, True, ""
-        return client, False, _safe_text(result.get("message"), "LLM 연결 실패로 로컬 결과를 사용했습니다.")
+        note = _safe_text(result.get("message"), "LLM 연결 실패로 로컬 결과를 사용했습니다.")
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 60
+        rt.llm_connect_retry_note = note
+        return client, False, note
     except Exception as exc:
         rt.llm_enabled = False
-        return client, False, f"LLM 자동 연결 실패: {exc}"
+        note = f"LLM 자동 연결 실패: {exc}"
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 60
+        rt.llm_connect_retry_note = note
+        return client, False, note
 
 
 def _fallback_stt_flow_summary(turns: list[SttFlowSummaryTurnInput], max_chars: int = 30) -> str:
@@ -12735,8 +12760,13 @@ def get_health():
 def post_llm_connect():
     with RT.lock:
         client = get_client()
+        RT.llm_connect_retry_after_monotonic = 0.0
+        RT.llm_connect_retry_note = ""
         result = client.connect()
         RT.llm_enabled = bool(result.get("ok"))
+        if not RT.llm_enabled:
+            RT.llm_connect_retry_after_monotonic = time.monotonic() + 60
+            RT.llm_connect_retry_note = _safe_text(result.get("message"), "LLM 연결 실패")
         queue_ok = False
         queue_err = ""
         queued_task_id = 0
@@ -15645,6 +15675,48 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
     normalized_meeting_id = _safe_text(payload.meeting_id)
     if not normalized_meeting_id:
         raise HTTPException(status_code=400, detail="meeting_id is required")
+    normalized_input_rows = _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
+    request_started = time.perf_counter()
+    print(
+        "[canvas ideation bubble graph request]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "input_rows": len(normalized_input_rows),
+            "demo": _is_demo_balance_config(payload.demo_config),
+            "max_keywords": payload.max_keywords,
+        },
+        flush=True,
+    )
+    llm_stage = "canvas_ideation_bubble_graph_update"
+    route_model, route_thinking_level = _llm_route_for_stage(llm_stage)
+    llm_route = {
+        "stage": llm_stage,
+        "model": route_model,
+        "thinking_level": route_thinking_level,
+    }
+
+    def _llm_error_payload(
+        *,
+        error_type: str,
+        error_preview: Any,
+        elapsed_ms: int | None = None,
+        client: Any = None,
+    ) -> dict[str, Any]:
+        diagnostics: dict[str, Any] = {}
+        if client is not None and hasattr(client, "status"):
+            try:
+                status_payload = client.status()
+                diagnostics = status_payload if isinstance(status_payload, dict) else {}
+            except Exception:
+                diagnostics = {}
+        return {
+            "stage": llm_stage,
+            "model": _safe_text(diagnostics.get("last_model") or route_model),
+            "http_status": _safe_nonnegative_int(diagnostics.get("last_http_status"), 0),
+            "error_type": _safe_text(error_type),
+            "error_preview": _safe_text(error_preview or diagnostics.get("last_error"))[:500],
+            "elapsed_ms": elapsed_ms,
+        }
 
     def _response(
         graph: dict[str, Any],
@@ -15652,20 +15724,36 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         warning: str,
         signature: str,
         workspace: dict[str, Any] | None = None,
+        reason: str = "",
+        llm_error: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         workspace_payload["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(graph)
         return {
             "ok": bool(used_llm),
             "used_llm": used_llm,
+            "reason": _safe_text(reason),
             "warning": warning,
+            "llm_route": llm_route,
+            "llm_error": llm_error or {},
             "generated_at": _now_ts(),
             "source_signature": signature,
             "bubble_graph": _normalize_canvas_ideation_bubble_graph(graph),
             "workspace": _canvas_workspace_response(workspace_payload),
         }
 
+    lock_wait_started = time.perf_counter()
     with RT.canvas_llm_request_lock:
+        lock_wait_ms = round((time.perf_counter() - lock_wait_started) * 1000)
+        if lock_wait_ms > 100:
+            print(
+                "[canvas ideation bubble graph lock acquired]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "lock_wait_ms": lock_wait_ms,
+                },
+                flush=True,
+            )
         workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
         processed_ids = {
@@ -15675,7 +15763,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         }
         rows = [
             row
-            for row in _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
+            for row in normalized_input_rows
             if _safe_text(row.get("id")) and _safe_text(row.get("id")) not in processed_ids
         ]
         existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
@@ -15716,6 +15804,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "새로 처리할 아이디어 단계 발화가 없습니다.",
                 signature,
                 workspace,
+                reason="no_rows",
             )
 
         client, llm_ready, llm_note = _ensure_llm_ready(RT)
@@ -15726,6 +15815,13 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 llm_note or "LLM 미연결 상태라 서버 버블 그래프를 갱신하지 않았습니다.",
                 signature,
                 workspace,
+                reason="llm_not_ready",
+                llm_error=_llm_error_payload(
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM 미연결 상태",
+                    elapsed_ms=round((time.perf_counter() - request_started) * 1000),
+                    client=client,
+                ),
             )
 
         warning = ""
@@ -15735,17 +15831,36 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 RT,
                 client,
                 prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows),
-                stage="canvas_ideation_bubble_graph_update",
+                stage=llm_stage,
                 temperature=0.08,
                 max_tokens=1400,
             )
         except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - request_started) * 1000)
+            llm_error = _llm_error_payload(
+                error_type=type(exc).__name__,
+                error_preview=repr(exc),
+                elapsed_ms=elapsed_ms,
+                client=client,
+            )
+            print(
+                "[canvas ideation bubble graph llm exception]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "elapsed_ms": elapsed_ms,
+                    "llm_route": llm_route,
+                    "llm_error": llm_error,
+                },
+                flush=True,
+            )
             return _response(
                 graph,
                 False,
                 f"아이디어 버블 그래프 LLM 갱신 실패: {exc}",
                 signature,
                 workspace,
+                reason="llm_exception",
+                llm_error=llm_error,
             )
 
         normalized_keywords = _normalize_ideation_keyword_items(
@@ -15760,10 +15875,68 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             normalized_keywords,
         )
         is_demo_balance = _is_demo_balance_config(demo_config)
+        if not is_demo_balance:
+            existing_text_keys = {
+                _ideation_bubble_text_key(item.get("text"))
+                for item in existing_keyword_rows
+                if _safe_text(item.get("text"))
+            }
+            supported_keywords: list[dict[str, Any]] = []
+            skipped_single_support_count = 0
+            for keyword in normalized_keywords:
+                text_key = _ideation_bubble_text_key(keyword.get("text"))
+                support_count = max(
+                    _safe_nonnegative_int(keyword.get("support_count"), 0),
+                    _safe_nonnegative_int(keyword.get("count"), 1),
+                )
+                if text_key in existing_text_keys or support_count >= 2:
+                    supported_keywords.append(keyword)
+                else:
+                    skipped_single_support_count += 1
+            if skipped_single_support_count:
+                warning = f"1회성 언급 {skipped_single_support_count}개는 버블 생성 조건에 미달해 보류했습니다."
+            normalized_keywords = supported_keywords
         if not normalized_keywords and not merge_keywords and not remove_keywords:
-            warning = "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
+            warning = warning or "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
             if is_demo_balance:
-                return _response(graph, True, warning, signature, workspace)
+                next_graph = _apply_ideation_bubble_graph_update(
+                    graph,
+                    rows,
+                    [],
+                    [],
+                    [],
+                    allow_single_support=True,
+                    decay_profile="demo_balance",
+                )
+                saved_at = _now_ts()
+                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+                next_workspace["ideation_bubble_graph"] = next_graph
+                next_workspace["demo_config"] = demo_config
+                with RT.lock:
+                    RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+                _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+                RT.last_llm_parsed_json = {
+                    "stage": llm_stage,
+                    "source_signature": signature,
+                    "merge_keywords": [],
+                    "remove_keywords": [],
+                    "keywords": [],
+                    "bubble_graph": copy.deepcopy(next_graph),
+                    "reason": "no_keywords",
+                }
+                RT.last_llm_parsed_at = _now_ts()
+                print(
+                    "[canvas ideation bubble graph no keywords processed]",
+                    {
+                        "meeting_id": normalized_meeting_id,
+                        "rows": len(rows),
+                        "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                        "cycle": next_graph.get("update_cycle"),
+                    },
+                    flush=True,
+                )
+                return _response(next_graph, True, warning, signature, next_workspace, reason="no_keywords")
+            return _response(graph, True, warning, signature, workspace, reason="no_keywords")
 
         next_graph = _apply_ideation_bubble_graph_update(
             graph,
@@ -15800,6 +15973,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "keywords": len(normalized_keywords),
                 "merges": len(merge_keywords),
                 "removes": len(remove_keywords),
+                "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
                 "cycle": next_graph.get("update_cycle"),
                 "visible_bubbles": len(
                     [
@@ -15810,7 +15984,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 ),
             },
         )
-        return _response(next_graph, True, warning, signature, next_workspace)
+        return _response(next_graph, True, warning, signature, next_workspace, reason="updated")
 
 
 @app.get("/api/canvas/personal-notes")
@@ -16428,6 +16602,7 @@ async def post_transcribe_chunk(
     meeting_goal: str = Form(default=""),
     meeting_goal_context: str = Form(default=""),
     context_pack: str = Form(default=""),
+    defer_refine: str = Form(default="false"),
 ):
     """
     Gateway에서 호출하는 전사 엔드포인트
@@ -16440,35 +16615,69 @@ async def post_transcribe_chunk(
             return {"text": "", "language": "ko", "error": "empty audio"}
         
         suffix = Path(audio_file.filename or "chunk.webm").suffix or ".webm"
+        parsed_context_pack = _parse_stt_context_pack(context_pack)
+        should_defer_refine = _boolify(defer_refine, False)
         print(
             f"[STT] transcribe chunk start model={WHISPER_MODEL_NAME} "
             f"bytes={len(blob)} suffix={suffix} "
-            f"raw_first=true refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
+            f"raw_first={should_defer_refine} refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
         )
         raw_text = _transcribe_with_whisper(blob, suffix=suffix)
-        parsed_context_pack = _parse_stt_context_pack(context_pack)
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         context_pack_summary = _summarize_stt_context_pack(parsed_context_pack)
+
+        if should_defer_refine:
+            print(
+                f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
+                f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
+                f"raw_chars={len(_safe_text(raw_text))} refine_deferred=true "
+                f"context_pack={context_pack_summary}"
+            )
+            return {
+                "text": _safe_text(raw_text),
+                "raw_text": _safe_text(raw_text),
+                "refined_text": "",
+                "refine_used_llm": False,
+                "refine_deferred": True,
+                "refine_warning": "LLM 보정은 비동기 처리됩니다.",
+                "confidence": None,
+                "corrections": [],
+                "uncertain_terms": [],
+                "context_terms": [],
+                "context_pack_summary": context_pack_summary,
+                "language": "ko",
+                "elapsed_ms": elapsed_ms,
+                "model": WHISPER_MODEL_NAME,
+            }
+
+        refined_text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
+            raw_text,
+            meeting_goal=meeting_goal,
+            meeting_goal_context=meeting_goal_context,
+            context_pack=parsed_context_pack,
+        )
+        total_elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         print(
             f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
-            f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
-            f"raw_chars={len(_safe_text(raw_text))} refine_deferred=true "
-            f"context_pack={context_pack_summary}"
+            f"bytes={len(blob)} suffix={suffix} elapsed_ms={total_elapsed_ms} "
+            f"raw_chars={len(_safe_text(raw_text))} refined_chars={len(_safe_text(refined_text))} "
+            f"refine_deferred=false refine_used_llm={refine_used_llm} context_pack={context_pack_summary}"
         )
         
         return {
-            "text": _safe_text(raw_text),
+            "text": _safe_text(refined_text) or _safe_text(raw_text),
             "raw_text": _safe_text(raw_text),
-            "refined_text": "",
-            "refine_used_llm": False,
-            "refine_warning": "LLM 보정은 비동기 처리됩니다.",
-            "confidence": None,
-            "corrections": [],
-            "uncertain_terms": [],
-            "context_terms": [],
-            "context_pack_summary": context_pack_summary,
+            "refined_text": _safe_text(refined_text),
+            "refine_used_llm": refine_used_llm,
+            "refine_deferred": False,
+            "refine_warning": refine_warning,
+            "confidence": refine_meta.get("confidence"),
+            "corrections": refine_meta.get("corrections") or [],
+            "uncertain_terms": refine_meta.get("uncertain_terms") or [],
+            "context_terms": refine_meta.get("context_terms") or [],
+            "context_pack_summary": refine_meta.get("context_pack_summary") or context_pack_summary,
             "language": "ko",
-            "elapsed_ms": elapsed_ms,
+            "elapsed_ms": total_elapsed_ms,
             "model": WHISPER_MODEL_NAME,
         }
     except Exception as exc:

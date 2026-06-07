@@ -66,6 +66,9 @@ TRANSCRIPT_EVENT_PERSISTENCE_UPDATED = "transcript_persistence_updated"
 TRANSCRIPT_SELECT_FIELDS_WITH_STAGE = "id, meeting_id, user_id, speaker, text, timestamp, created_at, canvas_stage, canvas_target_id"
 TRANSCRIPT_SELECT_FIELDS_BASE = "id, meeting_id, user_id, speaker, text, timestamp, created_at"
 fusion_states: Dict[str, Dict[str, Any]] = {}
+IDEATION_BUBBLE_COALESCE_MS = 4500
+IDEATION_BUBBLE_MAX_KEYWORDS = 3
+IDEATION_BUBBLE_FAILURE_BACKOFF_MS = 30000
 DEMO_BUBBLE_COALESCE_MS = 750
 DEMO_BUBBLE_MAX_KEYWORDS = 6
 
@@ -108,22 +111,30 @@ def normalize_audio_meta(raw_meta: Any) -> dict[str, Any]:
 
 def normalize_demo_config(raw: Any) -> dict[str, Any]:
     source = raw if isinstance(raw, dict) else {}
+    mode = str(source.get("mode") or "normal").strip().lower()
+    option_a = str(source.get("option_a") or source.get("optionA") or "").strip()
+    option_b = str(source.get("option_b") or source.get("optionB") or "").strip()
+    enabled = bool(source.get("enabled") or mode == "demo_balance") and bool(option_a and option_b)
+    if not enabled:
+        return {
+            "enabled": False,
+            "mode": "normal",
+            "option_a": "",
+            "option_b": "",
+            "instruction": "",
+        }
     return {
-        "enabled": bool(source.get("enabled")),
-        "mode": str(source.get("mode") or "normal"),
-        "option_a": str(source.get("option_a") or source.get("optionA") or "").strip(),
-        "option_b": str(source.get("option_b") or source.get("optionB") or "").strip(),
-        "instruction": str(source.get("instruction") or "").strip(),
+        "enabled": True,
+        "mode": "demo_balance",
+        "option_a": option_a,
+        "option_b": option_b,
+        "instruction": str(source.get("instruction") or "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요.").strip(),
     }
 
 
 def is_demo_balance_config(raw: Any) -> bool:
     config = normalize_demo_config(raw)
-    return (
-        (config.get("enabled") or config.get("mode") == "demo_balance")
-        and bool(config.get("option_a"))
-        and bool(config.get("option_b"))
-    )
+    return bool(config.get("enabled")) and config.get("mode") == "demo_balance"
 
 
 def build_ideation_context_cache(state: Dict[str, Any], *, exclude_id: str = "", limit: int = 80) -> str:
@@ -153,9 +164,10 @@ def get_fusion_state(meeting_id: str) -> Dict[str, Any]:
             "flow_summaries": [],
             "flow_summary_seq": 0,
             "recent_transcripts": [],
-            "demo_bubble_lock": asyncio.Lock(),
-            "demo_bubble_queue": [],
-            "demo_bubble_task": None,
+            "ideation_bubble_lock": asyncio.Lock(),
+            "ideation_bubble_queue": [],
+            "ideation_bubble_retry_rows": [],
+            "ideation_bubble_task": None,
             "last_winner_user_id": None,
             "last_winner_bucket": None,
             "device_profiles": {},
@@ -497,15 +509,23 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
     audio_bytes = candidate.get("audio_bytes") or b""
     audio_mime = str(candidate.get("audio_mime") or candidate.get("audio_meta", {}).get("mime_type") or "audio/wav")
     audio_filename = str(candidate.get("audio_filename") or ("chunk.wav" if audio_mime.lower().startswith("audio/wav") else "chunk.webm"))
-    workspace = latest_canvas_workspace_by_meeting.get(str(candidate.get("meeting_id") or "")) or {}
+    meeting_id = str(candidate.get("meeting_id") or "")
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+    if not isinstance(workspace, dict):
+        loaded_workspace = await fetch_canvas_workspace(meeting_id) if meeting_id else None
+        workspace = loaded_workspace if isinstance(loaded_workspace, dict) else {}
+        if meeting_id and isinstance(workspace, dict):
+            latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
     meeting_goal = str(candidate.get("meeting_goal") or workspace.get("meeting_goal") or "").strip()
     meeting_goal_context = str(candidate.get("meeting_goal_context") or workspace.get("meeting_goal_context") or "").strip()
+    defer_refine = is_demo_balance_config(workspace.get("demo_config") if isinstance(workspace, dict) else None)
     context_pack = candidate.get("context_pack") if isinstance(candidate.get("context_pack"), dict) else {}
     started_at = time.perf_counter()
     print(
         "[STT][gateway] backend transcription request start "
         f"url={AI_BACKEND_URL}/api/transcribe-chunk bytes={len(audio_bytes)} "
         f"mime={audio_mime} filename={audio_filename} "
+        f"defer_refine={defer_refine} "
         f"meeting_goal={bool(meeting_goal)} meeting_goal_context={bool(meeting_goal_context)} "
         f"context_pack_keys={list(context_pack.keys())}",
         flush=True,
@@ -519,6 +539,7 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
                     'meeting_goal': meeting_goal,
                     'meeting_goal_context': meeting_goal_context,
                     'context_pack': json.dumps(context_pack, ensure_ascii=False),
+                    'defer_refine': "true" if defer_refine else "false",
                 },
             )
     except Exception as exc:
@@ -559,6 +580,7 @@ async def transcribe_selected_chunk(candidate: dict[str, Any]) -> dict[str, Any]
         "raw_text": result.get("raw_text") or text,
         "refined_text": result.get("refined_text") or text,
         "refine_used_llm": bool(result.get("refine_used_llm")),
+        "refine_deferred": bool(result.get("refine_deferred")),
         "refine_warning": result.get("refine_warning") or "",
         "refine_confidence": result.get("confidence"),
         "corrections": result.get("corrections") or [],
@@ -588,6 +610,7 @@ async def refine_transcript_text_async(
     context_pack: dict[str, Any],
     meeting_goal: str,
     meeting_goal_context: str,
+    enqueue_bubble: bool = True,
 ):
     clean_raw = str(raw_text or "").strip()
     if not clean_raw:
@@ -658,7 +681,18 @@ async def refine_transcript_text_async(
     }
     await broadcast_to_meeting(meeting_id, message)
     remember_recent_transcript(get_fusion_state(meeting_id), transcript)
-    await enqueue_demo_bubble_update(meeting_id, {**transcript, "id": f"{transient_id}:refined"})
+    if enqueue_bubble:
+        await enqueue_ideation_bubble_update(meeting_id, {**transcript, "id": f"{transient_id}:refined"})
+    else:
+        print(
+            "[Bubble][gateway] refined transcript bubble enqueue skipped",
+            {
+                "meeting_id": meeting_id,
+                "reason": "demo_balance_raw_only",
+                "transient_id": transient_id,
+            },
+            flush=True,
+        )
     asyncio.create_task(update_refined_transcript_text_with_retry(
         meeting_id=meeting_id,
         user_id=user_id,
@@ -703,6 +737,9 @@ async def request_flow_summary(turns: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def maybe_generate_flow_summary(meeting_id: str, transcript: dict[str, Any]):
+    workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+    if isinstance(workspace, dict) and is_demo_balance_config(workspace.get("demo_config")):
+        return
     state = get_fusion_state(meeting_id)
     canvas_stage = str(transcript.get("canvas_stage") or "ideation")
     row = {
@@ -1186,8 +1223,13 @@ async def transcribe_and_broadcast_winner(
     await broadcast_to_meeting(meeting_id, transcript_message)
     remember_recent_transcript(state, finalized_transcript)
     remember_stt_refine_feedback(state, transcription)
-    await enqueue_demo_bubble_update(meeting_id, finalized_transcript)
-    asyncio.create_task(maybe_generate_flow_summary(meeting_id, finalized_transcript))
+    await enqueue_ideation_bubble_update(meeting_id, finalized_transcript)
+    latest_workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+    demo_balance_mode = is_demo_balance_config(
+        latest_workspace.get("demo_config") if isinstance(latest_workspace, dict) else None
+    )
+    if not demo_balance_mode:
+        asyncio.create_task(maybe_generate_flow_summary(meeting_id, finalized_transcript))
     asyncio.create_task(
         persist_transcript_with_retry(
             meeting_id=meeting_id,
@@ -1204,23 +1246,25 @@ async def transcribe_and_broadcast_winner(
             transcription=transcription,
         )
     )
-    asyncio.create_task(
-        refine_transcript_text_async(
-            meeting_id=meeting_id,
-            user_id=winner["user_id"],
-            transient_id=transient_id,
-            speaker=winner["speaker"],
-            raw_text=raw_transcribed_text,
-            audio_started_at=audio_started_at,
-            audio_ended_at=audio_ended_at,
-            chunk_index=chunk_index,
-            canvas_stage=canvas_stage,
-            canvas_target_id=canvas_target_id,
-            context_pack=context_pack,
-            meeting_goal=meeting_goal,
-            meeting_goal_context=meeting_goal_context,
+    if transcription.get("refine_deferred"):
+        asyncio.create_task(
+            refine_transcript_text_async(
+                meeting_id=meeting_id,
+                user_id=winner["user_id"],
+                transient_id=transient_id,
+                speaker=winner["speaker"],
+                raw_text=raw_transcribed_text,
+                audio_started_at=audio_started_at,
+                audio_ended_at=audio_ended_at,
+                chunk_index=chunk_index,
+                canvas_stage=canvas_stage,
+                canvas_target_id=canvas_target_id,
+                context_pack=context_pack,
+                meeting_goal=meeting_goal,
+                meeting_goal_context=meeting_goal_context,
+                enqueue_bubble=not demo_balance_mode,
+            )
         )
-    )
 
     async with state["lock"]:
         state["last_winner_user_id"] = winner["user_id"]
@@ -1430,7 +1474,21 @@ async def broadcast_to_meeting(meeting_id: str, message: dict, exclude_user: str
         active_connections[meeting_id].remove(conn_info)
 
 
-async def broadcast_demo_bubble_graph(meeting_id: str, graph: dict[str, Any], workspace: dict[str, Any]):
+def _ideation_bubble_graph_cycle(raw: Any) -> int:
+    if not isinstance(raw, dict):
+        return 0
+    try:
+        return max(0, int(float(raw.get("update_cycle") or raw.get("updateCycle") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ideation_bubble_coalesce_ms(workspace: dict[str, Any] | None) -> int:
+    demo_config = workspace.get("demo_config") if isinstance(workspace, dict) else None
+    return DEMO_BUBBLE_COALESCE_MS if is_demo_balance_config(demo_config) else IDEATION_BUBBLE_COALESCE_MS
+
+
+async def broadcast_ideation_bubble_graph(meeting_id: str, graph: dict[str, Any], workspace: dict[str, Any]):
     now = datetime.utcnow().isoformat()
     latest_canvas_workspace_by_meeting[meeting_id] = {
         **copy.deepcopy(workspace),
@@ -1456,100 +1514,340 @@ async def broadcast_demo_bubble_graph(meeting_id: str, graph: dict[str, Any], wo
     })
 
 
-async def request_demo_bubble_graph_update(meeting_id: str, rows: list[dict[str, str]], state: Dict[str, Any]):
+async def send_bubble_graph_debug(meeting_id: str, stage: str, **data):
+    await broadcast_to_meeting(meeting_id, {
+        "type": "bubble_graph_debug",
+        "meeting_id": meeting_id,
+        "stage": stage,
+        "timestamp": datetime.utcnow().isoformat(),
+        **data,
+    })
+
+
+async def request_ideation_bubble_graph_update(meeting_id: str, rows: list[dict[str, str]], state: Dict[str, Any]) -> str:
     if not rows:
-        return
+        return "no_change"
+    paused_until = float(state.get("ideation_bubble_paused_until") or 0.0)
+    if paused_until > time.monotonic():
+        remaining_ms = round((paused_until - time.monotonic()) * 1000)
+        await send_bubble_graph_debug(
+            meeting_id,
+            "paused",
+            reason="failure_backoff",
+            remaining_ms=remaining_ms,
+        )
+        return "paused"
     workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
     if not isinstance(workspace, dict):
         workspace = await fetch_canvas_workspace(meeting_id)
         if isinstance(workspace, dict):
             latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
     if not isinstance(workspace, dict):
-        return
+        print(f"[Bubble][gateway] ideation graph skipped reason=no_workspace meeting_id={meeting_id}", flush=True)
+        await send_bubble_graph_debug(meeting_id, "skipped", reason="no_workspace")
+        return "failed"
 
     demo_config = normalize_demo_config(workspace.get("demo_config"))
-    if not is_demo_balance_config(demo_config):
-        return
+    demo_balance_mode = is_demo_balance_config(demo_config)
+    request_rows = rows[-4:] if demo_balance_mode else rows[-8:]
+    current_cycle = _ideation_bubble_graph_cycle(workspace.get("ideation_bubble_graph"))
 
-    context_cache = build_ideation_context_cache(state, exclude_id=str(rows[-1].get("id") or ""))
+    context_cache = build_ideation_context_cache(state, exclude_id=str(request_rows[-1].get("id") or ""))
     payload = {
         "meeting_id": meeting_id,
-        "meeting_topic": str(workspace.get("meeting_goal") or "밸런스게임"),
+        "meeting_topic": str(workspace.get("meeting_goal") or ("밸런스게임" if demo_balance_mode else "회의 주제")),
         "meeting_goal": str(workspace.get("meeting_goal") or ""),
         "meeting_goal_context": str(workspace.get("meeting_goal_context") or ""),
         "demo_config": demo_config,
-        "utterances": rows,
+        "utterances": request_rows,
         "context_cache": context_cache,
-        "max_keywords": DEMO_BUBBLE_MAX_KEYWORDS,
+        "max_keywords": DEMO_BUBBLE_MAX_KEYWORDS if demo_balance_mode else IDEATION_BUBBLE_MAX_KEYWORDS,
     }
 
     started = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        print(
+            "[Bubble][gateway] ideation graph request started",
+            {
+                "meeting_id": meeting_id,
+                "mode": "demo_balance" if demo_balance_mode else "normal",
+                "rows": len(request_rows),
+                "current_cycle": current_cycle,
+            },
+            flush=True,
+        )
+        await send_bubble_graph_debug(
+            meeting_id,
+            "request_started",
+            mode="demo_balance" if demo_balance_mode else "normal",
+            rows=len(request_rows),
+            current_cycle=current_cycle,
+        )
+        timeout = httpx.Timeout(connect=5.0, read=90.0, write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{AI_BACKEND_URL}/api/canvas/ideation-bubble-graph/update",
                 json=payload,
             )
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code >= 400:
+            error_payload: dict[str, Any] = {}
+            try:
+                parsed_error = response.json()
+                if isinstance(parsed_error, dict):
+                    error_payload = parsed_error
+            except Exception:
+                error_payload = {}
             print(
-                f"[Bubble][gateway] update failed status={response.status_code} "
+                f"[Bubble][gateway] ideation graph update failed status={response.status_code} "
                 f"elapsed_ms={elapsed_ms} body={response.text[:240]!r}",
                 flush=True,
             )
-            return
+            await send_bubble_graph_debug(
+                meeting_id,
+                "request_failed",
+                status_code=response.status_code,
+                elapsed_ms=elapsed_ms,
+                body=response.text[:240],
+                llm_route=error_payload.get("llm_route") if isinstance(error_payload, dict) else None,
+                llm_error=error_payload.get("llm_error") if isinstance(error_payload, dict) else None,
+            )
+            if demo_balance_mode:
+                state["ideation_bubble_paused_until"] = time.monotonic() + (IDEATION_BUBBLE_FAILURE_BACKOFF_MS / 1000)
+                await send_bubble_graph_debug(
+                    meeting_id,
+                    "paused",
+                    reason="http_error",
+                    status_code=response.status_code,
+                    duration_ms=IDEATION_BUBBLE_FAILURE_BACKOFF_MS,
+                )
+                return "paused"
+            return "failed"
         result = response.json()
         graph = result.get("bubble_graph") if isinstance(result, dict) else None
         if not isinstance(graph, dict):
-            return
+            print(
+                f"[Bubble][gateway] ideation graph skipped reason=missing_graph "
+                f"meeting_id={meeting_id} elapsed_ms={elapsed_ms}",
+                flush=True,
+            )
+            await send_bubble_graph_debug(
+                meeting_id,
+                "request_failed",
+                reason="missing_graph",
+                elapsed_ms=elapsed_ms,
+            )
+            return "failed"
+        next_cycle = _ideation_bubble_graph_cycle(graph)
         print(
-            "[Bubble][gateway] demo graph updated",
+            "[Bubble][gateway] ideation graph response",
             {
                 "meeting_id": meeting_id,
-                "rows": len(rows),
+                "mode": "demo_balance" if demo_balance_mode else "normal",
+                "rows": len(request_rows),
                 "used_llm": bool(result.get("used_llm")),
+                "reason": result.get("reason") or "",
                 "warning": result.get("warning") or "",
                 "elapsed_ms": elapsed_ms,
-                "cycle": graph.get("update_cycle"),
+                "cycle": next_cycle,
+                "current_cycle": current_cycle,
                 "bubbles": len(graph.get("bubbles") or []),
+                "llm_route": result.get("llm_route") or {},
+                "llm_error": result.get("llm_error") or {},
             },
             flush=True,
         )
-        if result.get("used_llm"):
+        await send_bubble_graph_debug(
+            meeting_id,
+            "response",
+            mode="demo_balance" if demo_balance_mode else "normal",
+            rows=len(request_rows),
+            used_llm=bool(result.get("used_llm")),
+            result_reason=result.get("reason") or "",
+            warning=result.get("warning") or "",
+            elapsed_ms=elapsed_ms,
+            cycle=next_cycle,
+            current_cycle=current_cycle,
+            bubbles=len(graph.get("bubbles") or []),
+            llm_route=result.get("llm_route") or {},
+            llm_error=result.get("llm_error") or {},
+        )
+        if result.get("used_llm") and next_cycle > current_cycle:
             next_workspace = copy.deepcopy(workspace)
             next_workspace["ideation_bubble_graph"] = graph
-            next_workspace["demo_config"] = demo_config
-            await broadcast_demo_bubble_graph(meeting_id, graph, next_workspace)
+            if demo_balance_mode:
+                next_workspace["demo_config"] = demo_config
+            await broadcast_ideation_bubble_graph(meeting_id, graph, next_workspace)
+            await send_bubble_graph_debug(
+                meeting_id,
+                "broadcast",
+                cycle=next_cycle,
+                bubbles=len(graph.get("bubbles") or []),
+            )
+            return "updated"
+        elif result.get("used_llm"):
+            print(
+                f"[Bubble][gateway] ideation graph no broadcast reason=no_graph_change "
+                f"meeting_id={meeting_id} mode={'demo_balance' if demo_balance_mode else 'normal'} "
+                f"warning={str(result.get('warning') or '')[:120]!r}",
+                flush=True,
+            )
+            await send_bubble_graph_debug(
+                meeting_id,
+                "no_broadcast",
+                reason="no_graph_change",
+                warning=str(result.get("warning") or "")[:240],
+                cycle=next_cycle,
+                current_cycle=current_cycle,
+            )
+            return "no_change"
+        else:
+            result_reason = str(result.get("reason") or "llm_not_used")
+            print(
+                f"[Bubble][gateway] ideation graph no broadcast reason={result_reason} "
+                f"meeting_id={meeting_id} warning={str(result.get('warning') or '')[:120]!r}",
+                flush=True,
+            )
+            await send_bubble_graph_debug(
+                meeting_id,
+                "request_failed",
+                reason=result_reason,
+                warning=str(result.get("warning") or "")[:240],
+                elapsed_ms=elapsed_ms,
+                llm_route=result.get("llm_route") or {},
+                llm_error=result.get("llm_error") or {},
+            )
+            if result_reason in {"llm_not_ready", "llm_exception"}:
+                state["ideation_bubble_paused_until"] = time.monotonic() + (IDEATION_BUBBLE_FAILURE_BACKOFF_MS / 1000)
+                await send_bubble_graph_debug(
+                    meeting_id,
+                    "paused",
+                    reason=result_reason,
+                    duration_ms=IDEATION_BUBBLE_FAILURE_BACKOFF_MS,
+                )
+                return "paused"
+            return "no_change" if result_reason == "no_rows" else "failed"
     except Exception as exc:
-        print(f"[Bubble][gateway] demo graph update exception meeting_id={meeting_id} error={exc}", flush=True)
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        error_type = type(exc).__name__
+        error_repr = repr(exc)
+        print(
+            f"[Bubble][gateway] ideation graph update exception meeting_id={meeting_id} "
+            f"elapsed_ms={elapsed_ms} error_type={error_type} error={error_repr}",
+            flush=True,
+        )
+        await send_bubble_graph_debug(
+            meeting_id,
+            "request_exception",
+            elapsed_ms=elapsed_ms,
+            error_type=error_type,
+            error=error_repr,
+        )
+        state["ideation_bubble_paused_until"] = time.monotonic() + (IDEATION_BUBBLE_FAILURE_BACKOFF_MS / 1000)
+        await send_bubble_graph_debug(
+            meeting_id,
+            "paused",
+            reason="request_exception",
+            duration_ms=IDEATION_BUBBLE_FAILURE_BACKOFF_MS,
+        )
+        return "paused"
 
 
-async def flush_demo_bubble_queue(meeting_id: str):
-    await asyncio.sleep(DEMO_BUBBLE_COALESCE_MS / 1000)
+async def flush_ideation_bubble_queue(meeting_id: str, delay_ms: int):
+    await asyncio.sleep(max(0, delay_ms) / 1000)
     state = get_fusion_state(meeting_id)
-    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
-        rows = list(state.get("demo_bubble_queue") or [])
-        state["demo_bubble_queue"] = []
-        state["demo_bubble_task"] = None
+    async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+        retry_rows = list(state.get("ideation_bubble_retry_rows") or [])
+        queued_rows = list(state.get("ideation_bubble_queue") or [])
+        state["ideation_bubble_queue"] = []
+        state["ideation_bubble_retry_rows"] = []
+    rows_by_id: dict[str, dict[str, str]] = {}
+    for row in [*retry_rows, *queued_rows]:
+        row_id = str(row.get("id") or "")
+        if row_id:
+            rows_by_id[row_id] = row
+    rows = list(rows_by_id.values())
 
+    result = "no_change"
+    next_retry_delay_ms: int | None = None
     if rows:
-        await request_demo_bubble_graph_update(meeting_id, rows[-4:], state)
+        result = await request_ideation_bubble_graph_update(meeting_id, rows, state)
+        if result == "failed":
+            workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+            demo_balance_mode = is_demo_balance_config(workspace.get("demo_config") if isinstance(workspace, dict) else None)
+            async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+                state["ideation_bubble_retry_rows"] = rows[-12:] if demo_balance_mode else rows[-24:]
+            print(
+                "[Bubble][gateway] ideation graph retained retry rows",
+                {
+                    "meeting_id": meeting_id,
+                    "result": result,
+                    "retry_count": len(rows[-12:] if demo_balance_mode else rows[-24:]),
+                },
+                flush=True,
+            )
+        elif result == "paused":
+            workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+            demo_balance_mode = is_demo_balance_config(workspace.get("demo_config") if isinstance(workspace, dict) else None)
+            if demo_balance_mode:
+                async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+                    state["ideation_bubble_retry_rows"] = rows[-12:]
+                    pause_retry_count = int(state.get("ideation_bubble_pause_retry_count") or 0)
+                    if pause_retry_count < 1:
+                        state["ideation_bubble_pause_retry_count"] = pause_retry_count + 1
+                        next_retry_delay_ms = IDEATION_BUBBLE_FAILURE_BACKOFF_MS + 250
+                    else:
+                        state["ideation_bubble_pause_retry_count"] = 0
+            print(
+                "[Bubble][gateway] ideation graph retry paused",
+                {
+                    "meeting_id": meeting_id,
+                    "rows": len(rows),
+                    "backoff_ms": IDEATION_BUBBLE_FAILURE_BACKOFF_MS,
+                    "scheduled_retry_ms": next_retry_delay_ms,
+                },
+                flush=True,
+            )
+        elif result == "no_change":
+            print(
+                "[Bubble][gateway] ideation graph retry skipped",
+                {
+                    "meeting_id": meeting_id,
+                    "result": result,
+                    "rows": len(rows),
+                },
+                flush=True,
+            )
 
-    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
-        if state.get("demo_bubble_queue") and state.get("demo_bubble_task") is None:
-            state["demo_bubble_task"] = asyncio.create_task(flush_demo_bubble_queue(meeting_id))
+    async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+        state["ideation_bubble_task"] = None
+        if result != "paused":
+            state["ideation_bubble_pause_retry_count"] = 0
+        if next_retry_delay_ms is not None:
+            state["ideation_bubble_task"] = asyncio.create_task(flush_ideation_bubble_queue(meeting_id, next_retry_delay_ms))
+        elif state.get("ideation_bubble_queue") and state.get("ideation_bubble_task") is None:
+            workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
+            next_delay_ms = _ideation_bubble_coalesce_ms(workspace if isinstance(workspace, dict) else None)
+            state["ideation_bubble_task"] = asyncio.create_task(flush_ideation_bubble_queue(meeting_id, next_delay_ms))
 
 
-async def enqueue_demo_bubble_update(meeting_id: str, transcript: dict[str, Any]):
+async def enqueue_ideation_bubble_update(meeting_id: str, transcript: dict[str, Any]):
     if str(transcript.get("canvas_stage") or "ideation") != "ideation":
+        print(
+            f"[Bubble][gateway] ideation graph skipped reason=stage_not_ideation "
+            f"meeting_id={meeting_id} stage={str(transcript.get('canvas_stage') or '')}",
+            flush=True,
+        )
         return
     workspace = latest_canvas_workspace_by_meeting.get(meeting_id)
     if not isinstance(workspace, dict):
         workspace = await fetch_canvas_workspace(meeting_id)
         if isinstance(workspace, dict):
             latest_canvas_workspace_by_meeting[meeting_id] = copy.deepcopy(workspace)
-    if not is_demo_balance_config((workspace or {}).get("demo_config") if isinstance(workspace, dict) else None):
+    if not isinstance(workspace, dict):
+        print(f"[Bubble][gateway] ideation graph skipped reason=no_workspace meeting_id={meeting_id}", flush=True)
         return
+    demo_balance_mode = is_demo_balance_config(workspace.get("demo_config"))
     row = {
         "id": str(transcript.get("id") or ""),
         "speaker": str(transcript.get("speaker") or "참가자"),
@@ -1557,14 +1855,87 @@ async def enqueue_demo_bubble_update(meeting_id: str, transcript: dict[str, Any]
         "timestamp": str(transcript.get("timestamp") or transcript.get("created_at") or datetime.utcnow().isoformat()),
     }
     if not row["id"] or not row["text"]:
+        print(
+            f"[Bubble][gateway] ideation graph skipped reason=empty_transcript "
+            f"meeting_id={meeting_id} id={row['id']!r}",
+            flush=True,
+        )
         return
     state = get_fusion_state(meeting_id)
-    async with state.setdefault("demo_bubble_lock", asyncio.Lock()):
-        queue = [item for item in (state.get("demo_bubble_queue") or []) if item.get("id") != row["id"]]
+    paused_until = float(state.get("ideation_bubble_paused_until") or 0.0)
+    if paused_until > time.monotonic():
+        remaining_ms = round((paused_until - time.monotonic()) * 1000)
+        if demo_balance_mode:
+            async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+                retry_rows = list(state.get("ideation_bubble_retry_rows") or [])
+                retry_by_id: dict[str, dict[str, str]] = {}
+                for retry_row in [*retry_rows, row]:
+                    retry_id = str(retry_row.get("id") or "")
+                    if retry_id:
+                        retry_by_id[retry_id] = retry_row
+                state["ideation_bubble_retry_rows"] = list(retry_by_id.values())[-12:]
+                if state.get("ideation_bubble_task") is None:
+                    state["ideation_bubble_task"] = asyncio.create_task(
+                        flush_ideation_bubble_queue(meeting_id, remaining_ms + 250)
+                    )
+            print(
+                "[Bubble][gateway] ideation graph buffered during failure_backoff",
+                {
+                    "meeting_id": meeting_id,
+                    "remaining_ms": remaining_ms,
+                },
+                flush=True,
+            )
+            await send_bubble_graph_debug(
+                meeting_id,
+                "queued",
+                mode="demo_balance",
+                reason="failure_backoff_buffered",
+                queue_size=len(state.get("ideation_bubble_retry_rows") or []),
+                delay_ms=remaining_ms + 250,
+            )
+            return
+        print(
+            "[Bubble][gateway] ideation graph skipped reason=failure_backoff",
+            {
+                "meeting_id": meeting_id,
+                "remaining_ms": remaining_ms,
+            },
+            flush=True,
+        )
+        await send_bubble_graph_debug(
+            meeting_id,
+            "skipped",
+            reason="failure_backoff",
+            remaining_ms=remaining_ms,
+        )
+        return
+    async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+        queue = [item for item in (state.get("ideation_bubble_queue") or []) if item.get("id") != row["id"]]
         queue.append(row)
-        state["demo_bubble_queue"] = queue[-12:]
-        if state.get("demo_bubble_task") is None:
-            state["demo_bubble_task"] = asyncio.create_task(flush_demo_bubble_queue(meeting_id))
+        state["ideation_bubble_queue"] = queue[-12:] if demo_balance_mode else queue[-24:]
+        if state.get("ideation_bubble_task") is None:
+            delay_ms = _ideation_bubble_coalesce_ms(workspace)
+            state["ideation_bubble_task"] = asyncio.create_task(flush_ideation_bubble_queue(meeting_id, delay_ms))
+        print(
+            "[Bubble][gateway] ideation graph queued",
+            {
+                "meeting_id": meeting_id,
+                "mode": "demo_balance" if demo_balance_mode else "normal",
+                "queue_size": len(state.get("ideation_bubble_queue") or []),
+                "delay_ms": _ideation_bubble_coalesce_ms(workspace),
+            },
+            flush=True,
+        )
+        queue_size = len(state.get("ideation_bubble_queue") or [])
+        delay_ms = _ideation_bubble_coalesce_ms(workspace)
+    await send_bubble_graph_debug(
+        meeting_id,
+        "queued",
+        mode="demo_balance" if demo_balance_mode else "normal",
+        queue_size=queue_size,
+        delay_ms=delay_ms,
+    )
 
 
 async def send_stt_debug(meeting_id: str, user_id: str | None, stage: str, **data):

@@ -93,8 +93,8 @@ const NORMAL_STT_RECORDER_OPTIONS = {
 };
 
 const DEMO_BALANCE_STT_RECORDER_OPTIONS = {
-  intervalMs: 1800,
-  minSendDurationMs: 900,
+  intervalMs: 3600,
+  minSendDurationMs: 1800,
 };
 
 function createCalibrationAccumulator(): CalibrationAccumulator {
@@ -867,6 +867,32 @@ function HomeContent() {
       }
     });
 
+    wsClient.on("bubble_graph_debug", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      console.info("[Bubble] gateway debug event", {
+        stage: readString(payload.stage),
+        mode: payload.mode,
+        reason: payload.reason,
+        rows: payload.rows,
+        queueSize: payload.queue_size,
+        delayMs: payload.delay_ms,
+        cycle: payload.cycle,
+        currentCycle: payload.current_cycle,
+        bubbles: payload.bubbles,
+        usedLlm: payload.used_llm,
+        resultReason: payload.result_reason,
+        warning: payload.warning,
+        statusCode: payload.status_code,
+        elapsedMs: payload.elapsed_ms,
+        errorType: payload.error_type,
+        error: payload.error,
+        llmRoute: payload.llm_route,
+        llmError: payload.llm_error,
+      });
+    });
+
     wsClient.on("analysis_update", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload)) return;
@@ -879,6 +905,16 @@ function HomeContent() {
     wsClient.on("canvas_sync", (message) => {
       const payload = (message.data ?? message.workspace ?? message) as CanvasRealtimeSyncPayload | null;
       if (!payload || payload.meeting_id !== meetingId) return;
+      if (payload.sync_scope === "ideation_bubble_graph") {
+        const graph: Record<string, unknown> = isRecord(payload.ideation_bubble_graph) ? payload.ideation_bubble_graph : {};
+        const graphBubbles = graph.bubbles;
+        const bubbles = Array.isArray(graphBubbles) ? graphBubbles.length : 0;
+        console.info("[Bubble] graph sync received", {
+          cycle: graph.update_cycle,
+          updatedAt: graph.updated_at,
+          bubbles,
+        });
+      }
       setIncomingCanvasSync(payload);
     });
 

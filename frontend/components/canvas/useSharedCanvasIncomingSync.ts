@@ -492,10 +492,25 @@ export function useSharedCanvasIncomingSync({
       const currentIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
         currentWorkspace.ideationBubbleGraph,
       );
-      const nextIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
+      const shouldApplyIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
         incomingIdeationBubbleGraph,
         currentIdeationBubbleGraph,
-      )
+      );
+      if (!shouldApplyIdeationBubbleGraph) {
+        console.info("[Bubble][Sync] ignored lower ideation graph version", {
+          incomingCycle: incomingIdeationBubbleGraph.update_cycle,
+          incomingUpdatedAt: incomingIdeationBubbleGraph.updated_at,
+          currentCycle: currentIdeationBubbleGraph.update_cycle,
+          currentUpdatedAt: currentIdeationBubbleGraph.updated_at,
+        });
+      } else {
+        console.info("[Bubble][Sync] applied ideation graph", {
+          cycle: incomingIdeationBubbleGraph.update_cycle,
+          updatedAt: incomingIdeationBubbleGraph.updated_at,
+          bubbles: incomingIdeationBubbleGraph.bubbles.length,
+        });
+      }
+      const nextIdeationBubbleGraph = shouldApplyIdeationBubbleGraph
         ? incomingIdeationBubbleGraph
         : currentIdeationBubbleGraph;
       applyRemoteWorkspace(
