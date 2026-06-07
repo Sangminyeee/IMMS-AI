@@ -155,6 +155,7 @@ class GeminiClient:
     last_success_at: str = ""
     last_error: str = ""
     last_error_at: str = ""
+    last_model: str = ""
     last_raw_preview: str = ""
     last_finish_reason: str = ""
     last_http_status: int = 0
@@ -176,12 +177,22 @@ class GeminiClient:
             "last_success_at": self.last_success_at,
             "last_error": self.last_error,
             "last_error_at": self.last_error_at,
+            "last_model": self.last_model,
             "last_raw_preview": self.last_raw_preview,
             "last_finish_reason": self.last_finish_reason,
             "last_http_status": self.last_http_status,
         }
 
-    def _call(self, prompt: str, temperature: float = 0.2, max_tokens: int = 1024) -> str:
+    def _call(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        *,
+        model_override: str | None = None,
+        thinking_level: str | None = None,
+        response_mime_type: str = "application/json",
+    ) -> str:
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY 또는 GOOGLE_API_KEY가 설정되지 않았습니다.")
 
@@ -189,42 +200,70 @@ class GeminiClient:
         self.last_request_at = _now_iso()
         self.last_operation = "generate_content"
 
+        primary_model = (model_override or self.model or "").strip()
+        if not primary_model:
+            raise RuntimeError("Gemini 모델명이 설정되지 않았습니다.")
+
         timeout_sec = max(20, int(os.environ.get("GEMINI_TIMEOUT_SEC", "60")))
         max_retries = max(1, int(os.environ.get("GEMINI_MAX_RETRIES", "4")))
         retry_base = max(0.2, float(os.environ.get("GEMINI_RETRY_BASE_SEC", "1.0")))
+        fallback_env_name = "GEMINI_FAST_FALLBACK_MODELS" if model_override else "GEMINI_FALLBACK_MODELS"
+        fallback_default = "gemini-2.5-flash-lite,gemini-2.5-flash" if model_override else "gemini-2.5-flash,gemini-2.5-flash-lite"
         fallback_models = [
             m.strip()
-            for m in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-2.0-flash-lite,gemini-1.5-flash").split(",")
+            for m in os.environ.get(fallback_env_name, fallback_default).split(",")
             if m.strip()
         ]
-        model_candidates = [self.model] + [m for m in fallback_models if m != self.model]
+        model_candidates = [primary_model] + [m for m in fallback_models if m != primary_model]
 
         last_error_msg = "알 수 없는 오류"
         last_status = 0
         data: dict[str, Any] | None = None
 
+        def build_generation_config(model_name: str) -> dict[str, Any]:
+            generation_config: dict[str, Any] = {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            }
+            if response_mime_type:
+                if model_name.startswith("gemini-3"):
+                    generation_config["responseFormat"] = {
+                        "text": {
+                            "mimeType": response_mime_type,
+                        }
+                    }
+                else:
+                    generation_config["responseMimeType"] = response_mime_type
+            normalized_thinking = (thinking_level or "").strip().lower()
+            if normalized_thinking and model_name.startswith("gemini-3"):
+                generation_config["thinkingConfig"] = {
+                    "thinkingLevel": normalized_thinking,
+                }
+            return generation_config
+
         for model_name in model_candidates:
             for attempt in range(1, max_retries + 1):
                 data = None
-                url = f"{self.base_url}/models/{model_name}:generateContent?key={urllib.parse.quote(self.api_key)}"
+                url = f"{self.base_url}/models/{urllib.parse.quote(model_name, safe='')}:generateContent"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": temperature,
-                        "maxOutputTokens": max_tokens,
-                        "responseMimeType": "application/json",
-                    },
+                    "generationConfig": build_generation_config(model_name),
                 }
                 body = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=body, method="POST")
                 req.add_header("Content-Type", "application/json")
+                req.add_header("x-goog-api-key", self.api_key)
 
                 try:
                     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
-                    # fallback 모델이 성공하면 이후 기본 모델로 승격
-                    if model_name != self.model:
+                    if (
+                        not model_override
+                        and model_name != self.model
+                        and os.environ.get("GEMINI_PROMOTE_FALLBACK", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+                    ):
                         self.model = model_name
+                    self.last_model = model_name
                     self.last_http_status = 200
                     break
                 except urllib.error.HTTPError as exc:
@@ -317,7 +356,15 @@ class GeminiClient:
         self.last_operation = "disconnect"
         return {"ok": True, "message": "연결 해제됨", "mode": "live"}
 
-    def generate_json(self, prompt: str, temperature: float = 0.2, max_tokens: int = 1400) -> dict[str, Any]:
+    def generate_json(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 1400,
+        *,
+        model_override: str | None = None,
+        thinking_level: str | None = None,
+    ) -> dict[str, Any]:
         if not self.connected:
             raise RuntimeError("LLM이 연결되지 않았습니다. 먼저 연결 버튼을 눌러주세요.")
 
@@ -363,6 +410,8 @@ class GeminiClient:
                     continuation_prompt,
                     temperature=0.0,
                     max_tokens=continuation_max_tokens,
+                    model_override=model_override,
+                    thinking_level=thinking_level,
                 )
                 finish_reasons.append(self.last_finish_reason or "")
                 continuation_payload = parse_json(continuation_raw)
@@ -390,7 +439,13 @@ class GeminiClient:
 
         finish_reasons: list[str] = []
 
-        raw = self._call(prompt, temperature=temperature, max_tokens=max_tokens)
+        raw = self._call(
+            prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_override=model_override,
+            thinking_level=thinking_level,
+        )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(raw)
         if parsed:
@@ -407,7 +462,13 @@ class GeminiClient:
             "설명/마크다운/코드펜스 없이 JSON만 출력하세요.\n\n"
             f"{repair_input}"
         )
-        repair_raw = self._call(repair_prompt, temperature=0.0, max_tokens=max_tokens)
+        repair_raw = self._call(
+            repair_prompt,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            model_override=model_override,
+            thinking_level=thinking_level,
+        )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(repair_raw)
         if parsed:
@@ -419,7 +480,13 @@ class GeminiClient:
             "설명/주석/코드펜스/추가 텍스트 금지.\n\n"
             + prompt
         )
-        strict_raw = self._call(strict_prompt, temperature=0.0, max_tokens=max_tokens)
+        strict_raw = self._call(
+            strict_prompt,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            model_override=model_override,
+            thinking_level=thinking_level,
+        )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(strict_raw)
         if parsed:
@@ -440,7 +507,13 @@ class GeminiClient:
                     "가능한 한 간결하게 출력하고, 배열 항목은 요청된 최대 개수를 넘기지 마세요.\n\n"
                     + prompt
                 )
-                retry_raw = self._call(compact_strict_prompt, temperature=0.0, max_tokens=retry_max_tokens)
+                retry_raw = self._call(
+                    compact_strict_prompt,
+                    temperature=0.0,
+                    max_tokens=retry_max_tokens,
+                    model_override=model_override,
+                    thinking_level=thinking_level,
+                )
                 finish_reasons.append(self.last_finish_reason or "")
                 parsed = parse_json(retry_raw)
                 if parsed:

@@ -33,6 +33,23 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=False)
 load_dotenv(ROOT / "gateway" / ".env", override=False)
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo")
+GEMINI_DEFAULT_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+GEMINI_FAST_MODEL_NAME = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.1-flash-lite").strip() or GEMINI_DEFAULT_MODEL_NAME
+GEMINI_FAST_STAGE_NAMES = tuple(
+    stage.strip()
+    for stage in os.environ.get(
+        "GEMINI_FAST_STAGES",
+        "stt.transcript_refine,stt.flow_summary,canvas_ideation_keyword_extract,canvas_ideation_bubble_graph_update",
+    ).split(",")
+    if stage.strip()
+)
+GEMINI_FAST_STAGE_PREFIXES = tuple(
+    prefix.strip()
+    for prefix in os.environ.get("GEMINI_FAST_STAGE_PREFIXES", "").split(",")
+    if prefix.strip()
+)
+GEMINI_DEFAULT_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "").strip()
+GEMINI_FAST_THINKING_LEVEL = os.environ.get("GEMINI_FAST_THINKING_LEVEL", "low").strip() or "low"
 SUMMARY_INTERVAL = 4
 SUMMARY_POINT_TARGET_LEN = None
 REALTIME_MIN_SHIFT_SPAN = 6
@@ -1775,6 +1792,13 @@ def _run_canvas_llm_cached_request(
     normalized_meeting_id = _safe_text(meeting_id)
     normalized_cache_key = _safe_text(cache_key)
     normalized_signature = _safe_text(signature)
+    if normalized_signature:
+        normalized_signature = _canvas_llm_signature(
+            {
+                "source_signature": normalized_signature,
+                "llm_route": _llm_cache_route_salt(),
+            }
+        )
     if not normalized_meeting_id or not normalized_cache_key or not normalized_signature:
         return compute()
 
@@ -2974,6 +2998,30 @@ def _append_llm_io_log(rt: RuntimeStore, direction: str, stage: str, payload: An
             rt.llm_io_logs = rt.llm_io_logs[-LLM_IO_LOG_MAX:]
 
 
+def _stage_uses_fast_llm(stage: str) -> bool:
+    normalized_stage = _safe_text(stage)
+    return normalized_stage in GEMINI_FAST_STAGE_NAMES or any(
+        normalized_stage.startswith(prefix) for prefix in GEMINI_FAST_STAGE_PREFIXES
+    )
+
+
+def _llm_route_for_stage(stage: str) -> tuple[str, str]:
+    if _stage_uses_fast_llm(stage):
+        return GEMINI_FAST_MODEL_NAME, GEMINI_FAST_THINKING_LEVEL
+    return GEMINI_DEFAULT_MODEL_NAME, GEMINI_DEFAULT_THINKING_LEVEL
+
+
+def _llm_cache_route_salt() -> dict[str, Any]:
+    return {
+        "default_model": GEMINI_DEFAULT_MODEL_NAME,
+        "fast_model": GEMINI_FAST_MODEL_NAME,
+        "fast_stages": list(GEMINI_FAST_STAGE_NAMES),
+        "fast_stage_prefixes": list(GEMINI_FAST_STAGE_PREFIXES),
+        "default_thinking_level": GEMINI_DEFAULT_THINKING_LEVEL,
+        "fast_thinking_level": GEMINI_FAST_THINKING_LEVEL,
+    }
+
+
 def _call_llm_json(
     rt: RuntimeStore,
     client: Any,
@@ -2982,15 +3030,28 @@ def _call_llm_json(
     temperature: float,
     max_tokens: int,
 ) -> dict[str, Any]:
+    model_name, thinking_level = _llm_route_for_stage(stage)
     _append_llm_io_log(
         rt,
         direction="request",
         stage=stage,
         payload=prompt,
-        meta={"temperature": temperature, "max_tokens": max_tokens, "prompt_chars": len(prompt)},
+        meta={
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "prompt_chars": len(prompt),
+            "model": model_name,
+            "thinking_level": thinking_level,
+        },
     )
     try:
-        parsed = client.generate_json(prompt, temperature=temperature, max_tokens=max_tokens)
+        parsed = client.generate_json(
+            prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_override=model_name,
+            thinking_level=thinking_level,
+        )
     except Exception as exc:
         _append_llm_io_log(rt, direction="error", stage=stage, payload=str(exc), meta={})
         raise
@@ -2998,7 +3059,7 @@ def _call_llm_json(
         payload = json.dumps(parsed, ensure_ascii=False)
     except Exception:
         payload = str(parsed)
-    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={})
+    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={"model": model_name})
     return parsed
 
 
