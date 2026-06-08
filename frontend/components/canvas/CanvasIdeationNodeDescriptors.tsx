@@ -152,7 +152,6 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
   const bubbleDescriptors: CanvasNodeDescriptor[] = bubbles.length > 0
       ? bubbles.map((bubble) => {
         const debugGrowth = debugGrowthById[bubble.id] || 1;
-        const opacityLocked = !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.role === "center" || bubble.durable);
         return {
           id: bubble.id,
           position: {
@@ -182,6 +181,8 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
               debugGrowth,
               bubble.activity,
               bubble.opacity,
+              bubble.displayState,
+              bubble.lifecycleState,
               bubble.visualScale,
               bubble.entering,
               bubble.durable,
@@ -200,7 +201,7 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
               <div
                 className="h-full w-full origin-center"
                 style={{
-                  opacity: bubble.entering && !opacityLocked ? 0.88 : 1,
+                  opacity: 1,
                   transform: `scale(${bubble.visualScale ?? 1})`,
                   transition: CANVAS_IDEATION_BUBBLE_LABEL_TRANSITION,
                 }}
@@ -223,6 +224,8 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
         bubble.count,
         bubble.activity,
         bubble.opacity,
+        bubble.displayState,
+        bubble.lifecycleState,
         bubble.visualScale,
         bubble.entering,
         bubble.durable,

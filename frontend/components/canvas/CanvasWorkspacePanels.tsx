@@ -28,7 +28,7 @@ import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAs
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ProblemDefinitionPhase = "explore" | "structure";
-export type CanvasDebugResetScope = "problem" | "summary" | "all";
+export type CanvasDebugResetScope = "problem" | "summary" | "all" | "room";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
@@ -1107,6 +1107,7 @@ function RightAiPanel({
                     ["problem", "문제정의 초기화"],
                     ["summary", "요약 초기화"],
                     ["all", "문제정의+요약"],
+                    ["room", "회의실 초기화"],
                   ] as const).map(([scope, label]) => (
                     <button
                       key={scope}

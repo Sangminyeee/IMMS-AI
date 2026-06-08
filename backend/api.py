@@ -82,6 +82,10 @@ _SUPABASE_REQUEST_LOCK = threading.Lock()
 _RUNTIME_DB_DISABLED_TABLES: set[str] = set()
 _RUNTIME_DB_LOGGED_ERRORS: dict[str, float] = {}
 _RUNTIME_DB_STATE_LOCK = threading.Lock()
+_LOCAL_KIWI_EXTRACTOR: Any = None
+_LOCAL_KIWI_EXTRACTOR_ATTEMPTED = False
+_LOCAL_KIWI_EXTRACTOR_LOCK = threading.Lock()
+_LOCAL_KIWI_WARNING_LOGGED = False
 
 STOPWORDS = {
     "그냥",
@@ -241,6 +245,119 @@ def _now_ts() -> str:
 def _safe_text(raw: Any, fallback: str = "") -> str:
     s = str(raw or "").strip()
     return s if s else fallback
+
+
+_BUBBLE_DEBUG_LOG_DIR = ROOT / "output" / "bubble-debug"
+_BUBBLE_DEBUG_LOG_LOCK = threading.Lock()
+_BUBBLE_DEBUG_LOG_MAX_BUBBLES = 80
+
+
+def _bubble_debug_safe_meeting_id(meeting_id: Any) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", _safe_text(meeting_id))
+    return safe[:120] or "unknown"
+
+
+def _bubble_debug_compact_rows(rows: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for row in rows[-limit:]:
+        compact.append(
+            {
+                "id": _safe_text(row.get("id"))[:80],
+                "speaker": _safe_text(row.get("speaker"))[:40],
+                "text": _strip_leading_timestamp(row.get("text"))[:180],
+                "timestamp": _safe_text(row.get("timestamp"))[:60],
+            }
+        )
+    return compact
+
+
+def _bubble_debug_compact_bubbles(graph: dict[str, Any], limit: int = _BUBBLE_DEBUG_LOG_MAX_BUBBLES) -> list[dict[str, Any]]:
+    bubbles = graph.get("bubbles") if isinstance(graph, dict) else []
+    if not isinstance(bubbles, list):
+        return []
+    compact: list[dict[str, Any]] = []
+    for bubble in bubbles[:limit]:
+        if not isinstance(bubble, dict):
+            continue
+        compact.append(
+            {
+                "id": _safe_text(bubble.get("id"))[:80],
+                "label": _safe_text(bubble.get("label"))[:80],
+                "canonical_label": _safe_text(bubble.get("canonical_label"))[:80],
+                "aliases": [_safe_text(value)[:80] for value in (bubble.get("aliases") or [])[:8]],
+                "count": _safe_nonnegative_int(bubble.get("count"), 0),
+                "display_state": _safe_text(bubble.get("display_state")),
+                "lifecycle_state": _safe_text(bubble.get("lifecycle_state")),
+                "choice_affinity": _safe_text(bubble.get("choice_affinity")),
+                "affinity_score": _safe_float(bubble.get("affinity_score"), 0.0),
+                "emphasis": _safe_text(bubble.get("emphasis")),
+                "anchor_id": _safe_text(bubble.get("anchor_id")),
+                "durable": bool(bubble.get("durable")),
+                "x": _safe_float(bubble.get("x"), 0.0),
+                "y": _safe_float(bubble.get("y"), 0.0),
+                "size": _safe_float(bubble.get("size"), 0.0),
+            }
+        )
+    return compact
+
+
+def _write_bubble_debug_event(meeting_id: Any, event: str, payload: dict[str, Any]) -> None:
+    if os.environ.get("BUBBLE_DEBUG_FILE_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    record = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "event": _safe_text(event),
+        "meeting_id": _safe_text(meeting_id),
+        **payload,
+    }
+    path = _BUBBLE_DEBUG_LOG_DIR / f"{_bubble_debug_safe_meeting_id(meeting_id)}.jsonl"
+    try:
+        with _BUBBLE_DEBUG_LOG_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(
+            "[Bubble][debug-log] write failed",
+            {"meeting_id": _safe_text(meeting_id), "event": _safe_text(event), "error": repr(exc)},
+            flush=True,
+        )
+
+
+def _bubble_debug_compact_directives(parsed: Any, *, limit: int = 8) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return {}
+
+    def _compact_list(*keys: str) -> list[Any]:
+        raw: Any = []
+        for key in keys:
+            value = parsed.get(key)
+            if value:
+                raw = value
+                break
+        if not isinstance(raw, list):
+            return []
+        compact: list[Any] = []
+        for item in raw[:limit]:
+            if isinstance(item, dict):
+                compact.append(
+                    {
+                        _safe_text(key)[:40]: _truncate_text(_safe_text(value), 120)
+                        for key, value in item.items()
+                        if _safe_text(key)
+                    }
+                )
+            else:
+                compact.append(_truncate_text(_safe_text(item), 120))
+        return compact
+
+    return {
+        "rename_keywords": _compact_list("rename_keywords", "renames", "rename", "correct_keywords"),
+        "merge_keywords": _compact_list("merge_keywords", "merges", "merge"),
+        "remove_keywords": _compact_list("remove_keywords", "delete_keywords", "archive_keywords"),
+        "affinity_updates": _compact_list("affinity_updates", "affinityUpdates", "move_keywords", "moveKeywords"),
+        "primary_keywords": _compact_list("primary_keywords", "primaryKeywords", "important_keywords", "importantKeywords"),
+    }
 
 
 def _safe_nonnegative_int(raw: Any, fallback: int = 0) -> int:
@@ -427,12 +544,22 @@ def _normalize_canvas_demo_config(raw: Any) -> dict[str, Any]:
             "mode": "normal",
             "option_a": "",
             "option_b": "",
+            "option_a_keyword": "",
+            "option_b_keyword": "",
             "instruction": "",
         }
 
     mode = _safe_text(raw.get("mode"), "normal").lower()
     option_a = _truncate_text(_safe_text(raw.get("option_a") or raw.get("optionA")), 120)
     option_b = _truncate_text(_safe_text(raw.get("option_b") or raw.get("optionB")), 120)
+    option_a_keyword = _truncate_text(
+        _safe_text(raw.get("option_a_keyword") or raw.get("optionAKeyword") or option_a),
+        80,
+    )
+    option_b_keyword = _truncate_text(
+        _safe_text(raw.get("option_b_keyword") or raw.get("optionBKeyword") or option_b),
+        80,
+    )
     enabled = bool(raw.get("enabled")) or mode == "demo_balance"
     if mode != "demo_balance" or not enabled or not option_a or not option_b:
         return {
@@ -440,6 +567,8 @@ def _normalize_canvas_demo_config(raw: Any) -> dict[str, Any]:
             "mode": "normal",
             "option_a": "",
             "option_b": "",
+            "option_a_keyword": "",
+            "option_b_keyword": "",
             "instruction": "",
         }
 
@@ -448,6 +577,8 @@ def _normalize_canvas_demo_config(raw: Any) -> dict[str, Any]:
         "mode": "demo_balance",
         "option_a": option_a,
         "option_b": option_b,
+        "option_a_keyword": option_a_keyword or option_a,
+        "option_b_keyword": option_b_keyword or option_b,
         "instruction": _truncate_text(
             _safe_text(raw.get("instruction"), "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요."),
             180,
@@ -526,10 +657,15 @@ def _normalize_canvas_demo_balance_classification(raw: Any) -> dict[str, Any]:
 
 
 def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict[str, Any]:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
+    ideation_bubble_graph = _normalize_canvas_ideation_bubble_graph(
+        workspace.get("ideation_bubble_graph")
+    )
+    _ensure_demo_balance_anchor_bubbles(ideation_bubble_graph, demo_config)
     return {
         "meeting_goal": _safe_text(workspace.get("meeting_goal")),
         "meeting_goal_context": _safe_text(workspace.get("meeting_goal_context")),
-        "demo_config": _normalize_canvas_demo_config(workspace.get("demo_config")),
+        "demo_config": demo_config,
         "demo_balance_classification": _normalize_canvas_demo_balance_classification(workspace.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(workspace.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(workspace.get("agenda_overrides")),
@@ -545,9 +681,7 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
         "artifact_generation": _normalize_canvas_artifact_generation(
             workspace.get("artifact_generation") or {}
         ),
-        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
-            workspace.get("ideation_bubble_graph")
-        ),
+        "ideation_bubble_graph": ideation_bubble_graph,
         "idea_create_stack": _safe_nonnegative_int(workspace.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -1415,16 +1549,18 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
 
 
 def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
     ideation_bubble_graph = _normalize_canvas_ideation_bubble_graph(
         workspace.get("ideation_bubble_graph")
     )
+    _ensure_demo_balance_anchor_bubbles(ideation_bubble_graph, demo_config)
     _ensure_ideation_bubble_graph_server_layout(ideation_bubble_graph)
     return {
         "ok": True,
         "meeting_id": _safe_text(workspace.get("meeting_id")),
         "meeting_goal": _safe_text(workspace.get("meeting_goal")),
         "meeting_goal_context": _safe_text(workspace.get("meeting_goal_context")),
-        "demo_config": _normalize_canvas_demo_config(workspace.get("demo_config")),
+        "demo_config": demo_config,
         "demo_balance_classification": _normalize_canvas_demo_balance_classification(workspace.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(workspace.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(workspace.get("agenda_overrides")),
@@ -2546,7 +2682,10 @@ class CanvasQuickAskInput(BaseModel):
 
 
 class IdeationExistingKeywordInput(BaseModel):
+    id: str = ""
     text: str = ""
+    canonical_label: str = ""
+    aliases: list[str] = Field(default_factory=list)
     count: int = 1
     related: list[str] = Field(default_factory=list)
     kind: str = "topic"
@@ -2554,6 +2693,8 @@ class IdeationExistingKeywordInput(BaseModel):
     relevance: float = 1.0
     off_topic: bool = False
     anchor: str = ""
+    choice_affinity: str = ""
+    affinity_score: float = 0.0
 
 
 class IdeationKeywordExtractInput(BaseModel):
@@ -2577,7 +2718,7 @@ class IdeationBubbleGraphUpdateInput(BaseModel):
     demo_config: dict[str, Any] = Field(default_factory=dict)
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     context_cache: str = Field(default="", max_length=20000)
-    max_keywords: int = Field(default=3, ge=1, le=6)
+    max_keywords: int = Field(default=3, ge=1, le=8)
     update_mode: str = Field(default="", max_length=32)
 
 
@@ -2835,6 +2976,18 @@ class CanvasWorkspacePatchInput(BaseModel):
     ideation_bubble_graph: dict[str, Any] | None = None
     imported_state: dict[str, Any] | None = None
     llm_cache_reset_prefixes: list[str] | None = None
+
+
+class CanvasMeetingRoomResetInput(BaseModel):
+    meeting_id: str = ""
+    user_id: str = ""
+
+
+class CanvasBubbleDebugLogInput(BaseModel):
+    meeting_id: str = ""
+    user_id: str = ""
+    event: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class CanvasArtifactGenerationStartInput(BaseModel):
@@ -3751,8 +3904,16 @@ def _demo_balance_has_option_mention(text: str, option: str) -> bool:
 
 def _demo_balance_choice_local(text: str, demo_config: dict[str, Any]) -> str:
     clean = _demo_balance_clean_text(text)
-    has_a = _demo_balance_has_choice_token(clean, "A") or _demo_balance_has_option_mention(clean, demo_config.get("option_a", ""))
-    has_b = _demo_balance_has_choice_token(clean, "B") or _demo_balance_has_option_mention(clean, demo_config.get("option_b", ""))
+    has_a = (
+        _demo_balance_has_choice_token(clean, "A")
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_a", ""))
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_a_keyword", ""))
+    )
+    has_b = (
+        _demo_balance_has_choice_token(clean, "B")
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_b", ""))
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_b_keyword", ""))
+    )
     if has_a and not has_b:
         return "a"
     if has_b and not has_a:
@@ -3769,7 +3930,9 @@ def _build_demo_balance_classification_local(
         {
             "mode": "demo_balance",
             "option_a": demo_config.get("option_a"),
+            "option_a_keyword": demo_config.get("option_a_keyword"),
             "option_b": demo_config.get("option_b"),
+            "option_b_keyword": demo_config.get("option_b_keyword"),
             "rows": [
                 {
                     "id": row.get("id"),
@@ -6299,11 +6462,15 @@ _IDEATION_KEYWORD_NON_NOUN_PATTERNS = [
     re.compile(r"(아요|어요|워요|네요|군요|죠|지요|고요|습니다|습니까|면서|지만|거나|니까|어서|아서|려고|다고)$"),
 ]
 
+_IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST = {"돈", "집", "차", "맛", "잠", "힘", "일"}
+
 
 def _normalize_ideation_keyword_text(raw: Any) -> str:
     text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
     text = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", text)
-    if not text or len(text) < 2 or len(text) > 28:
+    if not text or len(text) > 28:
+        return ""
+    if len(text) < 2 and text not in _IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST:
         return ""
     if re.fullmatch(r"\d+", text):
         return ""
@@ -6344,16 +6511,29 @@ def _ideation_existing_keyword_rows(payload: IdeationKeywordExtractInput) -> lis
         text = _normalize_ideation_keyword_text(item.text)
         if not text:
             continue
+        aliases = _dedup_preserve(
+            [
+                _normalize_ideation_keyword_text(value)
+                for value in (item.aliases or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+            limit=8,
+        )
         kind = _safe_text(item.kind, "topic").lower()
         rows.append(
             {
+                "id": _safe_text(item.id),
                 "text": text,
+                "canonical_label": _normalize_ideation_keyword_text(item.canonical_label) or text,
+                "aliases": [value for value in aliases if value != text],
                 "count": max(1, _safe_nonnegative_int(item.count, 1) or 1),
                 "kind": kind if kind in {"entity", "topic", "relation", "action", "off_topic"} else "topic",
                 "importance": max(0, min(1, _safe_float(item.importance, 0.65))),
                 "relevance": max(0, min(1, _safe_float(item.relevance, 1))),
                 "off_topic": bool(item.off_topic),
                 "anchor": _normalize_ideation_keyword_text(item.anchor),
+                "choice_affinity": _safe_text(item.choice_affinity).lower(),
+                "affinity_score": max(0.0, min(1.0, _safe_float(item.affinity_score, 0.0))),
                 "related": _dedup_preserve(
                     [
                         _normalize_ideation_keyword_text(value)
@@ -6426,9 +6606,7 @@ def _build_demo_balance_keyword_extract_prompt(
     demo_config = _normalize_canvas_demo_config(payload.demo_config)
     existing_keywords = _ideation_existing_keyword_rows(payload)
     context_cache = _ideation_context_cache_text(payload)
-    max_keywords = min(6, max(1, int(payload.max_keywords or 4)))
     input_payload = {
-        "max_keywords": max_keywords,
         "meeting_topic": _safe_text(payload.meeting_topic),
         "meeting_goal": _safe_text(payload.meeting_goal),
         "meeting_goal_context": _safe_text(payload.meeting_goal_context),
@@ -6446,19 +6624,21 @@ def _build_demo_balance_keyword_extract_prompt(
         ],
     }
     return (
-        "너는 3분 내외의 A/B 밸런스 게임 시연에서 STT 발화를 보정하고 실시간 버블 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 3분 내외의 A/B 밸런스 게임 시연에서 STT 발화를 보정하고 기존 버블 그래프를 정리하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[시연 목표]\n"
         "- target_utterances의 raw STT를 문맥에 맞게 짧고 자연스러운 한국어 발화로 보정한다.\n"
-        "- 참가자가 A 또는 B를 먼저 말하고 이유를 설명하는 발화를 빠르게 반영한다.\n"
-        "- A/B 선택지 자체와 선택 이유를 중심으로 짧은 명사/명사구 버블을 만든다.\n"
-        "- target_utterances에서 A/B 선택이 명시된 발화를 우선 처리한다. 명시가 없으면 새로운 버블을 만들지 않거나 relevance를 낮춘다.\n"
-        "- 새 버블은 1회 발화라도 A/B 선택 이유가 명확하면 만들 수 있다. 단, filler/잡담/단독 숫자/인명은 제외한다.\n"
+        "- 새 버블은 만들지 않는다. 새 버블 생성은 서버의 local_fast_keywords 단계가 이미 담당한다.\n"
+        "- 너는 existing_keywords에 이미 있는 버블만 대상으로 표기 보정, 병합, 삭제, A/B orbit 이동을 수행한다.\n"
+        "- existing_keywords 전체를 검토해 맞춤법/STT 오류가 있는 버블은 rename_keywords로 표기만 바로잡는다.\n"
+        "- 예: existing_keywords에 '사생활 치매'가 있고 문맥상 '사생활 침해'라면 remove하지 말고 rename_keywords로 '사생활 침해'로 고친다.\n"
+        "- 예: existing_keywords에 '브런스 게임'이 있고 문맥상 '밸런스 게임'이라면 rename_keywords로 '밸런스 게임'으로 고친다.\n"
         "- 동의어, 비슷한 근거, 상하위 표현은 existing_keywords에 흡수하거나 merge_keywords로 합친다.\n"
-        "- 이번 batch 전체에서 반환할 버블은 0~6개다. 많게 만들기보다 A/B 판단에 의미 있는 이유만 남긴다.\n"
+        "- provisional 버블이 많아지기 쉬우므로 유지보다 정리를 적극적으로 한다. 오탈자, 중복, 너무 세부적인 표현, 약한 잡담성 명사구는 rename/merge/remove로 정리한다.\n"
+        "- 중요도/primary 판단은 하지 않는다. A/B 중심 anchor는 서버가 고정 관리한다.\n"
+        "- A/B 분류가 잘못된 기존 버블은 affinity_updates로 어느 orbit에 가까운지 옮긴다.\n"
         "- 사람 이름은 절대 버블 text로 쓰지 않는다.\n"
         "- text는 반드시 명사, 고유명사, 짧은 명사구여야 하며 문장/동사형/형용사형은 금지한다.\n"
-        "- A/B option label과 관련된 핵심 근거는 중요도를 높게 준다. 단순히 'A', 'B'만 text로 쓰지 말고 선택지명 또는 이유 명사로 쓴다.\n"
-        "- related에는 같은 선택지의 이유끼리 연결하고, anchor에는 가능하면 A/B 선택지 또는 중심 근거를 넣는다.\n\n"
+        "- A/B option label과 중심 키워드를 기준으로 각 버블이 A, B 중 어디에 더 가까운지 검토한다. 애매해도 더 가까운 쪽을 고른다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
@@ -6466,27 +6646,93 @@ def _build_demo_balance_keyword_extract_prompt(
         '  "refined_transcripts": [\n'
         '    {"id": "utterance-id", "text": "보정된 발화", "choice": "a", "valid": true, "confidence": 0.82, "reason": "A 선택 이유를 설명함"}\n'
         "  ],\n"
+        '  "rename_keywords": [{"source": "휴대폰 비밀번허", "target": "휴대폰 비밀번호", "reason": "STT/맞춤법 보정"}],\n'
         '  "merge_keywords": [{"source": "가격 부담", "target": "비용", "reason": "같은 선택 근거"}],\n'
         '  "remove_keywords": ["잡담"],\n'
-        '  "ignored_utterance_ids": ["utterance-id"],\n'
-        '  "keywords": [\n'
-        '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.82, "relevance": 0.94, "anchor": "A 선택지", "related": ["현실성"]},\n'
-        '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.76, "relevance": 0.9, "anchor": "B 선택지", "related": []}\n'
-        "  ]\n"
+        '  "affinity_updates": [{"text": "비용", "choice_affinity": "a", "affinity_score": 0.87, "reason": "A 선택 이유에 가까움"}],\n'
+        '  "ignored_utterance_ids": ["utterance-id"]\n'
         "}\n\n"
         "[규칙]\n"
         "- refined_transcripts는 target_utterances마다 가능하면 1개씩 만든다. text는 원문 의미를 보존하되 STT 오류만 보정한다.\n"
         "- choice는 a, b, unclear 중 하나다. valid는 밸런스 게임 의견이면 true, 잡담/무의미한 발화면 false다.\n"
         "- ignored_utterance_ids에는 잡담, filler, 인명만 있는 발화, A/B 의견으로 보기 어려운 발화 id를 넣는다.\n"
-        f"- keywords는 0개 이상, 최대 {max_keywords}개.\n"
-        "- 가능하면 existing_keywords의 text를 재사용한다.\n"
-        "- 새 text는 target_utterances에서 A/B 선택 이유로 명확히 말한 개념만 만든다.\n"
-        "- A/B 선택이 명시되지 않은 발화는 새 버블 생성 근거로 약하게 다룬다.\n"
+        "- keywords 필드는 반환하지 않는다. 반환하더라도 서버가 무시한다.\n"
+        "- affinity_updates.text는 existing_keywords에 있는 text/canonical_label/alias만 사용할 수 있다.\n"
+        "- affinity_updates.choice_affinity는 a 또는 b 중 하나다. 애매하면 더 가까운 쪽으로 보낸다.\n"
+        "- rename_keywords.source는 반드시 existing_keywords의 text여야 하고, target은 같은 뜻의 올바른 맞춤법/표기여야 한다.\n"
+        "- rename_keywords는 id/count/위치를 유지하는 표기 보정용이다. 의미가 달라지거나 target이 이미 existing_keywords에 있으면 rename 대신 merge_keywords를 사용한다.\n"
+        "- merge_keywords는 동의어, 같은 이유의 다른 표현, 지나치게 세부적인 표현을 더 대표적인 버블로 합칠 때 적극적으로 사용한다.\n"
+        "- remove_keywords는 A/B 판단과 관련이 약한 잡담성 명사구, 인명, 단독 숫자, 의미가 흐린 provisional 버블을 정리할 때 적극적으로 사용한다.\n"
+        "- 새 버블과 새 개념은 만들지 않는다. 단, rename_keywords.target으로 맞춤법/STT 오류를 바로잡은 새 표기를 쓰는 것은 허용되며, 명확하면 반드시 사용한다.\n"
+        "- rename/merge/remove는 existing_keywords가 많아질수록 적극적으로 사용한다. 단, 확정적 핵심 근거를 최근 언급이 적다는 이유만으로 삭제하지 않는다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _build_demo_balance_realtime_text_batch_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    existing_keywords = _ideation_existing_keyword_rows(payload)
+    context_cache = _ideation_context_cache_text(payload)
+    max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
+    input_payload = {
+        "max_keywords": max_keywords,
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "meeting_goal": _safe_text(payload.meeting_goal),
+        "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+        "demo_config": demo_config,
+        "conversation_context_cache": context_cache,
+        "existing_keywords": existing_keywords,
+        "target_utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "speaker": _safe_text(row.get("speaker"), "참가자"),
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 180),
+                "timestamp": _safe_text(row.get("timestamp")),
+            }
+            for row in rows[-6:]
+        ],
+    }
+    return (
+        "너는 A/B 밸런스 게임 시연에서 짧은 STT 발화들을 4초 단위로 후처리하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- raw STT를 문맥에 맞게 짧고 자연스러운 한국어 발화로 보정한다.\n"
+        "- 동시에 화면에 즉시 띄울 짧은 명사/명사구 버블 키워드를 고른다.\n"
+        "- 이 단계는 빠른 반응성이 목적이다. 완벽한 병합/삭제/중요도 정리는 20초 consolidate 단계에서 한다.\n"
+        "- 키워드는 중요한 결론만이 아니라 참가자가 방금 말한 선택 이유를 대표하는 명사구까지 허용한다.\n"
+        "- 키워드는 가능하면 1단어, 최대 2단어 이하의 한국어/영어 명사 또는 명사구로 쓴다.\n"
+        "- 인명, 감탄사, filler, 단독 숫자, 단독 알파벳 A/B, 문장, 동사구, 형용사구는 금지한다.\n"
+        "- existing_keywords에 같은 의미가 있으면 새 표현을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- A/B 선택지 자체보다 선택 이유 명사를 우선한다. 단, 선택지명이 핵심 주제라면 허용한다.\n"
+        "- merge_keywords/remove_keywords는 이 단계에서 원칙적으로 비워둔다. 명백히 잘못된 중복만 확신이 높을 때 사용한다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "refined_transcripts": [\n'
+        '    {"id": "utterance-id", "text": "보정된 발화", "choice": "a", "valid": true, "confidence": 0.82, "reason": "A 선택 이유를 설명함"}\n'
+        "  ],\n"
+        '  "ignored_utterance_ids": ["utterance-id"],\n'
+        '  "keywords": [\n'
+        '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.7, "relevance": 0.92, "anchor": "A 선택지", "related": []},\n'
+        '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.66, "relevance": 0.88, "anchor": "B 선택지", "related": []}\n'
+        "  ],\n"
+        '  "merge_keywords": [],\n'
+        '  "remove_keywords": []\n'
+        "}\n\n"
+        "[규칙]\n"
+        "- refined_transcripts는 target_utterances마다 가능하면 1개씩 만든다. 의미를 바꾸지 말고 STT 오류만 보정한다.\n"
+        "- choice는 a, b, unclear 중 하나다. valid는 밸런스 게임 의견이면 true, 잡담/무의미한 발화면 false다.\n"
+        "- ignored_utterance_ids에는 잡담, filler, 인명만 있는 발화, A/B 의견으로 보기 어려운 발화 id를 넣는다.\n"
+        f"- keywords는 0개 이상, 최대 {max_keywords}개다.\n"
+        "- 새 text는 target_utterances에서 실제로 나온 개념만 만든다.\n"
+        "- A/B 선택이 불명확해도 선택 이유로 볼 수 있는 명사구는 relevance를 낮춰 후보로 둘 수 있다.\n"
         "- count는 target_utterances에서 해당 의미가 나타난 발화 수다.\n"
         "- support_count는 conversation_context_cache와 target_utterances를 합쳐 해당 의미가 등장한 총 발화 수다.\n"
         "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
-        "- importance는 A/B 판정에 대한 중요도, relevance는 이번 밸런스 게임과의 관련도이며 0~1 숫자다.\n"
-        "- merge/remove는 확신이 높은 경우만 사용한다.\n"
+        "- importance와 relevance는 0~1 숫자다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
@@ -6549,7 +6795,7 @@ def _build_demo_balance_fast_keyword_prompt(
 ) -> str:
     demo_config = _normalize_canvas_demo_config(payload.demo_config)
     existing_keywords = _ideation_existing_keyword_rows(payload)
-    max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+    max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
     input_payload = {
         "max_keywords": max_keywords,
         "meeting_topic": _safe_text(payload.meeting_topic),
@@ -6573,12 +6819,13 @@ def _build_demo_balance_fast_keyword_prompt(
         "- target_utterances의 raw STT에서 A/B 선택 이유를 나타내는 핵심 명사 키워드를 빠르게 추출한다.\n"
         "- 전사 보정, 문장 요약, 병합 판단, 삭제 판단은 하지 않는다.\n"
         "- 참가자가 방금 말한 내용을 5초 안에 화면에서 볼 수 있게 하는 것이 목적이다.\n"
-        "- 키워드는 0~3개만 반환한다. 의미 있는 명사가 없으면 빈 배열을 반환한다.\n"
+        "- 키워드는 0~8개만 반환한다. 의미 있는 명사가 없으면 빈 배열을 반환한다.\n"
         "- 키워드는 가능하면 1단어, 최대 2단어 이하의 한국어/영어 명사 또는 명사구여야 한다.\n"
         "- 인명, 잡담, filler, 단독 숫자, 단독 알파벳 A/B, 문장, 동사구, 형용사구는 금지한다.\n"
         "- A/B 선택지명 자체보다 선택 이유 명사를 우선한다. 단, 선택지명이 핵심 주제라면 허용한다.\n"
         "- existing_keywords에 같은 의미가 있으면 새 표현을 만들지 말고 기존 text를 그대로 반환한다.\n"
-        "- 확신이 낮은 단어는 만들지 않는다. 대신 keywords를 []로 둔다.\n\n"
+        "- 아주 중요한 키워드만 고르지 말고, 방금 말한 선택 이유를 대표하는 명사구라면 후보로 포함한다.\n"
+        "- 확신이 낮거나 화면을 어지럽히는 단어는 만들지 않는다. 대신 keywords를 []로 둔다.\n\n"
         "[입력 JSON]\n"
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
@@ -6606,7 +6853,10 @@ def _build_ideation_keyword_extract_prompt(
     update_mode: str = "",
 ) -> str:
     if _is_demo_balance_config(payload.demo_config):
-        if _safe_text(update_mode) == "fast_keywords":
+        normalized_update_mode = _safe_text(update_mode)
+        if normalized_update_mode == "realtime_text_batch":
+            return _build_demo_balance_realtime_text_batch_prompt(payload, rows)
+        if normalized_update_mode == "fast_keywords":
             return _build_demo_balance_fast_keyword_prompt(payload, rows)
         return _build_demo_balance_keyword_extract_prompt(payload, rows)
 
@@ -6784,6 +7034,7 @@ def _normalize_ideation_keyword_operations(
     if not isinstance(parsed, dict):
         return [], []
 
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
     existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
     keyword_texts = {_safe_text(item.get("text")) for item in keywords if _safe_text(item.get("text"))}
     allowed_target_texts = existing_texts | keyword_texts
@@ -6802,6 +7053,8 @@ def _normalize_ideation_keyword_operations(
             target = _normalize_ideation_keyword_text(
                 item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
             )
+            source = existing_text_lookup.get(source, source)
+            target = existing_text_lookup.get(target, target)
             if (
                 not source
                 or not target
@@ -6846,9 +7099,982 @@ def _normalize_ideation_keyword_operations(
     return merge_keywords, remove_keywords
 
 
+def _ideation_existing_keyword_text_lookup(existing_keywords: list[dict[str, Any]]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for item in existing_keywords:
+        text = _normalize_ideation_keyword_text(item.get("text"))
+        if not text:
+            continue
+        variants = [
+            text,
+            _normalize_ideation_keyword_text(item.get("canonical_label")),
+            *[
+                _normalize_ideation_keyword_text(value)
+                for value in (item.get("aliases") or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+        ]
+        for variant in variants:
+            if variant:
+                lookup.setdefault(variant, text)
+    return lookup
+
+
+def _normalize_ideation_keyword_rename_merges(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+    merge_keywords: list[dict[str, str]],
+    remove_keywords: list[str],
+) -> list[dict[str, str]]:
+    if not isinstance(parsed, dict):
+        return []
+
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
+    merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
+    remove_texts = {_safe_text(value) for value in remove_keywords if _safe_text(value)}
+    blocked_sources = merge_sources | remove_texts
+    seen_pairs = {
+        (_safe_text(item.get("source")), _safe_text(item.get("target")))
+        for item in merge_keywords
+        if _safe_text(item.get("source")) and _safe_text(item.get("target"))
+    }
+
+    raw_renames = (
+        parsed.get("rename_keywords")
+        or parsed.get("renames")
+        or parsed.get("rename")
+        or parsed.get("correct_keywords")
+        or []
+    )
+    rename_merges: list[dict[str, str]] = []
+    if not isinstance(raw_renames, list):
+        return []
+
+    for item in raw_renames:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_ideation_keyword_text(
+            item.get("source") or item.get("from") or item.get("source_text") or item.get("sourceText")
+        )
+        target = _normalize_ideation_keyword_text(
+            item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
+        )
+        source = existing_text_lookup.get(source, source)
+        target = existing_text_lookup.get(target, target)
+        pair = (source, target)
+        if (
+            not source
+            or not target
+            or source == target
+            or source not in existing_texts
+            or target not in existing_texts
+            or source in blocked_sources
+            or pair in seen_pairs
+        ):
+            continue
+        rename_merges.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": _truncate_text(_safe_text(item.get("reason")) or "rename target already exists", 120),
+            }
+        )
+        seen_pairs.add(pair)
+        if len(rename_merges) >= 8:
+            break
+    return rename_merges
+
+
+def _normalize_ideation_keyword_renames(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+    merge_keywords: list[dict[str, str]],
+    remove_keywords: list[str],
+) -> list[dict[str, str]]:
+    if not isinstance(parsed, dict):
+        return []
+
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
+    merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
+    remove_texts = {_safe_text(value) for value in remove_keywords if _safe_text(value)}
+    blocked_sources = merge_sources | merge_targets | remove_texts
+
+    raw_renames = (
+        parsed.get("rename_keywords")
+        or parsed.get("renames")
+        or parsed.get("rename")
+        or parsed.get("correct_keywords")
+        or []
+    )
+    rename_keywords: list[dict[str, str]] = []
+    seen_sources: set[str] = set()
+    seen_targets: set[str] = set()
+    if not isinstance(raw_renames, list):
+        return []
+
+    for item in raw_renames:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_ideation_keyword_text(
+            item.get("source") or item.get("from") or item.get("source_text") or item.get("sourceText")
+        )
+        target = _normalize_ideation_keyword_text(
+            item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
+        )
+        source = existing_text_lookup.get(source, source)
+        target = existing_text_lookup.get(target, target)
+        if (
+            not source
+            or not target
+            or source == target
+            or source not in existing_texts
+            or target in existing_texts
+            or source in blocked_sources
+            or source in seen_sources
+            or target in seen_targets
+        ):
+            continue
+        rename_keywords.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": _truncate_text(_safe_text(item.get("reason")), 120),
+            }
+        )
+        seen_sources.add(source)
+        seen_targets.add(target)
+        if len(rename_keywords) >= 10:
+            break
+
+    return rename_keywords
+
+
+def _demo_balance_primary_keywords_present(parsed: Any) -> bool:
+    return isinstance(parsed, dict) and any(
+        key in parsed
+        for key in (
+            "primary_keywords",
+            "primaryKeywords",
+            "important_keywords",
+            "importantKeywords",
+        )
+    )
+
+
+def _normalize_demo_balance_primary_keywords(parsed: Any, *, limit: int = 4) -> list[str]:
+    if not isinstance(parsed, dict):
+        return []
+    raw_items = (
+        parsed.get("primary_keywords")
+        if "primary_keywords" in parsed
+        else parsed.get("primaryKeywords")
+        if "primaryKeywords" in parsed
+        else parsed.get("important_keywords")
+        if "important_keywords" in parsed
+        else parsed.get("importantKeywords")
+        if "importantKeywords" in parsed
+        else []
+    )
+    if not isinstance(raw_items, list):
+        return []
+
+    texts: list[str] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            raw_text = (
+                item.get("text")
+                or item.get("keyword")
+                or item.get("label")
+                or item.get("canonical_label")
+                or item.get("canonicalLabel")
+            )
+        else:
+            raw_text = item
+        text = _normalize_ideation_keyword_text(raw_text)
+        if text:
+            texts.append(text)
+        if len(texts) >= limit:
+            break
+    return _dedup_preserve(texts, limit=limit)
+
+
+def _normalize_demo_balance_affinity_updates(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return []
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    raw_items = (
+        parsed.get("affinity_updates")
+        or parsed.get("affinityUpdates")
+        or parsed.get("move_keywords")
+        or parsed.get("moveKeywords")
+        or []
+    )
+    if not isinstance(raw_items, list):
+        return []
+    updates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        text = _normalize_ideation_keyword_text(
+            item.get("text") or item.get("source") or item.get("keyword") or item.get("label")
+        )
+        affinity = _safe_text(
+            item.get("choice_affinity")
+            or item.get("choiceAffinity")
+            or item.get("affinity")
+            or item.get("target")
+            or item.get("choice")
+        ).lower()
+        if affinity in {"option_a", "a_choice"}:
+            affinity = "a"
+        elif affinity in {"option_b", "b_choice"}:
+            affinity = "b"
+        if not text or text not in existing_texts or text in seen or affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        updates.append(
+            {
+                "text": text,
+                "choice_affinity": affinity,
+                "affinity_score": max(0.0, min(1.0, _safe_float(item.get("affinity_score") or item.get("affinityScore"), 0.86))),
+                "reason": _truncate_text(_safe_text(item.get("reason")), 120),
+            }
+        )
+        seen.add(text)
+        if len(updates) >= 12:
+            break
+    return updates
+
+
+def _apply_demo_balance_affinity_updates(
+    graph: dict[str, Any],
+    updates: list[dict[str, Any]],
+    cycle: int,
+) -> int:
+    if not updates:
+        return 0
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    changed = 0
+    for update in updates:
+        bubble = by_text.get(_ideation_bubble_text_key(update.get("text")))
+        if not bubble or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        affinity = _safe_text(update.get("choice_affinity")).lower()
+        if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        anchor_id = _demo_balance_anchor_id(affinity)
+        previous = (_safe_text(bubble.get("choice_affinity")), _safe_text(bubble.get("anchor_id")))
+        bubble["choice_affinity"] = affinity
+        bubble["anchor_id"] = anchor_id
+        bubble["affinity_score"] = max(0.0, min(1.0, _safe_float(update.get("affinity_score"), 0.86)))
+        bubble["needs_affinity_review"] = False
+        bubble["activity"] = max(_safe_float(bubble.get("activity"), 0.0), 0.58)
+        bubble["display_state"] = "active"
+        bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+        if update.get("reason"):
+            bubble["affinity_reason"] = _safe_text(update.get("reason"))
+        if previous != (_safe_text(bubble.get("choice_affinity")), _safe_text(bubble.get("anchor_id"))):
+            changed += 1
+    return changed
+
+
+def _current_ideation_primary_keyword_texts(graph: dict[str, Any], *, limit: int = 4) -> list[str]:
+    primary_texts = [
+        _normalize_ideation_keyword_text(bubble.get("label"))
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _safe_text(bubble.get("emphasis")) == "primary"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
+        and not bool(bubble.get("off_topic"))
+    ]
+    return _dedup_preserve([text for text in primary_texts if text], limit=limit)
+
+
+def _resolve_ideation_primary_keyword_ids(
+    graph: dict[str, Any],
+    primary_keywords: list[str],
+    *,
+    limit: int = 4,
+) -> set[str]:
+    if not primary_keywords:
+        return set()
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    primary_ids: list[str] = []
+    for text in primary_keywords:
+        bubble = by_text.get(_ideation_bubble_text_key(text))
+        if (
+            not bubble
+            or bool(bubble.get("off_topic"))
+            or not _is_ideation_bubble_visible_state(bubble.get("display_state"))
+        ):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id:
+            primary_ids.append(bubble_id)
+        if len(primary_ids) >= limit:
+            break
+    return set(_dedup_preserve(primary_ids, limit=limit))
+
+
+DEMO_LOCAL_FAST_FILLER_WORDS = {
+    "아니",
+    "근데",
+    "그쵸",
+    "그렇죠",
+    "맞죠",
+    "음",
+    "어",
+    "아",
+    "뭐",
+    "약간",
+    "완전",
+    "되게",
+    "너무",
+    "그런데",
+    "그냥",
+    "진짜",
+    "때문",
+    "때문에",
+}
+DEMO_LOCAL_FAST_ONE_CHAR_NOUN_ALLOWLIST = _IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST
+DEMO_LOCAL_FAST_HONORIFICS = ("씨", "님", "선생님", "교수님", "박사님")
+DEMO_LOCAL_FAST_NOUN_TAG_PREFIXES = ("N", "SL", "SN")
+DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT = 24
+_HANGUL_CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+_HANGUL_JUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+_HANGUL_JONG = ("", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ", "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
+
+
+def _get_local_kiwi_extractor() -> tuple[Any, str]:
+    global _LOCAL_KIWI_EXTRACTOR
+    global _LOCAL_KIWI_EXTRACTOR_ATTEMPTED
+    global _LOCAL_KIWI_WARNING_LOGGED
+    if _LOCAL_KIWI_EXTRACTOR_ATTEMPTED:
+        return _LOCAL_KIWI_EXTRACTOR, "kiwi" if _LOCAL_KIWI_EXTRACTOR is not None else "regex_fallback"
+    with _LOCAL_KIWI_EXTRACTOR_LOCK:
+        if not _LOCAL_KIWI_EXTRACTOR_ATTEMPTED:
+            _LOCAL_KIWI_EXTRACTOR_ATTEMPTED = True
+            try:
+                from kiwipiepy import Kiwi  # type: ignore
+
+                _LOCAL_KIWI_EXTRACTOR = Kiwi()
+            except Exception as exc:
+                _LOCAL_KIWI_EXTRACTOR = None
+                if not _LOCAL_KIWI_WARNING_LOGGED:
+                    _LOCAL_KIWI_WARNING_LOGGED = True
+                    print(
+                        "[local fast keyword extractor] Kiwi unavailable; using regex fallback",
+                        {"error_type": type(exc).__name__, "error": repr(exc)[:240]},
+                        flush=True,
+                    )
+    return _LOCAL_KIWI_EXTRACTOR, "kiwi" if _LOCAL_KIWI_EXTRACTOR is not None else "regex_fallback"
+
+
+def _normalize_demo_local_fast_keyword_text(raw: Any, *, allow_single: bool = False) -> str:
+    text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
+    text = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", text)
+    if not text or len(text) > 28:
+        return ""
+    if len(text) < 2 and not (allow_single and text in DEMO_LOCAL_FAST_ONE_CHAR_NOUN_ALLOWLIST):
+        return ""
+    if re.fullmatch(r"[ABab]", text):
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return ""
+    lowered = text.lower()
+    if lowered in DEMO_LOCAL_FAST_FILLER_WORDS:
+        return ""
+    if any(lowered.endswith(suffix) for suffix in DEMO_LOCAL_FAST_HONORIFICS):
+        return ""
+    if any(pattern.search(lowered) for pattern in _IDEATION_KEYWORD_NON_NOUN_PATTERNS):
+        return ""
+    if re.search(r"[가-힣][a-z0-9+#._-]+", text, flags=re.IGNORECASE):
+        return ""
+    return lowered if re.fullmatch(r"[A-Za-z0-9+#._ -]+", text) else text
+
+
+def _demo_local_fast_clean_token(raw: Any, *, allow_single: bool = False) -> str:
+    return _normalize_demo_local_fast_keyword_text(raw, allow_single=allow_single)
+
+
+def _demo_local_fast_is_noun_token(token: Any) -> bool:
+    form = _safe_text(getattr(token, "form", ""))
+    tag = _safe_text(getattr(token, "tag", "")).upper()
+    if not form or not tag:
+        return False
+    if tag == "SN" and re.fullmatch(r"\d+(?:\.\d+)?", form):
+        return False
+    return tag.startswith(DEMO_LOCAL_FAST_NOUN_TAG_PREFIXES)
+
+
+def _demo_local_fast_safe_int(raw: Any, fallback: int = -1) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _demo_local_fast_make_token(raw: Any, tag: Any = "", start: Any = -1, end: Any = -1) -> dict[str, Any] | None:
+    cleaned = _demo_local_fast_clean_token(raw, allow_single=True)
+    if not cleaned:
+        return None
+    token_start = _demo_local_fast_safe_int(start, -1)
+    token_end = _demo_local_fast_safe_int(end, -1)
+    return {
+        "text": cleaned,
+        "tag": _safe_text(tag),
+        "start": token_start,
+        "end": token_end if token_end >= token_start else -1,
+    }
+
+
+def _demo_local_fast_tokenize_nouns(text: str) -> tuple[list[dict[str, Any]], str]:
+    extractor, route = _get_local_kiwi_extractor()
+    if extractor is not None:
+        try:
+            tokens = extractor.tokenize(text)
+            local_tokens: list[dict[str, Any]] = []
+            for token in tokens:
+                if not _demo_local_fast_is_noun_token(token):
+                    continue
+                token_start = _demo_local_fast_safe_int(getattr(token, "start", -1), -1)
+                token_len = _demo_local_fast_safe_int(getattr(token, "len", getattr(token, "length", 0)), 0)
+                token_end = token_start + token_len if token_start >= 0 and token_len > 0 else -1
+                local_token = _demo_local_fast_make_token(
+                    getattr(token, "form", ""),
+                    getattr(token, "tag", ""),
+                    token_start,
+                    token_end,
+                )
+                if local_token:
+                    local_tokens.append(local_token)
+            return local_tokens, route
+        except Exception as exc:
+            print(
+                "[local fast keyword extractor] Kiwi tokenize failed; using regex fallback",
+                {"error_type": type(exc).__name__, "error": repr(exc)[:240]},
+                flush=True,
+            )
+
+    local_tokens = []
+    for match in re.finditer(r"[가-힣A-Za-z][가-힣A-Za-z0-9+#._-]*", text):
+        local_token = _demo_local_fast_make_token(match.group(0), "REGEX", match.start(), match.end())
+        if local_token:
+            local_tokens.append(local_token)
+    return local_tokens, "regex_fallback"
+
+
+def _demo_local_fast_token_debug(token: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "text": _safe_text(token.get("text")),
+        "tag": _safe_text(token.get("tag")),
+        "start": _demo_local_fast_safe_int(token.get("start"), -1),
+        "end": _demo_local_fast_safe_int(token.get("end"), -1),
+    }
+
+
+def _demo_local_fast_normalize_for_compact_match(raw: str) -> str:
+    return re.sub(r"[\s+/·._-]+", "", raw.lower())
+
+
+def _demo_local_fast_phrase_from_adjacent_tokens(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    raw_text: str,
+) -> tuple[str, str]:
+    left_text = _safe_text(left.get("text"))
+    right_text = _safe_text(right.get("text"))
+    if not left_text or not right_text:
+        return "", "empty"
+    left_key = _ideation_bubble_text_key(left_text)
+    right_key = _ideation_bubble_text_key(right_text)
+    if left_key == right_key:
+        return "", "repeat"
+    if left_key in right_key or right_key in left_key:
+        return "", "contained"
+    left_jamo = _demo_local_fast_jamo_key(left_text)
+    right_jamo = _demo_local_fast_jamo_key(right_text)
+    if left_jamo and right_jamo and _demo_local_fast_edit_similarity(left_jamo, right_jamo) >= 0.9:
+        return "", "same_sound"
+
+    span_verified = False
+    left_end = _demo_local_fast_safe_int(left.get("end"), -1)
+    right_start = _demo_local_fast_safe_int(right.get("start"), -1)
+    if 0 <= left_end <= right_start <= len(raw_text):
+        gap = raw_text[left_end:right_start]
+        span_verified = bool(re.fullmatch(r"[\s+/·._-]*", gap))
+
+    lowered_raw = raw_text.lower()
+    spaced_phrase = f"{left_text} {right_text}".lower()
+    compact_phrase = f"{left_text}{right_text}".lower()
+    text_verified = spaced_phrase in re.sub(r"\s+", " ", lowered_raw)
+    compact_verified = _demo_local_fast_normalize_for_compact_match(compact_phrase) in _demo_local_fast_normalize_for_compact_match(lowered_raw)
+    if not (span_verified or text_verified or compact_verified):
+        return "", "not_in_source"
+
+    phrase = _demo_local_fast_clean_token(f"{left_text} {right_text}")
+    if not phrase:
+        return "", "cleaned_empty"
+    return phrase, ""
+
+
+def _demo_local_fast_count_text_mentions(text: str, rows: list[dict[str, str]]) -> int:
+    normalized = _safe_text(text).lower()
+    if not normalized:
+        return 0
+    mention_count = 0
+    compact_candidate = _demo_local_fast_normalize_for_compact_match(normalized)
+    for row in rows:
+        row_text = _strip_leading_timestamp(row.get("text")).lower()
+        if not row_text:
+            continue
+        row_mentions = row_text.count(normalized)
+        if " " in normalized and compact_candidate:
+            compact_row = _demo_local_fast_normalize_for_compact_match(row_text)
+            row_mentions = max(row_mentions, compact_row.count(compact_candidate))
+        mention_count += row_mentions
+    return mention_count
+
+
+def _demo_local_fast_jamo_key(raw: Any) -> str:
+    text = _normalize_demo_local_fast_keyword_text(raw, allow_single=True)
+    parts: list[str] = []
+    for char in text:
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            value = code - 0xAC00
+            cho = value // 588
+            jung = (value % 588) // 28
+            jong = value % 28
+            parts.append(_HANGUL_CHO[cho])
+            parts.append(_HANGUL_JUNG[jung])
+            if _HANGUL_JONG[jong]:
+                parts.append(_HANGUL_JONG[jong])
+        elif char.isalnum():
+            parts.append(char.lower())
+    return "".join(parts)
+
+
+def _demo_local_fast_edit_similarity(left: str, right: str) -> float:
+    if left == right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            replace_cost = 0 if left_char == right_char else 1
+            current.append(
+                min(
+                    previous[right_index] + 1,
+                    current[right_index - 1] + 1,
+                    previous[right_index - 1] + replace_cost,
+                )
+            )
+        previous = current
+    distance = previous[-1]
+    return max(0.0, 1.0 - distance / max(len(left), len(right)))
+
+
+def _demo_local_fast_context_text(payload: IdeationKeywordExtractInput) -> str:
+    return " ".join(
+        [
+            _safe_text(payload.meeting_topic),
+            _safe_text(payload.meeting_goal),
+            _safe_text(payload.meeting_goal_context),
+            _safe_text((payload.demo_config or {}).get("option_a")),
+            _safe_text((payload.demo_config or {}).get("option_a_keyword")),
+            _safe_text((payload.demo_config or {}).get("option_b")),
+            _safe_text((payload.demo_config or {}).get("option_b_keyword")),
+            _safe_text(payload.context_cache),
+        ]
+    ).lower()
+
+
+def _demo_local_fast_existing_text_lookup(
+    existing_rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    canonical_texts: set[str] = set()
+    for item in existing_rows:
+        label = _normalize_demo_local_fast_keyword_text(item.get("text"), allow_single=True)
+        canonical = _normalize_demo_local_fast_keyword_text(item.get("canonical_label"), allow_single=True) or label
+        if not label:
+            continue
+        canonical_texts.add(canonical or label)
+        for value in [label, canonical, *(item.get("aliases") or [])]:
+            normalized = _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+            if normalized:
+                lookup.setdefault(_ideation_bubble_text_key(normalized), item)
+    return lookup, canonical_texts
+
+
+def _demo_local_fast_canonicalize_candidate(
+    text: str,
+    existing_rows: list[dict[str, Any]],
+    existing_lookup: dict[str, dict[str, Any]],
+    context_text: str,
+) -> tuple[str, str, str, float]:
+    normalized = _normalize_demo_local_fast_keyword_text(text, allow_single=True)
+    if not normalized:
+        return "", "", "", 0.0
+
+    exact = existing_lookup.get(_ideation_bubble_text_key(normalized))
+    if exact:
+        canonical = _normalize_demo_local_fast_keyword_text(exact.get("canonical_label"), allow_single=True) or _normalize_demo_local_fast_keyword_text(exact.get("text"), allow_single=True)
+        return canonical or normalized, normalized if normalized != canonical else "", "exact_or_alias", 1.0
+
+    if not re.fullmatch(r"[가-힣 ]{2,12}", normalized):
+        return normalized, "", "", 0.0
+
+    normalized_jamo = _demo_local_fast_jamo_key(normalized)
+    if len(normalized_jamo) < 4:
+        return normalized, "", "", 0.0
+
+    best_target = ""
+    best_similarity = 0.0
+    for item in existing_rows:
+        if bool(item.get("off_topic")):
+            continue
+        label = _normalize_demo_local_fast_keyword_text(item.get("text"), allow_single=True)
+        canonical = _normalize_demo_local_fast_keyword_text(item.get("canonical_label"), allow_single=True) or label
+        if not canonical or canonical == normalized:
+            continue
+        if not re.fullmatch(r"[가-힣 ]{2,12}", canonical):
+            continue
+        canonical_jamo = _demo_local_fast_jamo_key(canonical)
+        if not canonical_jamo:
+            continue
+        similarity = _demo_local_fast_edit_similarity(normalized_jamo, canonical_jamo)
+        short_variant = (
+            len(normalized.replace(" ", "")) <= 3
+            and len(canonical.replace(" ", "")) <= 3
+            and _safe_nonnegative_int(item.get("count"), 0) >= 1
+        )
+        if similarity >= 0.94 or (short_variant and similarity >= 0.9):
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_target = canonical
+
+    if best_target:
+        return best_target, normalized, "jamo_similarity", best_similarity
+    return normalized, "", "", 0.0
+
+
+def _demo_local_fast_keyword_score(
+    text: str,
+    rows: list[dict[str, str]],
+    payload: IdeationKeywordExtractInput,
+    existing_texts: set[str],
+    *,
+    is_phrase: bool = False,
+) -> tuple[float, float, dict[str, Any]]:
+    topic_context = _demo_local_fast_context_text(payload)
+    lower_text = text.lower()
+    row_mentions = _demo_local_fast_count_text_mentions(text, rows)
+    context_bonus = 0.16 if lower_text in topic_context else 0.0
+    existing_bonus = 0.1 if text in existing_texts else 0.0
+    length_adjustment = -0.04 if is_phrase else 0.03
+    importance = min(0.92, 0.54 + row_mentions * 0.08 + context_bonus + existing_bonus + length_adjustment)
+    relevance = min(1.0, 0.64 + context_bonus * 1.4 + existing_bonus + min(0.18, row_mentions * 0.04))
+    return importance, relevance, {
+        "row_mentions": row_mentions,
+        "context_match": context_bonus > 0,
+        "existing_match": existing_bonus > 0,
+        "is_phrase": is_phrase,
+    }
+
+
+def _demo_balance_keyword_affinity(
+    text: str,
+    rows: list[dict[str, str]],
+    demo_config: dict[str, Any],
+) -> tuple[str, float, bool]:
+    candidate = _safe_text(text).lower()
+    combined_rows = " ".join(_safe_text(row.get("text")) for row in rows).lower()
+    explicit_choice = _demo_balance_choice_local(combined_rows, demo_config)
+    scores = {"a": 0.0, "b": 0.0}
+
+    if explicit_choice in scores:
+        scores[explicit_choice] += 0.5
+
+    for choice, option_key, keyword_key in (
+        ("a", "option_a", "option_a_keyword"),
+        ("b", "option_b", "option_b_keyword"),
+    ):
+        option = _safe_text(demo_config.get(option_key)).lower()
+        keyword = _safe_text(demo_config.get(keyword_key) or demo_config.get(option_key)).lower()
+        for value, weight in ((keyword, 0.42), (option, 0.24)):
+            value = value.strip()
+            if not value:
+                continue
+            if value in candidate or candidate in value:
+                scores[choice] += weight
+            if value in combined_rows:
+                scores[choice] += weight * 0.62
+
+    winner = "a" if scores["a"] >= scores["b"] else "b"
+    loser = "b" if winner == "a" else "a"
+    needs_review = scores[winner] < 0.28 or scores[winner] - scores[loser] < 0.12
+    return winner, max(0.0, min(1.0, scores[winner])), needs_review
+
+
+def _extract_demo_local_fast_keywords(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+    *,
+    max_keywords: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    existing_rows = _ideation_existing_keyword_rows(payload)
+    existing_lookup, canonical_texts = _demo_local_fast_existing_text_lookup(existing_rows)
+    existing_texts = {
+        _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+        for item in existing_rows
+        for value in [_safe_text(item.get("text")), _safe_text(item.get("canonical_label")), *[_safe_text(alias) for alias in (item.get("aliases") or [])]]
+        if _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+    }
+    context_text = _demo_local_fast_context_text(payload)
+    counts: Counter[str] = Counter()
+    evidence_by_text: dict[str, set[str]] = {}
+    aliases_by_text: dict[str, set[str]] = {}
+    candidate_meta_by_text: dict[str, dict[str, bool]] = {}
+    raw_noun_count = 0
+    local_candidate_count = 0
+    single_candidate_texts: list[str] = []
+    phrase_candidate_texts: list[str] = []
+    raw_token_debug: list[dict[str, Any]] = []
+    rejected_phrase_count = 0
+    rejected_repeat_count = 0
+    dropped_low_support_count = 0
+    canonicalized_count = 0
+    alias_merge_count = 0
+    routes: Counter[str] = Counter()
+
+    for row in rows:
+        row_id = _safe_text(row.get("id"))
+        text = _strip_leading_timestamp(row.get("text"))
+        noun_tokens, route = _demo_local_fast_tokenize_nouns(text)
+        routes[route] += 1
+        raw_noun_count += len(noun_tokens)
+        raw_token_debug.extend(_demo_local_fast_token_debug(token) for token in noun_tokens)
+        local_candidates: list[tuple[str, bool]] = []
+        for token in noun_tokens:
+            noun = _safe_text(token.get("text"))
+            if noun:
+                local_candidates.append((noun, False))
+                single_candidate_texts.append(noun)
+        for left, right in zip(noun_tokens, noun_tokens[1:]):
+            phrase, rejection_reason = _demo_local_fast_phrase_from_adjacent_tokens(left, right, text)
+            if phrase:
+                local_candidates.append((phrase, True))
+                phrase_candidate_texts.append(phrase)
+            else:
+                rejected_phrase_count += 1
+                if rejection_reason in {"repeat", "contained", "same_sound"}:
+                    rejected_repeat_count += 1
+        local_candidate_count += len(local_candidates)
+        seen_row_candidate_keys: set[str] = set()
+        for value, is_phrase in local_candidates[:24]:
+            candidate_key = _ideation_bubble_text_key(value)
+            if not candidate_key:
+                continue
+            if candidate_key in seen_row_candidate_keys and is_phrase:
+                continue
+            if candidate_key not in seen_row_candidate_keys:
+                seen_row_candidate_keys.add(candidate_key)
+            canonical, alias_source, canonical_reason, similarity = _demo_local_fast_canonicalize_candidate(
+                value,
+                existing_rows,
+                existing_lookup,
+                context_text,
+            )
+            if not canonical:
+                continue
+            counts[canonical] += 1
+            if row_id:
+                evidence_by_text.setdefault(canonical, set()).add(row_id)
+            if alias_source and alias_source != canonical:
+                aliases_by_text.setdefault(canonical, set()).add(alias_source)
+                alias_merge_count += 1
+                if canonical_reason == "jamo_similarity" and similarity > 0:
+                    canonicalized_count += 1
+            meta = candidate_meta_by_text.setdefault(
+                canonical,
+                {"single": False, "phrase": False, "verified_phrase": False},
+            )
+            if is_phrase:
+                meta["phrase"] = True
+                meta["verified_phrase"] = True
+            else:
+                meta["single"] = True
+
+    candidates: list[dict[str, Any]] = []
+    for text, count in counts.items():
+        if not text:
+            continue
+        meta = candidate_meta_by_text.get(text) or {}
+        word_count = len(text.split())
+        is_phrase = bool(meta.get("phrase")) or word_count > 1
+        verified_phrase = bool(meta.get("verified_phrase")) and is_phrase
+        importance, relevance, score_features = _demo_local_fast_keyword_score(
+            text,
+            rows,
+            payload,
+            existing_texts,
+            is_phrase=is_phrase,
+        )
+        word_count = len(text.split())
+        support_count = len(evidence_by_text.get(text) or [])
+        row_mentions = _safe_nonnegative_int(score_features.get("row_mentions"), 0)
+        context_match = bool(score_features.get("context_match"))
+        existing_match = text in canonical_texts or bool(score_features.get("existing_match"))
+        alias_match = bool(aliases_by_text.get(text))
+        single_candidate = word_count == 1 and not is_phrase
+        concise_phrase = 1 <= word_count <= 2
+        phrase_compact_length = len(text.replace(" ", ""))
+        one_off_single_allowed = single_candidate
+        one_off_phrase_allowed = (
+            verified_phrase
+            and concise_phrase
+            and phrase_compact_length >= 4
+        )
+        if not (
+            existing_match
+            or alias_match
+            or (context_match and (single_candidate or verified_phrase))
+            or one_off_single_allowed
+            or one_off_phrase_allowed
+        ):
+            dropped_low_support_count += 1
+            continue
+        score = (
+            support_count * 1.18
+            + count * 0.64
+            + row_mentions * 0.32
+            + importance * 0.72
+            + relevance * 0.5
+            + (1.2 if existing_match else 0.0)
+            + (0.95 if alias_match else 0.0)
+            + (0.78 if context_match else 0.0)
+            + (1.6 if one_off_phrase_allowed else 0.0)
+            + (-0.28 if is_phrase else 0.16)
+        )
+        candidates.append(
+            {
+                "text": text,
+                "count": max(1, count),
+                "support_count": support_count,
+                "kind": "topic",
+                "importance": importance,
+                "relevance": relevance,
+                "off_topic": False,
+                "off_topic_reason": "",
+                "anchor": "",
+                "related": [],
+                "alias_sources": sorted(aliases_by_text.get(text) or []),
+                "canonicalized": alias_match,
+                "source_kind": "phrase" if is_phrase else "single",
+                "_score": score,
+            }
+        )
+
+        choice_affinity, affinity_score, needs_affinity_review = _demo_balance_keyword_affinity(text, rows, payload.demo_config or {})
+        candidates[-1]["choice_affinity"] = choice_affinity
+        candidates[-1]["affinity_score"] = affinity_score
+        candidates[-1]["needs_affinity_review"] = needs_affinity_review
+        candidates[-1]["anchor_id"] = _demo_balance_anchor_id(choice_affinity)
+
+    candidates.sort(key=lambda item: (-_safe_float(item.get("_score"), 0.0), _safe_text(item.get("text"))))
+    top_candidate_debug = [
+        {
+            "text": _safe_text(item.get("text")),
+            "score": round(_safe_float(item.get("_score"), 0.0), 4),
+            "count": _safe_nonnegative_int(item.get("count"), 0),
+            "support_count": _safe_nonnegative_int(item.get("support_count"), 0),
+            "source_kind": _safe_text(item.get("source_kind")),
+            "choice_affinity": _safe_text(item.get("choice_affinity")),
+            "affinity_score": round(_safe_float(item.get("affinity_score"), 0.0), 4),
+            "needs_affinity_review": bool(item.get("needs_affinity_review")),
+            "alias_sources": [_safe_text(value) for value in (item.get("alias_sources") or [])[:5]],
+            "canonicalized": bool(item.get("canonicalized")),
+        }
+        for item in candidates[:16]
+    ]
+    selected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    seen_jamo_keys: list[str] = []
+    for candidate in candidates:
+        text = _safe_text(candidate.get("text"))
+        text_key = _ideation_bubble_text_key(text)
+        if not text_key or text_key in seen_keys:
+            continue
+        # Prefer concise phrases; if a selected longer phrase already contains the token, skip the weaker duplicate.
+        if any(text_key in _ideation_bubble_text_key(item.get("text")) or _ideation_bubble_text_key(item.get("text")) in text_key for item in selected):
+            if text not in existing_texts:
+                continue
+        text_jamo = _demo_local_fast_jamo_key(text)
+        if text_jamo and any(_demo_local_fast_edit_similarity(text_jamo, seen_jamo) >= 0.92 for seen_jamo in seen_jamo_keys):
+            if text not in existing_texts:
+                continue
+        candidate.pop("_score", None)
+        selected.append(candidate)
+        seen_keys.add(text_key)
+        if text_jamo:
+            seen_jamo_keys.append(text_jamo)
+        if len(selected) >= max_keywords:
+            break
+
+    route_name = "kiwi" if routes.get("kiwi") else "regex_fallback"
+    diagnostics = {
+        "stage": "canvas_ideation_bubble_graph_local_fast",
+        "extractor": route_name,
+        "input_rows": len(rows),
+        "raw_tokens": raw_token_debug[:DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT],
+        "single_candidates": _dedup_preserve(single_candidate_texts, limit=DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT),
+        "phrase_candidates": _dedup_preserve(phrase_candidate_texts, limit=DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT),
+        "raw_noun_count": raw_noun_count,
+        "local_candidate_count": local_candidate_count,
+        "counted_candidate_count": len(counts),
+        "candidate_count": len(candidates),
+        "selected_count": len(selected),
+        "accepted_count": len(selected),
+        "top_candidates": top_candidate_debug,
+        "selected_keywords": [
+            {
+                "text": _safe_text(item.get("text")),
+                "count": _safe_nonnegative_int(item.get("count"), 0),
+                "support_count": _safe_nonnegative_int(item.get("support_count"), 0),
+                "source_kind": _safe_text(item.get("source_kind")),
+                "choice_affinity": _safe_text(item.get("choice_affinity")),
+                "affinity_score": round(_safe_float(item.get("affinity_score"), 0.0), 4),
+                "needs_affinity_review": bool(item.get("needs_affinity_review")),
+                "alias_sources": [_safe_text(value) for value in (item.get("alias_sources") or [])[:5]],
+                "canonicalized": bool(item.get("canonicalized")),
+            }
+            for item in selected
+        ],
+        "rejected_phrase_count": rejected_phrase_count,
+        "rejected_repeat_count": rejected_repeat_count,
+        "dropped_low_support_count": dropped_low_support_count,
+        "kiwi_available": route_name == "kiwi",
+        "alias_merge_count": alias_merge_count,
+        "canonicalized_count": canonicalized_count,
+    }
+    return selected, diagnostics
+
+
 IDEATION_BUBBLE_GRAPH_VERSION = 2
 IDEATION_BUBBLE_GRAPH_LAYOUT_MODE = "orbit"
 IDEATION_BUBBLE_GRAPH_MAX_BUBBLES = 80
+DEMO_BALANCE_BUBBLE_GRAPH_VISIBLE_CAP = 24
 IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT = 2000
 IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 5
 IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES = 3
@@ -6866,6 +8092,13 @@ IDEATION_BUBBLE_GRAPH_CORE_CLUSTER_MOVE_LIMIT = 68
 IDEATION_BUBBLE_GRAPH_DEFAULT_CLUSTER_MOVE_LIMIT = 118
 IDEATION_BUBBLE_GRAPH_PERIPHERAL_CLUSTER_MOVE_LIMIT = 152
 IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS = 3
+DEMO_BALANCE_ANCHOR_A_ID = "demo-balance-anchor-a"
+DEMO_BALANCE_ANCHOR_B_ID = "demo-balance-anchor-b"
+DEMO_BALANCE_ANCHOR_NEUTRAL_ID = "demo-balance-anchor-neutral"
+DEMO_BALANCE_NEUTRAL_LABEL = "미분류"
+DEMO_BALANCE_AFFINITIES = {"a", "b", "neutral"}
+DEMO_BALANCE_DISPLAY_AFFINITIES = {"a", "b"}
+DEMO_BALANCE_MIN_VISIBLE_PER_SIDE = 4
 
 
 def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
@@ -6874,6 +8107,7 @@ def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
         "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": 0,
         "layout_revision": 0,
+        "layout_overlap_resolved_count": 0,
         "clusters": [],
         "bubbles": [],
         "processed_utterance_ids": [],
@@ -6883,12 +8117,16 @@ def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
 
 def _normalize_ideation_bubble_state(raw: Any) -> str:
     state = _safe_text(raw, "active").lower()
-    return state if state in {"active", "dimmed", "archived"} else "active"
+    return state if state in {"active", "dimmed", "exiting", "archived"} else "active"
 
 
 def _normalize_ideation_bubble_layout_zone(raw: Any) -> str:
     zone = _safe_text(raw, "default").lower()
     return zone if zone in {"core", "default", "peripheral", "archived"} else "default"
+
+
+def _is_ideation_bubble_visible_state(raw: Any) -> bool:
+    return _normalize_ideation_bubble_state(raw) in {"active", "dimmed"}
 
 
 def _normalize_ideation_bubble_role(raw: Any) -> str:
@@ -6956,6 +8194,11 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
         display_state = _normalize_ideation_bubble_state(
             item.get("display_state") or item.get("displayState") or item.get("state")
         )
+        choice_affinity = _safe_text(item.get("choice_affinity") or item.get("choiceAffinity")).lower()
+        if choice_affinity not in DEMO_BALANCE_AFFINITIES:
+            choice_affinity = ""
+        affinity_score = max(0.0, min(1.0, _safe_float(item.get("affinity_score") or item.get("affinityScore"), 0.0)))
+        needs_affinity_review = bool(item.get("needs_affinity_review") or item.get("needsAffinityReview"))
         missing_cycles = _safe_nonnegative_int(
             item.get("missing_cycles") or item.get("missingCycles"),
             0,
@@ -6972,6 +8215,10 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
             {
                 "id": bubble_id,
                 "label": label,
+                "canonical_label": _normalize_ideation_keyword_text(
+                    item.get("canonical_label") or item.get("canonicalLabel")
+                )
+                or label,
                 "aliases": aliases,
                 "kind": kind,
                 "count": count,
@@ -6999,6 +8246,10 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 ),
                 "missing_cycles": missing_cycles,
                 "anchor_id": _safe_text(item.get("anchor_id") or item.get("anchorId")),
+                "choice_affinity": choice_affinity,
+                "affinity_score": affinity_score,
+                "needs_affinity_review": needs_affinity_review,
+                "durable": bool(item.get("durable")),
                 "related_ids": _dedup_preserve(
                     [
                         _safe_text(value)
@@ -7021,6 +8272,7 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "off_topic": off_topic,
                 "off_topic_reason": _safe_text(item.get("off_topic_reason") or item.get("offTopicReason")),
                 "archive_reason": _safe_text(item.get("archive_reason") or item.get("archiveReason")),
+                "lifecycle_state": _safe_text(item.get("lifecycle_state") or item.get("lifecycleState") or "active"),
             }
         )
         if len(bubbles) >= IDEATION_BUBBLE_GRAPH_MAX_BUBBLES:
@@ -7088,6 +8340,10 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "radius": _safe_float(raw_radius, 0.0) if raw_radius is not None else None,
                 "rings": rings,
                 "zone": _normalize_ideation_bubble_layout_zone(item.get("zone")),
+                "overlap_resolved_count": _safe_nonnegative_int(
+                    item.get("overlap_resolved_count") or item.get("overlapResolvedCount"),
+                    0,
+                ),
                 "bubble_ids": cluster_bubble_ids,
             }
         )
@@ -7105,11 +8361,214 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
         "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": _safe_nonnegative_int(raw.get("update_cycle") or raw.get("updateCycle"), 0),
         "layout_revision": _safe_nonnegative_int(raw.get("layout_revision") or raw.get("layoutRevision"), 0),
+        "layout_overlap_resolved_count": _safe_nonnegative_int(
+            raw.get("layout_overlap_resolved_count") or raw.get("layoutOverlapResolvedCount"),
+            0,
+        ),
         "clusters": clusters,
         "bubbles": bubbles,
         "processed_utterance_ids": processed_ids,
         "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
     }
+
+
+def _demo_balance_anchor_id(choice: str) -> str:
+    normalized = _safe_text(choice).lower()
+    if normalized == "a":
+        return DEMO_BALANCE_ANCHOR_A_ID
+    if normalized == "b":
+        return DEMO_BALANCE_ANCHOR_B_ID
+    return DEMO_BALANCE_ANCHOR_A_ID
+
+
+def _demo_balance_anchor_ids() -> set[str]:
+    return {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID, DEMO_BALANCE_ANCHOR_NEUTRAL_ID}
+
+
+def _demo_balance_visible_anchor_ids() -> set[str]:
+    return {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+
+
+def _is_demo_balance_anchor_bubble(bubble: dict[str, Any]) -> bool:
+    return _safe_text(bubble.get("id")) in _demo_balance_anchor_ids() or bool(bubble.get("durable"))
+
+
+def _is_demo_balance_visible_anchor_bubble(bubble: dict[str, Any]) -> bool:
+    return _safe_text(bubble.get("id")) in _demo_balance_visible_anchor_ids()
+
+
+def _demo_balance_anchor_label(choice: str, demo_config: dict[str, Any]) -> str:
+    normalized = _safe_text(choice).lower()
+    if normalized == "a":
+        return _normalize_ideation_keyword_text(demo_config.get("option_a_keyword") or demo_config.get("option_a")) or "A"
+    if normalized == "b":
+        return _normalize_ideation_keyword_text(demo_config.get("option_b_keyword") or demo_config.get("option_b")) or "B"
+    return DEMO_BALANCE_NEUTRAL_LABEL
+
+
+def _demo_balance_primary_anchor_texts(demo_config: dict[str, Any]) -> list[str]:
+    return _dedup_preserve(
+        [
+            _demo_balance_anchor_label("a", demo_config),
+            _demo_balance_anchor_label("b", demo_config),
+        ],
+        limit=2,
+    )
+
+
+def _ensure_demo_balance_anchor_bubbles(graph: dict[str, Any], demo_config: dict[str, Any]) -> bool:
+    if not _is_demo_balance_config(demo_config):
+        return False
+
+    changed = False
+    now = _now_ts()
+    existing_by_id = {
+        _safe_text(bubble.get("id")): bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+    }
+
+    before_count = len(graph.get("bubbles") or [])
+    graph["bubbles"] = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if not (
+            isinstance(bubble, dict)
+            and (
+                _safe_text(bubble.get("id")) == DEMO_BALANCE_ANCHOR_NEUTRAL_ID
+                or _safe_text(bubble.get("label")) == DEMO_BALANCE_NEUTRAL_LABEL
+            )
+        )
+    ]
+    if len(graph.get("bubbles") or []) != before_count:
+        changed = True
+
+    anchor_specs = [
+        ("a", DEMO_BALANCE_ANCHOR_A_ID, _demo_balance_anchor_label("a", demo_config), "primary", 7, 0.94),
+        ("b", DEMO_BALANCE_ANCHOR_B_ID, _demo_balance_anchor_label("b", demo_config), "primary", 7, 0.94),
+    ]
+    for choice, bubble_id, label, emphasis, count, importance in anchor_specs:
+        label = _normalize_ideation_keyword_text(label)
+        if not label:
+            continue
+        bubble = existing_by_id.get(bubble_id)
+        if bubble is None:
+            bubble = {
+                "id": bubble_id,
+                "label": label,
+                "canonical_label": label,
+                "aliases": [],
+                "kind": "topic",
+                "count": count,
+                "importance": importance,
+                "relevance": 1.0,
+                "activity": 1.0,
+                "opacity": 1.0,
+                "emphasis": emphasis,
+                "display_state": "active",
+                "layout_zone": "core",
+                "missing_cycles": 0,
+                "anchor_id": "",
+                "choice_affinity": choice,
+                "affinity_score": 1.0,
+                "durable": True,
+                "related_ids": [],
+                "evidence_utterance_ids": [],
+                "first_seen_at": now,
+                "last_seen_at": now,
+                "last_seen_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
+                "off_topic": False,
+                "off_topic_reason": "",
+                "archive_reason": "",
+                "lifecycle_state": "active",
+                "role": "center",
+            }
+            graph.setdefault("bubbles", []).append(bubble)
+            existing_by_id[bubble_id] = bubble
+            changed = True
+        if _safe_text(bubble.get("label")) != label or _safe_text(bubble.get("canonical_label")) != label:
+            previous_label = _safe_text(bubble.get("label"))
+            aliases = _dedup_preserve([*(bubble.get("aliases") or []), previous_label], limit=20)
+            bubble["label"] = label
+            bubble["canonical_label"] = label
+            bubble["aliases"] = [value for value in aliases if value and value != label]
+            changed = True
+        desired_emphasis = "primary"
+        for key, value in {
+            "kind": "topic",
+            "display_state": "active",
+            "off_topic": False,
+            "off_topic_reason": "",
+            "archive_reason": "",
+            "lifecycle_state": "active",
+            "choice_affinity": choice,
+            "affinity_score": 1.0,
+            "durable": True,
+            "emphasis": desired_emphasis,
+        }.items():
+            if bubble.get(key) != value:
+                bubble[key] = value
+                changed = True
+        bubble["count"] = max(count, _safe_nonnegative_int(bubble.get("count"), count))
+        bubble["importance"] = max(importance, _safe_float(bubble.get("importance"), importance))
+        bubble["relevance"] = max(0.9, _safe_float(bubble.get("relevance"), 1.0))
+        bubble["activity"] = max(1.0, _safe_float(bubble.get("activity"), 0.0))
+
+    changed = _normalize_demo_balance_graph_affinities(graph) or changed
+
+    return changed
+
+
+def _normalize_demo_balance_graph_affinities(graph: dict[str, Any]) -> bool:
+    changed = False
+    side_counts = {"a": 0, "b": 0}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict) or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            side_counts[affinity] += 1
+
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict) or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            desired_anchor = _demo_balance_anchor_id(affinity)
+            if _safe_text(bubble.get("anchor_id")) != desired_anchor:
+                bubble["anchor_id"] = desired_anchor
+                changed = True
+            continue
+
+        target = "a" if side_counts["a"] <= side_counts["b"] else "b"
+        side_counts[target] += 1
+        bubble["choice_affinity"] = target
+        bubble["anchor_id"] = _demo_balance_anchor_id(target)
+        bubble["affinity_score"] = min(_safe_float(bubble.get("affinity_score"), 0.0), 0.24)
+        bubble["needs_affinity_review"] = True
+        changed = True
+    return changed
+
+
+def _ensure_demo_balance_workspace_graph(workspace: dict[str, Any], saved_at: str = "") -> bool:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
+    if not _is_demo_balance_config(demo_config):
+        return False
+
+    graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+    changed = _ensure_demo_balance_anchor_bubbles(graph, demo_config)
+    layout_changed = _ensure_ideation_bubble_graph_server_layout(graph)
+    if changed:
+        graph["update_cycle"] = max(1, _safe_nonnegative_int(graph.get("update_cycle"), 0))
+        graph["layout_revision"] = max(1, _safe_nonnegative_int(graph.get("layout_revision"), 0))
+        graph["updated_at"] = saved_at or _now_ts()
+    elif layout_changed and not _safe_text(graph.get("updated_at")):
+        graph["updated_at"] = saved_at or _now_ts()
+    workspace["demo_config"] = demo_config
+    workspace["ideation_bubble_graph"] = graph
+    return changed or layout_changed
 
 
 def _ideation_bubble_graph_text_maps(
@@ -7121,7 +8580,11 @@ def _ideation_bubble_graph_text_maps(
         if not isinstance(bubble, dict):
             continue
         by_id[_safe_text(bubble.get("id"))] = bubble
-        texts = [_safe_text(bubble.get("label")), *[_safe_text(value) for value in (bubble.get("aliases") or [])]]
+        texts = [
+            _safe_text(bubble.get("label")),
+            _safe_text(bubble.get("canonical_label")),
+            *[_safe_text(value) for value in (bubble.get("aliases") or [])],
+        ]
         for text in texts:
             key = _ideation_bubble_text_key(text)
             if key:
@@ -7129,9 +8592,21 @@ def _ideation_bubble_graph_text_maps(
     return by_id, by_text
 
 
-def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[IdeationExistingKeywordInput]:
-    bubbles = [item for item in (graph.get("bubbles") or []) if isinstance(item, dict)]
-    visible_rank = {"active": 0, "dimmed": 1, "archived": 2}
+def _ideation_bubble_existing_keyword_inputs(
+    graph: dict[str, Any],
+    *,
+    include_exiting: bool = False,
+) -> list[IdeationExistingKeywordInput]:
+    bubbles = [
+        item
+        for item in (graph.get("bubbles") or [])
+        if isinstance(item, dict)
+        and (
+            _is_ideation_bubble_visible_state(item.get("display_state"))
+            or (include_exiting and _normalize_ideation_bubble_state(item.get("display_state")) == "exiting")
+        )
+    ]
+    visible_rank = {"active": 0, "dimmed": 1, "exiting": 2, "archived": 3}
     bubbles.sort(
         key=lambda item: (
             visible_rank.get(_normalize_ideation_bubble_state(item.get("display_state")), 3),
@@ -7155,7 +8630,14 @@ def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[Idea
         anchor_label = _safe_text((by_id.get(_safe_text(bubble.get("anchor_id"))) or {}).get("label"))
         existing.append(
             IdeationExistingKeywordInput(
+                id=_safe_text(bubble.get("id")),
                 text=_safe_text(bubble.get("label")),
+                canonical_label=_safe_text(bubble.get("canonical_label")) or _safe_text(bubble.get("label")),
+                aliases=[
+                    _normalize_ideation_keyword_text(value)
+                    for value in (bubble.get("aliases") or [])
+                    if _normalize_ideation_keyword_text(value)
+                ][:8],
                 count=max(1, _safe_nonnegative_int(bubble.get("count"), 1) or 1),
                 related=related_labels,
                 kind=_safe_text(bubble.get("kind"), "topic"),
@@ -7163,13 +8645,21 @@ def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[Idea
                 relevance=max(0.0, min(1.0, _safe_float(bubble.get("relevance"), 1.0))),
                 off_topic=bool(bubble.get("off_topic")),
                 anchor=anchor_label,
+                choice_affinity=_safe_text(bubble.get("choice_affinity")),
+                affinity_score=max(0.0, min(1.0, _safe_float(bubble.get("affinity_score"), 0.0))),
             )
         )
     return existing
 
 
-def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str) -> None:
-    bubble["display_state"] = "archived"
+def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str, *, exiting: bool = False) -> None:
+    if _is_demo_balance_anchor_bubble(bubble):
+        bubble["display_state"] = "active"
+        bubble["archive_reason"] = ""
+        bubble["missing_cycles"] = 0
+        bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+        return
+    bubble["display_state"] = "exiting" if exiting else "archived"
     bubble["layout_zone"] = "archived"
     bubble["activity"] = min(_safe_float(bubble.get("activity"), 0.0), 0.12)
     bubble["opacity"] = 0.0
@@ -7188,7 +8678,7 @@ def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
         for bubble in (graph.get("bubbles") or [])
         if isinstance(bubble, dict)
         and _safe_text(bubble.get("id"))
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
         and not bool(bubble.get("off_topic"))
     ]
     if not candidates:
@@ -7211,11 +8701,17 @@ def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
             _safe_text(bubble.get("label")),
         ),
     )[:top_n]
-    return {
+    core_ids = {
         _safe_text(bubble.get("id"))
         for bubble in [*by_count, *by_importance]
         if _safe_text(bubble.get("id"))
     }
+    core_ids.update(
+        _safe_text(bubble.get("id"))
+        for bubble in candidates
+        if _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+    )
+    return core_ids
 
 
 def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str]) -> None:
@@ -7224,7 +8720,7 @@ def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str
             continue
         bubble_id = _safe_text(bubble.get("id"))
         state = _normalize_ideation_bubble_state(bubble.get("display_state"))
-        if state == "archived":
+        if state in {"exiting", "archived"}:
             bubble["layout_zone"] = "archived"
             continue
         if bubble_id in core_ids and not bool(bubble.get("off_topic")):
@@ -7247,41 +8743,50 @@ def _apply_ideation_bubble_decay(
     dim_cycles: int = IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES,
     archive_cycles: int = IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES,
     off_topic_archive_cycles: int = IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES,
+    exit_before_archive: bool = False,
 ) -> None:
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
         if _safe_text(bubble.get("id")) in touched_ids:
             continue
-        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) in {"exiting", "archived"}:
             continue
         missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1
         bubble["missing_cycles"] = missing_cycles
         bubble["activity"] = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.4) * 0.62))
         is_core = _safe_text(bubble.get("id")) in core_ids
         if bool(bubble.get("off_topic")) and missing_cycles >= off_topic_archive_cycles:
-            _archive_ideation_bubble(bubble, cycle, "off_topic_inactive")
+            _archive_ideation_bubble(bubble, cycle, "off_topic_inactive", exiting=exit_before_archive)
         elif missing_cycles >= archive_cycles and not is_core:
-            _archive_ideation_bubble(bubble, cycle, "inactive_low_importance")
+            _archive_ideation_bubble(bubble, cycle, "inactive_low_importance", exiting=exit_before_archive)
         elif missing_cycles >= dim_cycles and not is_core:
             bubble["display_state"] = "dimmed"
         else:
             bubble["display_state"] = "active"
 
 
-def _apply_ideation_bubble_visual_state(graph: dict[str, Any], core_ids: set[str]) -> None:
+def _apply_ideation_bubble_visual_state(
+    graph: dict[str, Any],
+    core_ids: set[str],
+    *,
+    primary_ids: set[str] | None = None,
+) -> None:
+    explicit_primary_ids = primary_ids is not None
+    resolved_primary_ids = primary_ids or set()
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
         state = _normalize_ideation_bubble_state(bubble.get("display_state"))
         bubble_id = _safe_text(bubble.get("id"))
         off_topic = bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic"
-        if state == "archived":
+        if state in {"exiting", "archived"}:
             bubble["opacity"] = 0.0
             bubble["emphasis"] = "default"
             continue
 
-        if bubble_id in core_ids and not off_topic:
+        is_primary = bubble_id in resolved_primary_ids if explicit_primary_ids else bubble_id in core_ids
+        if is_primary and not off_topic:
             bubble["opacity"] = 1.0
             bubble["emphasis"] = "primary"
             bubble["display_state"] = "active"
@@ -7316,6 +8821,27 @@ def _prune_archived_ideation_bubbles(graph: dict[str, Any]) -> None:
             if related_id in visible_ids and related_id != _safe_text(bubble.get("id"))
         ][:12]
     graph["bubbles"] = visible
+
+
+def _prune_exiting_ideation_bubbles(graph: dict[str, Any]) -> None:
+    graph["bubbles"] = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "exiting"
+    ]
+
+
+def _ideation_bubble_state_counts(graph: dict[str, Any]) -> dict[str, int]:
+    counts = {"active": 0, "dimmed": 0, "exiting": 0, "archived": 0, "provisional": 0}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        state = _normalize_ideation_bubble_state(bubble.get("display_state"))
+        counts[state] = counts.get(state, 0) + 1
+        if _safe_text(bubble.get("lifecycle_state")).lower() == "provisional":
+            counts["provisional"] += 1
+    return counts
 
 
 def _ideation_bubble_seed_ratio(value: str, salt: int) -> float:
@@ -7361,6 +8887,40 @@ def _ideation_bubble_layout_circles_overlap(
 
 def _ideation_bubble_layout_clusters(bubbles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     by_id = {_safe_text(bubble.get("id")): bubble for bubble in bubbles if _safe_text(bubble.get("id"))}
+    if any(_safe_text(bubble.get("choice_affinity")).lower() in DEMO_BALANCE_AFFINITIES for bubble in bubbles):
+        clusters: list[list[dict[str, Any]]] = []
+        assigned_ids: set[str] = set()
+        for choice in ("a", "b"):
+            anchor_id = _demo_balance_anchor_id(choice)
+            cluster: list[dict[str, Any]] = []
+            anchor = by_id.get(anchor_id)
+            if anchor:
+                cluster.append(anchor)
+                assigned_ids.add(anchor_id)
+            for bubble in bubbles:
+                bubble_id = _safe_text(bubble.get("id"))
+                if not bubble_id or bubble_id in assigned_ids:
+                    continue
+                affinity = _safe_text(bubble.get("choice_affinity")).lower()
+                if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+                    affinity = "a" if len(clusters) == 0 else "b"
+                if affinity == choice or _safe_text(bubble.get("anchor_id")) == anchor_id:
+                    cluster.append(bubble)
+                    assigned_ids.add(bubble_id)
+            if cluster:
+                clusters.append(cluster)
+        remaining = [
+            bubble
+            for bubble in bubbles
+            if _safe_text(bubble.get("id")) and _safe_text(bubble.get("id")) not in assigned_ids
+        ]
+        if remaining:
+            if clusters:
+                clusters[-1].extend(remaining)
+            else:
+                clusters.append(remaining)
+        return clusters
+
     adjacency: dict[str, set[str]] = {bubble_id: set() for bubble_id in by_id}
     for bubble in bubbles:
         bubble_id = _safe_text(bubble.get("id"))
@@ -7410,6 +8970,19 @@ def _ideation_bubble_has_number(raw: Any) -> bool:
 def _ideation_bubble_cluster_anchor(cluster: list[dict[str, Any]]) -> dict[str, Any]:
     if not cluster:
         return {}
+    demo_anchors = [
+        bubble
+        for bubble in cluster
+        if _safe_text(bubble.get("id")) in _demo_balance_anchor_ids()
+    ]
+    if demo_anchors:
+        return sorted(
+            demo_anchors,
+            key=lambda bubble: (
+                0,
+                _safe_text(bubble.get("id")),
+            ),
+        )[0]
     return sorted(
         cluster,
         key=lambda bubble: (
@@ -7767,6 +9340,8 @@ def _ideation_bubble_rank_tuple(bubble: dict[str, Any]) -> tuple[int, float, flo
 
 
 def _split_large_ideation_bubble_orbit_cluster(cluster: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if any(_safe_text(bubble.get("id")) in _demo_balance_anchor_ids() for bubble in cluster):
+        return [cluster]
     if len(cluster) <= 7:
         return [cluster]
 
@@ -7803,6 +9378,9 @@ def _split_large_ideation_bubble_orbit_cluster(cluster: list[dict[str, Any]]) ->
 
 
 def _ideation_bubble_orbit_clusters(visible: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if any(_safe_text(bubble.get("choice_affinity")).lower() in DEMO_BALANCE_AFFINITIES for bubble in visible):
+        return _ideation_bubble_layout_clusters(visible)[:IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS]
+
     expanded: list[list[dict[str, Any]]] = []
     for cluster in _ideation_bubble_layout_clusters(visible):
         expanded.extend(_split_large_ideation_bubble_orbit_cluster(cluster))
@@ -7911,6 +9489,8 @@ def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
 def _ideation_bubble_orbit_size(bubble: dict[str, Any], max_count: int, role: str) -> int:
     base = _ideation_bubble_layout_size(bubble, max_count)
     if role == "center":
+        if _safe_text(bubble.get("id")) == DEMO_BALANCE_ANCHOR_NEUTRAL_ID:
+            return 76
         return int(round(max(122, min(154, base * 0.82))))
     if role == "dot":
         return int(round(max(18, min(21, base * 0.13))))
@@ -7925,6 +9505,78 @@ def _ideation_bubble_orbit_rings(center_size: int, cluster_size: int, total_clus
     if cluster_size > 3:
         rings.append(round(second, 2))
     return rings
+
+
+def _relax_ideation_bubble_orbit_placements(
+    placements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    if len(placements) < 2:
+        return placements, 0
+    relaxed = [dict(placement) for placement in placements]
+    resolved_count = 0
+    for iteration in range(90):
+        moved = False
+        for left_index in range(len(relaxed)):
+            for right_index in range(left_index + 1, len(relaxed)):
+                left = relaxed[left_index]
+                right = relaxed[right_index]
+                if not _ideation_bubble_layout_circles_overlap(left, right, IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP):
+                    continue
+
+                left_radius = max(1.0, float(left.get("size") or 1)) / 2
+                right_radius = max(1.0, float(right.get("size") or 1)) / 2
+                left_center_x = float(left.get("x") or 0) + left_radius
+                left_center_y = float(left.get("y") or 0) + left_radius
+                right_center_x = float(right.get("x") or 0) + right_radius
+                right_center_y = float(right.get("y") or 0) + right_radius
+                dx = right_center_x - left_center_x
+                dy = right_center_y - left_center_y
+                distance = math.sqrt(dx * dx + dy * dy)
+                if distance < 0.001:
+                    angle = _ideation_bubble_seed_ratio(
+                        f"{_safe_text((left.get('bubble') or {}).get('id'))}:{_safe_text((right.get('bubble') or {}).get('id'))}:{iteration}",
+                        97,
+                    ) * math.pi * 2
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    distance = 1.0
+
+                min_distance = left_radius + right_radius + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP
+                overlap = max(0.0, min_distance - distance)
+                if overlap <= 0:
+                    continue
+
+                push_x = (dx / distance) * (overlap + 2)
+                push_y = (dy / distance) * (overlap + 2)
+                if left_index == 0:
+                    left_share, right_share = 0.0, 1.0
+                elif right_index == 0:
+                    left_share, right_share = 1.0, 0.0
+                else:
+                    left_share = right_radius / max(1.0, left_radius + right_radius)
+                    right_share = 1 - left_share
+
+                if left_share:
+                    left_x, left_y = _clamp_ideation_bubble_layout_xy(
+                        float(left.get("x") or 0) - push_x * left_share,
+                        float(left.get("y") or 0) - push_y * left_share,
+                        left_radius * 2,
+                    )
+                    left["x"] = left_x
+                    left["y"] = left_y
+                if right_share:
+                    right_x, right_y = _clamp_ideation_bubble_layout_xy(
+                        float(right.get("x") or 0) + push_x * right_share,
+                        float(right.get("y") or 0) + push_y * right_share,
+                        right_radius * 2,
+                    )
+                    right["x"] = right_x
+                    right["y"] = right_y
+                resolved_count += 1
+                moved = True
+        if not moved:
+            break
+    return relaxed, resolved_count
 
 
 def _place_ideation_bubble_orbit_cluster(
@@ -7989,7 +9641,7 @@ def _place_ideation_bubble_orbit_cluster(
     )
 
     satellites = sorted_bubbles[1:]
-    slot_count = max(4, len(satellites))
+    slot_count = max(6, len(satellites) + 2)
     golden_angle = math.pi * (3 - math.sqrt(5))
     base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
     for index, bubble in enumerate(satellites):
@@ -8003,9 +9655,13 @@ def _place_ideation_bubble_orbit_cluster(
         seed_jitter = (_ideation_bubble_seed_ratio(f"{bubble_id}:{cluster_id}", 89) - 0.5) * 0.34
         angle = base_angle + index * (math.pi * 2 / slot_count) + seed_jitter
         chosen: dict[str, Any] | None = None
-        for attempt in range(36):
-            attempt_angle = angle + attempt * golden_angle
-            attempt_radius = radius + (attempt // 12) * 18
+        fallback_candidate: dict[str, Any] | None = None
+        fallback_overlap_score = float("inf")
+        for attempt in range(108):
+            attempt_slot = attempt % slot_count
+            attempt_ring = attempt // slot_count
+            attempt_angle = angle + attempt_slot * (math.pi * 2 / slot_count) + attempt_ring * golden_angle * 0.36
+            attempt_radius = radius + attempt_ring * 28
             raw_x = center_x + math.cos(attempt_angle) * attempt_radius - size / 2
             raw_y = center_y + math.sin(attempt_angle) * attempt_radius - size / 2
             candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
@@ -8018,19 +9674,29 @@ def _place_ideation_bubble_orbit_cluster(
                 "orbit_angle": attempt_angle,
                 "orbit_radius": attempt_radius,
             }
-            if not any(
-                _ideation_bubble_layout_circles_overlap(
+            overlap_score = 0.0
+            for placed in placements:
+                if _ideation_bubble_layout_circles_overlap(
                     candidate,
                     placed,
                     IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP,
-                )
-                for placed in placements
-            ):
+                ):
+                    candidate_radius = size / 2
+                    placed_radius = max(1.0, float(placed.get("size") or 1)) / 2
+                    dx = candidate_x + candidate_radius - (float(placed.get("x") or 0) + placed_radius)
+                    dy = candidate_y + candidate_radius - (float(placed.get("y") or 0) + placed_radius)
+                    distance = math.sqrt(dx * dx + dy * dy)
+                    overlap_score += max(0.0, candidate_radius + placed_radius + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP - distance)
+            if overlap_score <= 0:
                 chosen = candidate
                 break
-        placements.append(chosen or candidate)
+            if overlap_score < fallback_overlap_score:
+                fallback_candidate = candidate
+                fallback_overlap_score = overlap_score
+        placements.append(chosen or fallback_candidate or candidate)
 
     bubble_ids: list[str] = []
+    placements, overlap_resolved_count = _relax_ideation_bubble_orbit_placements(placements)
     for placement in placements:
         bubble = placement.get("bubble")
         if not isinstance(bubble, dict):
@@ -8050,8 +9716,14 @@ def _place_ideation_bubble_orbit_cluster(
         bubble["local_y"] = round(y - center_y, 2)
         bubble["orbit_center_id"] = center_id if bubble_id != center_id else ""
         bubble["orbit_ring"] = _safe_nonnegative_int(placement.get("orbit_ring"), 0)
-        bubble["orbit_angle"] = round(float(placement.get("orbit_angle") or 0.0), 6)
-        bubble["orbit_radius"] = round(float(placement.get("orbit_radius") or 0.0), 2)
+        if bubble_id != center_id:
+            dx = x + size / 2 - center_x
+            dy = y + size / 2 - center_y
+            bubble["orbit_angle"] = round(math.atan2(dy, dx), 6)
+            bubble["orbit_radius"] = round(math.sqrt(dx * dx + dy * dy), 2)
+        else:
+            bubble["orbit_angle"] = 0.0
+            bubble["orbit_radius"] = 0.0
 
     return {
         "id": cluster_id,
@@ -8061,6 +9733,7 @@ def _place_ideation_bubble_orbit_cluster(
         "radius": round(orbit_radius, 2),
         "rings": rings,
         "zone": _ideation_bubble_cluster_zone(cluster),
+        "overlap_resolved_count": overlap_resolved_count,
         "bubble_ids": _dedup_preserve(bubble_ids, limit=IDEATION_BUBBLE_GRAPH_MAX_BUBBLES),
     }
 
@@ -8071,10 +9744,11 @@ def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
         bubble
         for bubble in (graph.get("bubbles") or [])
         if isinstance(bubble, dict)
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
     ]
     if not visible:
         graph["clusters"] = []
+        graph["layout_overlap_resolved_count"] = 0
         graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
         return
 
@@ -8091,11 +9765,16 @@ def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
         )
         for cluster_index, cluster in enumerate(clusters)
     ]
+    graph["layout_overlap_resolved_count"] = sum(
+        _safe_nonnegative_int(cluster.get("overlap_resolved_count"), 0)
+        for cluster in graph.get("clusters") or []
+        if isinstance(cluster, dict)
+    )
 
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
-        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
             bubble["cluster_id"] = _safe_text(bubble.get("cluster_id"))
             bubble["role"] = _normalize_ideation_bubble_role(bubble.get("role"))
             continue
@@ -8127,14 +9806,23 @@ def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
         bubble
         for bubble in (graph.get("bubbles") or [])
         if isinstance(bubble, dict)
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
     ]
     if not visible:
         return False
 
     core_ids = _ideation_bubble_core_ids(graph)
     _apply_ideation_bubble_layout_zones(graph, core_ids)
-    _apply_ideation_bubble_visual_state(graph, core_ids)
+    demo_primary_ids = {
+        _safe_text(bubble.get("id"))
+        for bubble in visible
+        if _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+    }
+    _apply_ideation_bubble_visual_state(
+        graph,
+        core_ids | demo_primary_ids,
+        primary_ids=demo_primary_ids if demo_primary_ids else None,
+    )
     graph["layout_mode"] = IDEATION_BUBBLE_GRAPH_LAYOUT_MODE
     needs_layout = any(
         not isinstance(bubble.get("x"), (int, float))
@@ -8166,11 +9854,18 @@ def _upsert_ideation_bubble_from_keyword(
     now: str,
     *,
     allow_single_support: bool = False,
+    lifecycle_state: str = "active",
 ) -> str:
     _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
     text = _normalize_ideation_keyword_text(keyword.get("text"))
     if not text:
         return ""
+    alias_sources = [
+        _normalize_ideation_keyword_text(value)
+        for value in (keyword.get("alias_sources") or keyword.get("aliases") or [])
+        if _normalize_ideation_keyword_text(value)
+    ]
+    alias_sources = [value for value in _dedup_preserve(alias_sources, limit=8) if value != text]
     bubble = by_text.get(_ideation_bubble_text_key(text))
     if bubble is None:
         support_count = max(
@@ -8182,7 +9877,8 @@ def _upsert_ideation_bubble_from_keyword(
         bubble = {
             "id": f"ideation-bubble-{_stable_short_id(text)}",
             "label": text,
-            "aliases": [],
+            "canonical_label": text,
+            "aliases": alias_sources,
             "kind": "topic",
             "count": 0,
             "importance": 0.5,
@@ -8191,7 +9887,11 @@ def _upsert_ideation_bubble_from_keyword(
             "display_state": "active",
             "layout_zone": "default",
             "missing_cycles": 0,
-            "anchor_id": "",
+            "anchor_id": _safe_text(keyword.get("anchor_id") or keyword.get("anchorId")),
+            "choice_affinity": _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity")),
+            "affinity_score": max(0.0, min(1.0, _safe_float(keyword.get("affinity_score") or keyword.get("affinityScore"), 0.0))),
+            "needs_affinity_review": bool(keyword.get("needs_affinity_review") or keyword.get("needsAffinityReview")),
+            "durable": False,
             "related_ids": [],
             "evidence_utterance_ids": [],
             "first_seen_at": now,
@@ -8200,11 +9900,15 @@ def _upsert_ideation_bubble_from_keyword(
             "off_topic": False,
             "off_topic_reason": "",
             "archive_reason": "",
+            "lifecycle_state": "provisional" if lifecycle_state == "provisional" else "active",
         }
         graph.setdefault("bubbles", []).append(bubble)
     elif text != _safe_text(bubble.get("label")):
         aliases = _dedup_preserve([*(bubble.get("aliases") or []), text], limit=20)
         bubble["aliases"] = [value for value in aliases if value != _safe_text(bubble.get("label"))]
+    if alias_sources:
+        aliases = _dedup_preserve([*(bubble.get("aliases") or []), *alias_sources], limit=20)
+        bubble["aliases"] = [value for value in aliases if value and value != _safe_text(bubble.get("label"))]
 
     kind = _safe_text(keyword.get("kind"), "topic").lower()
     off_topic = bool(keyword.get("off_topic") or kind == "off_topic")
@@ -8229,7 +9933,17 @@ def _upsert_ideation_bubble_from_keyword(
         max(0.28, min(1.0, _safe_float(keyword.get("importance"), 0.65))),
     )
     bubble["display_state"] = "active"
+    bubble["lifecycle_state"] = "provisional" if lifecycle_state == "provisional" else "active"
     bubble["layout_zone"] = "core"
+    choice_affinity = _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity") or bubble.get("choice_affinity")).lower()
+    if choice_affinity in DEMO_BALANCE_AFFINITIES:
+        bubble["choice_affinity"] = choice_affinity
+        bubble["anchor_id"] = _safe_text(keyword.get("anchor_id") or keyword.get("anchorId")) or _demo_balance_anchor_id(choice_affinity)
+        bubble["affinity_score"] = max(
+            _safe_float(bubble.get("affinity_score"), 0.0),
+            max(0.0, min(1.0, _safe_float(keyword.get("affinity_score") or keyword.get("affinityScore"), 0.0))),
+        )
+        bubble["needs_affinity_review"] = bool(keyword.get("needs_affinity_review") or keyword.get("needsAffinityReview"))
     bubble["missing_cycles"] = 0
     bubble["last_seen_at"] = now
     bubble["last_seen_cycle"] = cycle
@@ -8242,17 +9956,68 @@ def _upsert_ideation_bubble_from_keyword(
     return _safe_text(bubble.get("id"))
 
 
+def _rename_ideation_bubble(
+    graph: dict[str, Any],
+    source_text: str,
+    target_text: str,
+    cycle: int,
+    reason: str = "",
+    *,
+    exiting: bool = False,
+) -> str:
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    source = by_text.get(_ideation_bubble_text_key(source_text))
+    if not source:
+        return ""
+    if _is_demo_balance_anchor_bubble(source):
+        return _safe_text(source.get("id"))
+
+    normalized_target = _normalize_ideation_keyword_text(target_text)
+    if not normalized_target:
+        return _safe_text(source.get("id"))
+
+    existing_target = by_text.get(_ideation_bubble_text_key(normalized_target))
+    if existing_target and existing_target is not source:
+        if _is_demo_balance_anchor_bubble(existing_target):
+            return _safe_text(source.get("id"))
+        return _merge_ideation_bubbles(graph, source_text, normalized_target, cycle, exiting=exiting)
+
+    previous_label = _safe_text(source.get("label"))
+    aliases = _dedup_preserve(
+        [
+            previous_label,
+            *(source.get("aliases") or []),
+            source_text,
+        ],
+        limit=20,
+    )
+    source["label"] = normalized_target
+    source["canonical_label"] = normalized_target
+    source["aliases"] = [value for value in aliases if value and value != normalized_target]
+    source["archive_reason"] = ""
+    source["display_state"] = "active"
+    source["activity"] = max(_safe_float(source.get("activity"), 0.0), 0.62)
+    source["last_seen_cycle"] = max(_safe_nonnegative_int(source.get("last_seen_cycle"), 0), cycle)
+    if reason:
+        source["rename_reason"] = _truncate_text(reason, 120)
+    return _safe_text(source.get("id"))
+
+
 def _merge_ideation_bubbles(
     graph: dict[str, Any],
     source_text: str,
     target_text: str,
     cycle: int,
+    *,
+    exiting: bool = False,
 ) -> str:
     _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
     source = by_text.get(_ideation_bubble_text_key(source_text))
     target = by_text.get(_ideation_bubble_text_key(target_text))
     if not source or not target or source is target:
         return _safe_text(target.get("id")) if target else ""
+    if _is_demo_balance_anchor_bubble(source) or _is_demo_balance_anchor_bubble(target):
+        return _safe_text(target.get("id"))
 
     target["count"] = max(1, _safe_nonnegative_int(target.get("count"), 1) + _safe_nonnegative_int(source.get("count"), 1))
     target["importance"] = max(_safe_float(target.get("importance"), 0.0), _safe_float(source.get("importance"), 0.0))
@@ -8296,14 +10061,137 @@ def _merge_ideation_bubbles(
             [value for value in bubble["related_ids"] if value and value != _safe_text(bubble.get("id"))],
             limit=12,
         )
-    _archive_ideation_bubble(source, cycle, "merged")
+    _archive_ideation_bubble(source, cycle, "merged", exiting=exiting)
     return target_id
+
+
+def _mark_demo_balance_overflow_bubbles_exiting(
+    graph: dict[str, Any],
+    cycle: int,
+    core_ids: set[str],
+    protected_ids: set[str] | None = None,
+) -> None:
+    protected_ids = protected_ids or set()
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
+    ]
+    overflow = len(visible) - DEMO_BALANCE_BUBBLE_GRAPH_VISIBLE_CAP
+    if overflow <= 0:
+        return
+
+    def removal_rank(bubble: dict[str, Any]) -> tuple[int, float, str]:
+        bubble_id = _safe_text(bubble.get("id"))
+        protected = (
+            ((bubble_id in core_ids or bubble_id in protected_ids) and not bool(bubble.get("off_topic")))
+            or _is_demo_balance_anchor_bubble(bubble)
+        )
+        recent = 1.0 / max(1, _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1)
+        score = (
+            _safe_float(bubble.get("activity"), 0.0) * 0.34
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.24
+            + _safe_float(bubble.get("importance"), 0.0) * 0.24
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 5) * 0.12
+            + recent * 0.06
+        )
+        if bool(bubble.get("off_topic")):
+            score -= 0.35
+        if _safe_text(bubble.get("lifecycle_state")).lower() == "provisional":
+            score -= 0.08
+        return (1 if protected else 0, score, _safe_text(bubble.get("label")))
+
+    for bubble in sorted(visible, key=removal_rank)[:overflow]:
+        _archive_ideation_bubble(bubble, cycle, "demo_overflow", exiting=True)
+
+
+def _apply_demo_balance_local_provisional_cleanup(
+    graph: dict[str, Any],
+    touched_ids: set[str],
+    core_ids: set[str],
+    cycle: int,
+    protected_ids: set[str] | None = None,
+) -> int:
+    protected_ids = protected_ids or set()
+    cleaned = 0
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if not bubble_id or bubble_id in touched_ids:
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        if _is_demo_balance_anchor_bubble(bubble):
+            bubble["missing_cycles"] = 0
+            continue
+        if _safe_text(bubble.get("lifecycle_state")).lower() != "provisional":
+            continue
+        if bubble_id in core_ids and _safe_nonnegative_int(bubble.get("count"), 1) >= 3:
+            continue
+        if bubble_id in protected_ids and not bool(bubble.get("off_topic")):
+            bubble["missing_cycles"] = 0
+            bubble["display_state"] = "active"
+            continue
+
+        missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1
+        bubble["missing_cycles"] = missing_cycles
+        bubble["activity"] = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.0) * 0.72))
+        weak_score = (
+            _safe_float(bubble.get("importance"), 0.0) * 0.36
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.34
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 4) * 0.3
+        )
+        if missing_cycles >= 3 or (missing_cycles >= 2 and weak_score < 0.62):
+            _archive_ideation_bubble(bubble, cycle, "demo_local_cleanup", exiting=True)
+            cleaned += 1
+        elif missing_cycles >= 2:
+            bubble["display_state"] = "dimmed"
+    return cleaned
+
+
+def _demo_balance_minimum_side_protected_ids(graph: dict[str, Any]) -> set[str]:
+    protected: set[str] = set()
+    by_side: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _is_demo_balance_anchor_bubble(bubble):
+            continue
+        if bool(bubble.get("off_topic")):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        by_side[affinity].append(bubble)
+
+    def keep_rank(bubble: dict[str, Any]) -> tuple[float, int, str]:
+        recent = 1.0 / max(1, _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1)
+        score = (
+            _safe_float(bubble.get("activity"), 0.0) * 0.34
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.24
+            + _safe_float(bubble.get("importance"), 0.0) * 0.2
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 5) * 0.16
+            + recent * 0.06
+        )
+        return (score, _safe_nonnegative_int(bubble.get("count"), 1), _safe_text(bubble.get("label")))
+
+    for bubbles in by_side.values():
+        for bubble in sorted(bubbles, key=keep_rank, reverse=True)[:DEMO_BALANCE_MIN_VISIBLE_PER_SIDE]:
+            bubble_id = _safe_text(bubble.get("id"))
+            if bubble_id:
+                protected.add(bubble_id)
+    return protected
 
 
 def _apply_ideation_bubble_graph_update(
     graph: dict[str, Any],
     rows: list[dict[str, str]],
     keywords: list[dict[str, Any]],
+    rename_keywords: list[dict[str, str]],
     merge_keywords: list[dict[str, str]],
     remove_keywords: list[str],
     *,
@@ -8311,11 +10199,25 @@ def _apply_ideation_bubble_graph_update(
     decay_profile: str = "normal",
     apply_decay: bool = True,
     mark_processed: bool = True,
+    demo_local_cleanup: bool = False,
+    primary_keyword_texts: list[str] | None = None,
+    affinity_updates: list[dict[str, Any]] | None = None,
+    metrics: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     next_graph = _normalize_canvas_ideation_bubble_graph(graph)
+    if decay_profile == "demo_balance":
+        _prune_exiting_ideation_bubbles(next_graph)
+    previous_primary_ids = {
+        _safe_text(bubble.get("id"))
+        for bubble in (next_graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _safe_text(bubble.get("id"))
+        and _safe_text(bubble.get("emphasis")) == "primary"
+    }
     cycle = _safe_nonnegative_int(next_graph.get("update_cycle"), 0) + 1
     now = _now_ts()
     touched_ids: set[str] = set()
+    lifecycle_state = "provisional" if decay_profile == "demo_balance" and not mark_processed else "active"
 
     for keyword in keywords:
         bubble_id = _upsert_ideation_bubble_from_keyword(
@@ -8325,6 +10227,19 @@ def _apply_ideation_bubble_graph_update(
             cycle,
             now,
             allow_single_support=allow_single_support,
+            lifecycle_state=lifecycle_state,
+        )
+        if bubble_id:
+            touched_ids.add(bubble_id)
+
+    for directive in rename_keywords:
+        bubble_id = _rename_ideation_bubble(
+            next_graph,
+            _safe_text(directive.get("source")),
+            _safe_text(directive.get("target")),
+            cycle,
+            _safe_text(directive.get("reason")),
+            exiting=decay_profile == "demo_balance",
         )
         if bubble_id:
             touched_ids.add(bubble_id)
@@ -8335,15 +10250,29 @@ def _apply_ideation_bubble_graph_update(
             _safe_text(directive.get("source")),
             _safe_text(directive.get("target")),
             cycle,
+            exiting=decay_profile == "demo_balance",
         )
         if target_id:
             touched_ids.add(target_id)
 
+    if decay_profile == "demo_balance":
+        _normalize_demo_balance_graph_affinities(next_graph)
+
     _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
+    protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph) if decay_profile == "demo_balance" else set()
     for text in remove_keywords:
         bubble = by_text.get(_ideation_bubble_text_key(text))
-        if bubble and _safe_text(bubble.get("id")) not in touched_ids:
-            _archive_ideation_bubble(bubble, cycle, "llm_remove")
+        bubble_id = _safe_text((bubble or {}).get("id"))
+        protected = bubble_id in protected_minimum_ids and not bool((bubble or {}).get("off_topic"))
+        if bubble and bubble_id not in touched_ids and not protected and not _is_demo_balance_anchor_bubble(bubble):
+            _archive_ideation_bubble(bubble, cycle, "llm_remove", exiting=decay_profile == "demo_balance")
+
+    affinity_update_count = 0
+    if decay_profile == "demo_balance" and affinity_updates:
+        affinity_update_count = _apply_demo_balance_affinity_updates(next_graph, affinity_updates, cycle)
+        _normalize_demo_balance_graph_affinities(next_graph)
+        if metrics is not None:
+            metrics["affinity_update_count"] = affinity_update_count
 
     _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
     for keyword in keywords:
@@ -8366,24 +10295,73 @@ def _apply_ideation_bubble_graph_update(
         if anchor and _safe_text(anchor.get("id")) != current_id:
             current["anchor_id"] = _safe_text(anchor.get("id"))
 
+    explicit_primary_ids: set[str] | None = None
+    if primary_keyword_texts is not None:
+        explicit_primary_ids = _resolve_ideation_primary_keyword_ids(
+            next_graph,
+            primary_keyword_texts,
+            limit=4,
+        )
+
     core_ids = _ideation_bubble_core_ids(next_graph)
+    if explicit_primary_ids is not None:
+        core_ids = {*core_ids, *explicit_primary_ids}
+    protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph) if decay_profile == "demo_balance" else set()
     if apply_decay:
         if decay_profile == "demo_balance":
             _apply_ideation_bubble_decay(
                 next_graph,
                 touched_ids,
-                core_ids,
+                {*core_ids, *protected_minimum_ids},
                 cycle,
-                dim_cycles=2,
+                dim_cycles=1,
                 archive_cycles=3,
-                off_topic_archive_cycles=2,
+                off_topic_archive_cycles=1,
+                exit_before_archive=True,
             )
         else:
             _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
         _prune_archived_ideation_bubbles(next_graph)
     core_ids = _ideation_bubble_core_ids(next_graph)
+    if decay_profile == "demo_balance" and demo_local_cleanup:
+        protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph)
+        cleaned_count = _apply_demo_balance_local_provisional_cleanup(
+            next_graph,
+            touched_ids,
+            core_ids,
+            cycle,
+            protected_minimum_ids,
+        )
+        if metrics is not None:
+            metrics["local_cleanup_count"] = cleaned_count
+        if cleaned_count:
+            core_ids = _ideation_bubble_core_ids(next_graph)
+            if explicit_primary_ids is not None:
+                explicit_primary_ids = {
+                    bubble_id
+                    for bubble_id in explicit_primary_ids
+                    if any(
+                        isinstance(item, dict)
+                        and _safe_text(item.get("id")) == bubble_id
+                        and _is_ideation_bubble_visible_state(item.get("display_state"))
+                        for item in (next_graph.get("bubbles") or [])
+                    )
+                }
+                core_ids = {*core_ids, *explicit_primary_ids}
+    if decay_profile == "demo_balance":
+        protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph)
+        _mark_demo_balance_overflow_bubbles_exiting(next_graph, cycle, core_ids, protected_minimum_ids)
     _apply_ideation_bubble_layout_zones(next_graph, core_ids)
-    _apply_ideation_bubble_visual_state(next_graph, core_ids)
+    _apply_ideation_bubble_visual_state(next_graph, core_ids, primary_ids=explicit_primary_ids)
+    if explicit_primary_ids is not None and metrics is not None:
+        current_primary_ids = {
+            _safe_text(bubble.get("id"))
+            for bubble in (next_graph.get("bubbles") or [])
+            if isinstance(bubble, dict) and _safe_text(bubble.get("emphasis")) == "primary"
+        }
+        metrics["primary_count"] = len(current_primary_ids)
+        metrics["promote_count"] = len(current_primary_ids - previous_primary_ids)
+        metrics["demote_count"] = len(previous_primary_ids - current_primary_ids)
     _apply_ideation_bubble_server_layout(next_graph)
     if mark_processed:
         processed_ids = _dedup_preserve(
@@ -8398,7 +10376,7 @@ def _apply_ideation_bubble_graph_update(
     next_graph["updated_at"] = now
 
     def sort_key(item: dict[str, Any]) -> tuple[int, int, float, str]:
-        state_rank = {"active": 0, "dimmed": 1, "archived": 2}.get(
+        state_rank = {"active": 0, "dimmed": 1, "exiting": 2, "archived": 3}.get(
             _normalize_ideation_bubble_state(item.get("display_state")),
             3,
         )
@@ -15808,7 +17786,12 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
     is_payload_demo_balance = _is_demo_balance_config(payload_demo_config)
     requested_update_mode = _safe_text(payload.update_mode).lower()
     update_mode = (
-        "fast_keywords"
+        "local_fast_keywords"
+        if is_payload_demo_balance and requested_update_mode == "local_fast_keywords"
+        else
+        "realtime_text_batch"
+        if is_payload_demo_balance and requested_update_mode == "realtime_text_batch"
+        else "fast_keywords"
         if is_payload_demo_balance and requested_update_mode == "fast_keywords"
         else "consolidate"
         if is_payload_demo_balance
@@ -15867,32 +17850,331 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         llm_error: dict[str, Any] | None = None,
         refined_transcripts: list[dict[str, Any]] | None = None,
         ignored_utterance_ids: list[str] | None = None,
+        rename_keywords: list[dict[str, str]] | None = None,
         keyword_count: int = 0,
+        rename_count: int = 0,
         merge_count: int = 0,
         remove_count: int = 0,
+        primary_count: int = 0,
+        promote_count: int = 0,
+        demote_count: int = 0,
+        affinity_update_count: int = 0,
         processed_count: int = 0,
+        alias_merge_count: int = 0,
+        canonicalized_count: int = 0,
+        local_cleanup_count: int = 0,
+        slow_backoff_ms: int = 0,
+        used_local: bool = False,
+        extractor_route: dict[str, Any] | None = None,
+        raw_directives: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-        workspace_payload["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(graph)
+        response_graph = _normalize_canvas_ideation_bubble_graph(graph)
+        _ensure_demo_balance_anchor_bubbles(
+            response_graph,
+            _normalize_canvas_demo_config(workspace_payload.get("demo_config") or payload_demo_config),
+        )
+        _ensure_ideation_bubble_graph_server_layout(response_graph)
+        workspace_payload["ideation_bubble_graph"] = response_graph
+        state_counts = _ideation_bubble_state_counts(response_graph)
         return {
-            "ok": bool(used_llm),
+            "ok": bool(used_llm or used_local),
             "used_llm": used_llm,
+            "used_local": used_local,
             "reason": _safe_text(reason),
             "warning": warning,
             "update_mode": update_mode,
             "llm_route": llm_route,
             "llm_error": llm_error or {},
+            "raw_directives": raw_directives or {},
+            "extractor_route": extractor_route or {},
             "refined_transcripts": refined_transcripts or [],
             "ignored_utterance_ids": ignored_utterance_ids or [],
+            "rename_keywords": rename_keywords or [],
             "keyword_count": _safe_nonnegative_int(keyword_count),
+            "rename_count": _safe_nonnegative_int(rename_count),
             "merge_count": _safe_nonnegative_int(merge_count),
             "remove_count": _safe_nonnegative_int(remove_count),
+            "primary_count": _safe_nonnegative_int(primary_count),
+            "promote_count": _safe_nonnegative_int(promote_count),
+            "demote_count": _safe_nonnegative_int(demote_count),
+            "affinity_update_count": _safe_nonnegative_int(affinity_update_count),
+            "alias_merge_count": _safe_nonnegative_int(alias_merge_count),
+            "canonicalized_count": _safe_nonnegative_int(canonicalized_count),
+            "local_cleanup_count": _safe_nonnegative_int(local_cleanup_count),
+            "slow_backoff_ms": _safe_nonnegative_int(slow_backoff_ms),
+            "overlap_resolved_count": _safe_nonnegative_int(response_graph.get("layout_overlap_resolved_count"), 0),
             "processed_count": _safe_nonnegative_int(processed_count),
+            "active_count": state_counts.get("active", 0),
+            "dimmed_count": state_counts.get("dimmed", 0),
+            "exiting_count": state_counts.get("exiting", 0),
+            "archived_count": state_counts.get("archived", 0),
+            "provisional_count": state_counts.get("provisional", 0),
             "generated_at": _now_ts(),
             "source_signature": signature,
-            "bubble_graph": _normalize_canvas_ideation_bubble_graph(graph),
+            "bubble_graph": response_graph,
             "workspace": _canvas_workspace_response(workspace_payload),
         }
+
+    if is_payload_demo_balance and requested_update_mode == "local_fast_keywords":
+        workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+        graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+        demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
+        if not _is_demo_balance_config(demo_config):
+            signature = _canvas_llm_signature(
+                {
+                    "version": 1,
+                    "meeting_id": normalized_meeting_id,
+                    "update_mode": update_mode,
+                    "rows": normalized_input_rows,
+                }
+            )
+            return _response(
+                graph,
+                False,
+                "demo_balance 모드가 아니라 로컬 fast 버블을 실행하지 않았습니다.",
+                signature,
+                workspace,
+                reason="not_demo_balance",
+            )
+        anchors_changed = _ensure_demo_balance_anchor_bubbles(graph, demo_config)
+        rows = [
+            row
+            for row in normalized_input_rows[-6:]
+            if _safe_text(row.get("id")) and _safe_text(row.get("text"))
+        ]
+        existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
+        max_keywords = min(4, max(1, int(payload.max_keywords or 4)))
+        extract_payload = IdeationKeywordExtractInput(
+            meeting_id=normalized_meeting_id,
+            meeting_topic=_safe_text(payload.meeting_topic),
+            meeting_goal=_safe_text(payload.meeting_goal),
+            meeting_goal_context=_safe_text(payload.meeting_goal_context),
+            demo_config=demo_config,
+            utterances=[ProblemTaxonomyUtteranceInput(**row) for row in rows],
+            context_cache=_safe_text(payload.context_cache),
+            existing_keywords=existing_inputs,
+            max_keywords=max_keywords,
+        )
+        existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
+        signature = _canvas_llm_signature(
+            {
+                "version": 1,
+                "meeting_id": normalized_meeting_id,
+                "meeting_topic": _safe_text(payload.meeting_topic),
+                "meeting_goal": _safe_text(payload.meeting_goal),
+                "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+                "demo_config": demo_config,
+                "update_mode": update_mode,
+                "graph_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
+                "existing_keywords": existing_keyword_rows,
+                "rows": rows,
+            }
+        )
+        if not rows:
+            return _response(
+                graph,
+                False,
+                "로컬 fast 버블로 처리할 발화가 없습니다.",
+                signature,
+                workspace,
+                reason="no_rows",
+            )
+
+        normalized_keywords, extractor_route = _extract_demo_local_fast_keywords(
+            extract_payload,
+            rows,
+            max_keywords=max_keywords,
+        )
+        if not normalized_keywords:
+            cleanup_graph = _normalize_canvas_ideation_bubble_graph(graph)
+            _normalize_demo_balance_graph_affinities(cleanup_graph)
+            previous_bubble_count = len(cleanup_graph.get("bubbles") or [])
+            _prune_exiting_ideation_bubbles(cleanup_graph)
+            cleanup_cycle = _safe_nonnegative_int(cleanup_graph.get("update_cycle"), 0) + 1
+            cleanup_core_ids = _ideation_bubble_core_ids(cleanup_graph)
+            cleanup_protected_ids = _demo_balance_minimum_side_protected_ids(cleanup_graph)
+            cleanup_metrics = {
+                "local_cleanup_count": _apply_demo_balance_local_provisional_cleanup(
+                    cleanup_graph,
+                    set(),
+                    cleanup_core_ids,
+                    cleanup_cycle,
+                    cleanup_protected_ids,
+                )
+            }
+            cleanup_changed = (
+                anchors_changed
+                or cleanup_metrics["local_cleanup_count"] > 0
+                or len(cleanup_graph.get("bubbles") or []) != previous_bubble_count
+            )
+            if cleanup_changed:
+                cleanup_graph["update_cycle"] = cleanup_cycle
+                cleanup_graph["updated_at"] = _now_ts()
+                cleanup_core_ids = _ideation_bubble_core_ids(cleanup_graph)
+                cleanup_protected_ids = _demo_balance_minimum_side_protected_ids(cleanup_graph)
+                _mark_demo_balance_overflow_bubbles_exiting(cleanup_graph, cleanup_cycle, cleanup_core_ids, cleanup_protected_ids)
+                _apply_ideation_bubble_layout_zones(cleanup_graph, cleanup_core_ids)
+                cleanup_primary_ids = _resolve_ideation_primary_keyword_ids(
+                    cleanup_graph,
+                    _demo_balance_primary_anchor_texts(demo_config),
+                    limit=2,
+                )
+                _apply_ideation_bubble_visual_state(cleanup_graph, cleanup_core_ids | cleanup_primary_ids, primary_ids=cleanup_primary_ids)
+                _apply_ideation_bubble_server_layout(cleanup_graph)
+                saved_at = _now_ts()
+                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+                next_workspace["ideation_bubble_graph"] = cleanup_graph
+                next_workspace["demo_config"] = demo_config
+                with RT.lock:
+                    RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+                _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+                _write_bubble_debug_event(
+                    normalized_meeting_id,
+                    "local_fast_cleanup_without_keywords",
+                    {
+                        "update_mode": update_mode,
+                        "reason": "cleanup",
+                        "rows": _bubble_debug_compact_rows(rows),
+                        "extractor_route": extractor_route,
+                        "state_counts": _ideation_bubble_state_counts(cleanup_graph),
+                        "graph_cycle": cleanup_graph.get("update_cycle"),
+                        "graph_bubbles": _bubble_debug_compact_bubbles(cleanup_graph),
+                    },
+                )
+                return _response(
+                    cleanup_graph,
+                    False,
+                    "",
+                    signature,
+                    next_workspace,
+                    reason="cleanup",
+                    keyword_count=0,
+                    local_cleanup_count=cleanup_metrics["local_cleanup_count"],
+                    used_local=True,
+                    extractor_route=extractor_route,
+                )
+            print(
+                "[canvas ideation bubble graph local fast no keywords]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows": len(rows),
+                    "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                    "extractor_route": extractor_route,
+                },
+                flush=True,
+            )
+            _write_bubble_debug_event(
+                normalized_meeting_id,
+                "local_fast_no_keywords",
+                {
+                    "update_mode": update_mode,
+                    "reason": "no_keywords",
+                    "rows": _bubble_debug_compact_rows(rows),
+                    "extractor_route": extractor_route,
+                    "state_counts": _ideation_bubble_state_counts(graph),
+                    "graph_cycle": graph.get("update_cycle"),
+                    "graph_bubbles": _bubble_debug_compact_bubbles(graph),
+                },
+            )
+            return _response(
+                graph,
+                False,
+                "로컬 추출기에서 표시할 명사구가 없었습니다.",
+                signature,
+                workspace,
+                reason="no_keywords",
+                used_local=True,
+                extractor_route=extractor_route,
+            )
+
+        graph_metrics: dict[str, int] = {}
+        next_graph = _apply_ideation_bubble_graph_update(
+            graph,
+            rows,
+            normalized_keywords,
+            [],
+            [],
+            [],
+            allow_single_support=True,
+            decay_profile="demo_balance",
+            apply_decay=False,
+            mark_processed=False,
+            demo_local_cleanup=True,
+            primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
+            metrics=graph_metrics,
+        )
+        saved_at = _now_ts()
+        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+        next_workspace["ideation_bubble_graph"] = next_graph
+        next_workspace["demo_config"] = demo_config
+        with RT.lock:
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+            RT.last_llm_parsed_json = {
+                "stage": "canvas_ideation_bubble_graph_local_fast",
+                "update_mode": update_mode,
+                "source_signature": signature,
+                "keywords": copy.deepcopy(normalized_keywords),
+                "extractor_route": copy.deepcopy(extractor_route),
+                "bubble_graph": copy.deepcopy(next_graph),
+            }
+            RT.last_llm_parsed_at = _now_ts()
+        _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+        print(
+            "[canvas ideation bubble graph local fast]",
+            {
+                "meeting_id": normalized_meeting_id,
+                "rows": len(rows),
+                "keywords": len(normalized_keywords),
+                "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                "cycle": next_graph.get("update_cycle"),
+                "extractor_route": extractor_route,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "selected_keywords": extractor_route.get("selected_keywords"),
+                "graph_bubbles": [
+                    {
+                        "label": item.get("label"),
+                        "state": item.get("display_state"),
+                        "choice": item.get("choice_affinity"),
+                        "count": item.get("count"),
+                    }
+                    for item in _bubble_debug_compact_bubbles(next_graph, limit=16)
+                ],
+                "local_cleanup": graph_metrics.get("local_cleanup_count", 0),
+            },
+            flush=True,
+        )
+        _write_bubble_debug_event(
+            normalized_meeting_id,
+            "local_fast_updated",
+            {
+                "update_mode": update_mode,
+                "reason": "updated",
+                "rows": _bubble_debug_compact_rows(rows),
+                "selected_keywords": extractor_route.get("selected_keywords"),
+                "top_candidates": extractor_route.get("top_candidates"),
+                "extractor_route": extractor_route,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "graph_cycle": next_graph.get("update_cycle"),
+                "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
+                "local_cleanup_count": _safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
+            },
+        )
+        return _response(
+            next_graph,
+            False,
+            "",
+            signature,
+            next_workspace,
+            reason="updated",
+            keyword_count=len(normalized_keywords),
+            processed_count=0,
+            alias_merge_count=_safe_nonnegative_int(extractor_route.get("alias_merge_count"), 0),
+            canonicalized_count=_safe_nonnegative_int(extractor_route.get("canonicalized_count"), 0),
+            local_cleanup_count=_safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
+            used_local=True,
+            extractor_route=extractor_route,
+        )
 
     lock_wait_started = time.perf_counter()
     with RT.canvas_llm_request_lock:
@@ -15908,6 +18190,11 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             )
         workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+        demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
+        is_demo_balance = _is_demo_balance_config(demo_config)
+        if is_demo_balance:
+            _ensure_demo_balance_anchor_bubbles(graph, demo_config)
+        requested_demo_update_mode = _safe_text(requested_update_mode).lower()
         processed_ids = {
             _safe_text(value)
             for value in (graph.get("processed_utterance_ids") or [])
@@ -15918,18 +18205,29 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             for row in normalized_input_rows
             if _safe_text(row.get("id")) and _safe_text(row.get("id")) not in processed_ids
         ]
-        existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
-        demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
-        is_demo_balance = _is_demo_balance_config(demo_config)
+        include_exiting_existing = (
+            is_demo_balance
+            and requested_demo_update_mode
+            not in {"local_fast_keywords", "fast_keywords", "realtime_text_batch"}
+        )
+        existing_inputs = _ideation_bubble_existing_keyword_inputs(
+            graph,
+            include_exiting=include_exiting_existing,
+        )
         update_mode = (
-            "fast_keywords"
+            "local_fast_keywords"
+            if is_demo_balance and requested_update_mode == "local_fast_keywords"
+            else
+            "realtime_text_batch"
+            if is_demo_balance and requested_update_mode == "realtime_text_batch"
+            else "fast_keywords"
             if is_demo_balance and requested_update_mode == "fast_keywords"
             else "consolidate"
             if is_demo_balance
             else "normal"
         )
-        if is_demo_balance and update_mode == "fast_keywords":
-            max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+        if is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}:
+            max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
         else:
             max_keywords = min(6 if is_demo_balance else 3, max(1, int(payload.max_keywords or 3)))
         extract_payload = IdeationKeywordExtractInput(
@@ -15947,6 +18245,9 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
         refined_transcripts: list[dict[str, Any]] = []
         ignored_utterance_ids: list[str] = []
+        primary_keyword_texts: list[str] | None = None
+        primary_keywords_present = False
+        affinity_updates: list[dict[str, Any]] = []
         signature = _canvas_llm_signature(
             {
                 "version": 1,
@@ -15999,7 +18300,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows, update_mode),
                 stage=llm_stage,
                 temperature=0.08,
-                max_tokens=320 if is_demo_balance and update_mode == "fast_keywords" else 900 if is_demo_balance else 1400,
+                max_tokens=320 if is_demo_balance and update_mode == "fast_keywords" else 760 if is_demo_balance and update_mode == "realtime_text_batch" else 900 if is_demo_balance else 1400,
             )
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - request_started) * 1000)
@@ -16019,6 +18320,18 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 },
                 flush=True,
             )
+            _write_bubble_debug_event(
+                normalized_meeting_id,
+                "llm_update_exception",
+                {
+                    "update_mode": update_mode,
+                    "rows": _bubble_debug_compact_rows(rows),
+                    "llm_route": llm_route,
+                    "llm_error": llm_error,
+                    "graph_cycle": graph.get("update_cycle"),
+                    "graph_bubbles": _bubble_debug_compact_bubbles(graph),
+                },
+            )
             return _response(
                 graph,
                 False,
@@ -16030,9 +18343,12 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             )
 
         if is_demo_balance:
-            if update_mode == "consolidate":
+            if update_mode in {"realtime_text_batch", "consolidate"}:
                 refined_transcripts = _normalize_demo_balance_refined_transcripts(parsed, rows)
                 ignored_utterance_ids = _normalize_demo_balance_ignored_utterance_ids(parsed, rows)
+            if update_mode == "consolidate":
+                primary_keywords_present = True
+                primary_keyword_texts = _demo_balance_primary_anchor_texts(demo_config)
 
         normalized_keywords = _normalize_ideation_keyword_items(
             parsed,
@@ -16040,11 +18356,40 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             max_keywords,
             existing_keyword_rows,
         )
+        if is_demo_balance and update_mode == "consolidate":
+            normalized_keywords = []
         merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
             parsed,
             existing_keyword_rows,
             normalized_keywords,
         )
+        rename_merge_keywords = _normalize_ideation_keyword_rename_merges(
+            parsed,
+            existing_keyword_rows,
+            merge_keywords,
+            remove_keywords,
+        )
+        if rename_merge_keywords:
+            merge_keywords = [
+                *merge_keywords,
+                *[
+                    item
+                    for item in rename_merge_keywords
+                    if not any(
+                        _safe_text(item.get("source")) == _safe_text(existing.get("source"))
+                        and _safe_text(item.get("target")) == _safe_text(existing.get("target"))
+                        for existing in merge_keywords
+                    )
+                ],
+            ][:8]
+        rename_keywords = _normalize_ideation_keyword_renames(
+            parsed,
+            existing_keyword_rows,
+            merge_keywords,
+            remove_keywords,
+        )
+        if is_demo_balance and update_mode == "consolidate":
+            affinity_updates = _normalize_demo_balance_affinity_updates(parsed, existing_keyword_rows)
         is_demo_balance = _is_demo_balance_config(demo_config)
         if not is_demo_balance:
             existing_text_keys = {
@@ -16067,10 +18412,11 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             if skipped_single_support_count:
                 warning = f"1회성 언급 {skipped_single_support_count}개는 버블 생성 조건에 미달해 보류했습니다."
             normalized_keywords = supported_keywords
-        if not normalized_keywords and not merge_keywords and not remove_keywords:
+        has_primary_directive = is_demo_balance and update_mode == "consolidate" and primary_keywords_present
+        if not normalized_keywords and not rename_keywords and not merge_keywords and not remove_keywords and not affinity_updates and not has_primary_directive:
             warning = warning or "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
             if is_demo_balance:
-                if update_mode == "fast_keywords":
+                if update_mode in {"fast_keywords", "realtime_text_batch"}:
                     return _response(
                         graph,
                         True,
@@ -16078,10 +18424,16 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                         signature,
                         workspace,
                         reason="no_keywords",
+                        refined_transcripts=refined_transcripts,
+                        ignored_utterance_ids=ignored_utterance_ids,
                     )
+                latest_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+                latest_graph = _normalize_canvas_ideation_bubble_graph(latest_workspace.get("ideation_bubble_graph"))
+                _ensure_demo_balance_anchor_bubbles(latest_graph, demo_config)
                 next_graph = _apply_ideation_bubble_graph_update(
-                    graph,
+                    latest_graph,
                     rows,
+                    [],
                     [],
                     [],
                     [],
@@ -16089,9 +18441,10 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     decay_profile="demo_balance",
                     apply_decay=True,
                     mark_processed=True,
+                    primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
                 )
                 saved_at = _now_ts()
-                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
                 next_workspace["ideation_bubble_graph"] = next_graph
                 next_workspace["demo_config"] = demo_config
                 with RT.lock:
@@ -16101,6 +18454,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     "stage": llm_stage,
                     "update_mode": update_mode,
                     "source_signature": signature,
+                    "raw_directives": _bubble_debug_compact_directives(parsed),
+                    "rename_keywords": [],
                     "merge_keywords": [],
                     "remove_keywords": [],
                     "keywords": [],
@@ -16122,6 +18477,22 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     },
                     flush=True,
                 )
+                _write_bubble_debug_event(
+                    normalized_meeting_id,
+                    "llm_update_no_keywords_processed",
+                    {
+                        "update_mode": update_mode,
+                        "rows": _bubble_debug_compact_rows(rows),
+                        "raw_directives": _bubble_debug_compact_directives(parsed),
+                        "warning": warning,
+                        "refined_count": len(refined_transcripts),
+                        "ignored_count": len(ignored_utterance_ids),
+                        "ignored_utterance_ids": ignored_utterance_ids,
+                        "state_counts": _ideation_bubble_state_counts(next_graph),
+                        "graph_cycle": next_graph.get("update_cycle"),
+                        "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
+                    },
+                )
                 return _response(
                     next_graph,
                     True,
@@ -16131,23 +18502,35 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     reason="no_keywords",
                     refined_transcripts=refined_transcripts,
                     ignored_utterance_ids=ignored_utterance_ids,
+                    raw_directives=_bubble_debug_compact_directives(parsed),
                     processed_count=len(rows),
                 )
             return _response(graph, True, warning, signature, workspace, reason="no_keywords")
 
+        graph_metrics: dict[str, int] = {}
+        latest_workspace = workspace
+        latest_graph = graph
+        if is_demo_balance and update_mode == "consolidate":
+            latest_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+            latest_graph = _normalize_canvas_ideation_bubble_graph(latest_workspace.get("ideation_bubble_graph"))
+            _ensure_demo_balance_anchor_bubbles(latest_graph, demo_config)
         next_graph = _apply_ideation_bubble_graph_update(
-            graph,
+            latest_graph,
             rows,
             normalized_keywords,
+            rename_keywords,
             merge_keywords,
             remove_keywords,
             allow_single_support=is_demo_balance,
             decay_profile="demo_balance" if is_demo_balance else "normal",
-            apply_decay=not (is_demo_balance and update_mode == "fast_keywords"),
-            mark_processed=not (is_demo_balance and update_mode == "fast_keywords"),
+            apply_decay=not (is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}),
+            mark_processed=not (is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}),
+            primary_keyword_texts=primary_keyword_texts if is_demo_balance and update_mode == "consolidate" else None,
+            affinity_updates=affinity_updates if is_demo_balance and update_mode == "consolidate" else None,
+            metrics=graph_metrics,
         )
         saved_at = _now_ts()
-        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
         next_workspace["ideation_bubble_graph"] = next_graph
         if is_demo_balance:
             next_workspace["demo_config"] = demo_config
@@ -16159,8 +18542,12 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "stage": llm_stage,
             "update_mode": update_mode,
             "source_signature": signature,
+            "raw_directives": _bubble_debug_compact_directives(parsed),
+            "rename_keywords": copy.deepcopy(rename_keywords),
             "merge_keywords": copy.deepcopy(merge_keywords),
             "remove_keywords": copy.deepcopy(remove_keywords),
+            "primary_keywords": copy.deepcopy(primary_keyword_texts if primary_keyword_texts is not None else []),
+            "affinity_updates": copy.deepcopy(affinity_updates),
             "keywords": copy.deepcopy(normalized_keywords),
             "refined_transcripts": copy.deepcopy(refined_transcripts),
             "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
@@ -16174,19 +18561,47 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "update_mode": update_mode,
                 "rows": len(rows),
                 "keywords": len(normalized_keywords),
+                "renames": len(rename_keywords),
                 "merges": len(merge_keywords),
                 "removes": len(remove_keywords),
+                "primary": graph_metrics.get("primary_count", 0),
+                "promotes": graph_metrics.get("promote_count", 0),
+                "demotes": graph_metrics.get("demote_count", 0),
+                "affinity_updates": graph_metrics.get("affinity_update_count", 0),
                 "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
                 "cycle": next_graph.get("update_cycle"),
+                "overlap_resolved": next_graph.get("layout_overlap_resolved_count"),
                 "refined": len(refined_transcripts),
                 "ignored": len(ignored_utterance_ids),
                 "visible_bubbles": len(
                     [
                         item
                         for item in (next_graph.get("bubbles") or [])
-                        if _normalize_ideation_bubble_state(item.get("display_state")) != "archived"
+                        if _is_ideation_bubble_visible_state(item.get("display_state"))
                     ]
                 ),
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+            },
+        )
+        _write_bubble_debug_event(
+            normalized_meeting_id,
+            "llm_update_applied",
+            {
+                "update_mode": update_mode,
+                "rows": _bubble_debug_compact_rows(rows),
+                "raw_directives": _bubble_debug_compact_directives(parsed),
+                "keywords": normalized_keywords,
+                "rename_keywords": rename_keywords,
+                "merge_keywords": merge_keywords,
+                "remove_keywords": remove_keywords,
+                "primary_keywords": primary_keyword_texts if primary_keyword_texts is not None else [],
+                "affinity_updates": affinity_updates,
+                "refined_count": len(refined_transcripts),
+                "ignored_count": len(ignored_utterance_ids),
+                "metrics": graph_metrics,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "graph_cycle": next_graph.get("update_cycle"),
+                "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
             },
         )
         return _response(
@@ -16198,10 +18613,17 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             reason="updated",
             refined_transcripts=refined_transcripts,
             ignored_utterance_ids=ignored_utterance_ids,
+            rename_keywords=rename_keywords,
             keyword_count=len(normalized_keywords),
+            rename_count=len(rename_keywords),
             merge_count=len(merge_keywords),
             remove_count=len(remove_keywords),
-            processed_count=0 if is_demo_balance and update_mode == "fast_keywords" else len(rows),
+            primary_count=graph_metrics.get("primary_count", 0),
+            promote_count=graph_metrics.get("promote_count", 0),
+            demote_count=graph_metrics.get("demote_count", 0),
+            affinity_update_count=graph_metrics.get("affinity_update_count", 0),
+            raw_directives=_bubble_debug_compact_directives(parsed),
+            processed_count=0 if is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"} else len(rows),
         )
 
 
@@ -16331,6 +18753,7 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions)
     workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation)
     workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
+    _ensure_demo_balance_workspace_graph(workspace, saved_at)
     workspace["imported_state"] = (
         copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
     )
@@ -16661,6 +19084,8 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     else:
         reset_keys = []
 
+    _ensure_demo_balance_workspace_graph(workspace, saved_at)
+
     with RT.lock:
         RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
 
@@ -16681,6 +19106,68 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         },
     )
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/meeting-room-reset")
+def post_canvas_meeting_room_reset(payload: CanvasMeetingRoomResetInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    client = _get_supabase_service_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Supabase service role client is not configured")
+
+    deleted_count = 0
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            response = (
+                client
+                .table("transcripts")
+                .delete()
+                .eq("meeting_id", normalized_meeting_id)
+                .execute()
+            )
+        deleted_rows = response.data if isinstance(getattr(response, "data", None), list) else []
+        deleted_count = len(deleted_rows)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to delete transcripts: {exc}") from exc
+
+    reset_at = _now_ts()
+    print(
+        "[canvas meeting room reset]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "user_id": _safe_text(payload.user_id),
+            "deleted_transcript_count": deleted_count,
+            "reset_at": reset_at,
+        },
+    )
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "deleted_transcript_count": deleted_count,
+        "reset_at": reset_at,
+    }
+
+
+@app.post("/api/canvas/bubble-debug-log")
+def post_canvas_bubble_debug_log(payload: CanvasBubbleDebugLogInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    event = re.sub(r"[^A-Za-z0-9_.:-]+", "_", _safe_text(payload.event) or "frontend_event")[:80]
+    data = payload.data if isinstance(payload.data, dict) else {}
+    _write_bubble_debug_event(
+        normalized_meeting_id,
+        f"frontend_{event}",
+        {
+            "user_id": _safe_text(payload.user_id)[:120],
+            "data": data,
+        },
+    )
+    return {"ok": True, "meeting_id": normalized_meeting_id}
 
 
 @app.post("/api/canvas/final-report-share")

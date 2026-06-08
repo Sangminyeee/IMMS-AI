@@ -17,6 +17,8 @@ type ProblemGroupViewModel = {
 export type IdeationKeywordBubble = {
   id: string;
   text: string;
+  canonicalLabel?: string;
+  aliases?: string[];
   count: number;
   weight: number;
   related: string[];
@@ -37,6 +39,8 @@ export type IdeationKeywordBubble = {
   orbitRadius?: number;
   activity?: number;
   opacity?: number;
+  displayState?: "active" | "dimmed" | "exiting" | "archived" | string;
+  lifecycleState?: "provisional" | "active" | string;
   layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
   durable?: boolean;
   emphasis?: "primary" | "default";
@@ -288,7 +292,6 @@ const CANVAS_IDEATION_BUBBLE_CLUSTER_MAX_ITEMS = 6;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP = 0.06;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS = 600;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH = 1.42;
-const CANVAS_IDEATION_BUBBLE_MIN_OPACITY = 0.22;
 const CANVAS_IDEATION_BUBBLE_DECAY_RATE = 0.72;
 const CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE = 260;
 const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
@@ -301,9 +304,8 @@ const CANVAS_IDEATION_BUBBLE_RELAXATION_ITERATIONS = 8;
 const CANVAS_IDEATION_BUBBLE_RELAXATION_GAP = 10;
 const CANVAS_IDEATION_BUBBLE_RELAXATION_STEP = 0.42;
 const CANVAS_IDEATION_BUBBLE_MAX_PRIMARY_COUNT = 2;
-const CANVAS_IDEATION_BUBBLE_ENTER_SCALE = 0.58;
-const CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX = 0.34;
-const CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS = 70;
+const CANVAS_IDEATION_BUBBLE_ENTER_SCALE = 0.65;
+const CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS = 120;
 const CANVAS_IDEATION_BUBBLE_SPAWN_GAP = 8;
 export const CANVAS_IDEATION_BUBBLE_TRANSITION =
   "transform 2800ms cubic-bezier(0.22, 1, 0.36, 1), opacity 720ms ease";
@@ -881,26 +883,12 @@ function getIdeationBubbleVisualSize(
   return Math.round(baseSize * (0.82 + clampNumber(activity, 0, 1) * 0.18));
 }
 
-function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
-  return !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.role === "center" || bubble.durable);
-}
-
-function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
-  const serverOpacity = Number(bubble.opacity);
-  if (Number.isFinite(serverOpacity)) {
-    return isIdeationBubbleOpacityLocked(bubble) ? 1 : Number(clampNumber(serverOpacity, 0, 1).toFixed(3));
+function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, _activity: number) {
+  if (bubble.displayState === "exiting") {
+    return 0;
   }
 
-  if (isIdeationBubbleOpacityLocked(bubble)) {
-    return 1;
-  }
-
-  const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
-  const importance = clampNumber(Number(bubble.importance ?? bubble.weight ?? 0.5), 0, 1);
-  const emphasis = clampNumber(activity * relevance, 0, 1);
-  const durableMinimum = bubble.count >= 5 || importance >= 0.68 ? 0.42 : CANVAS_IDEATION_BUBBLE_MIN_OPACITY;
-  const minimum = bubble.offTopic || bubble.kind === "off_topic" ? 0.32 : durableMinimum;
-  return Number(clampNumber(minimum + emphasis * (1 - minimum), minimum, 1).toFixed(3));
+  return 1;
 }
 
 function getIdeationBubbleIncomingActivity(bubble: IdeationKeywordBubble) {
@@ -1092,6 +1080,30 @@ function findIdeationBubbleSpawnTarget(
   return clampIdeationBubblePosition(fallbackCenterX - size / 2, fallbackCenterY - size / 2, size);
 }
 
+function hasIdeationBubbleOrbitSpawnTarget(bubble: IdeationKeywordBubbleVisual) {
+  return (
+    hasServerIdeationBubbleTarget(bubble) &&
+    Number.isFinite(Number(bubble.orbitAngle)) &&
+    Number.isFinite(Number(bubble.orbitRadius))
+  );
+}
+
+function findIdeationBubbleOrbitSpawnTarget(bubble: IdeationKeywordBubbleVisual) {
+  const finalPosition = clampIdeationBubblePosition(bubble.targetX, bubble.targetY, bubble.size);
+  const orbitRadius = Number(bubble.orbitRadius);
+  const orbitAngle = Number(bubble.orbitAngle);
+  if (!Number.isFinite(orbitRadius) || orbitRadius <= 0 || !Number.isFinite(orbitAngle)) {
+    return finalPosition;
+  }
+
+  const offset = clampNumber(Math.min(28, orbitRadius * 0.12), 10, 30);
+  return clampIdeationBubblePosition(
+    finalPosition.x - Math.cos(orbitAngle) * offset,
+    finalPosition.y - Math.sin(orbitAngle) * offset,
+    bubble.size,
+  );
+}
+
 function applyIdeationBubbleEnterState(
   visuals: IdeationKeywordBubbleVisual[],
   enteringIds: Set<string>,
@@ -1126,7 +1138,9 @@ function applyIdeationBubbleEnterState(
       };
     }
 
-    const spawn = findIdeationBubbleSpawnTarget(visual, visual.size, spawnOccupied, tick, enteringOrder, layoutAnchor);
+    const spawn = hasIdeationBubbleOrbitSpawnTarget(visual)
+      ? findIdeationBubbleOrbitSpawnTarget(visual)
+      : findIdeationBubbleSpawnTarget(visual, visual.size, spawnOccupied, tick, enteringOrder, layoutAnchor);
     enteringOrder += 1;
     spawnOccupied.push({
       id: visual.id,
@@ -1144,9 +1158,7 @@ function applyIdeationBubbleEnterState(
       settledTargetY: visual.targetY,
       visualScale: CANVAS_IDEATION_BUBBLE_ENTER_SCALE,
       entering: true,
-      opacity: isIdeationBubbleOpacityLocked(visual)
-        ? 1
-        : Math.min(visual.opacity, CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX),
+      opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
     };
   });
 }

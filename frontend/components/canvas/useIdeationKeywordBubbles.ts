@@ -25,6 +25,7 @@ type IdeationKeywordUtterance = {
 };
 
 const IDEATION_KEYWORD_MAX_TOTAL_BUBBLES = 16;
+const DEMO_BALANCE_KEYWORD_MAX_TOTAL_BUBBLES = 32;
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -70,15 +71,31 @@ function deferStateUpdate(update: () => void) {
   window.queueMicrotask(update);
 }
 
-function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): IdeationKeywordBubble[] {
+function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph, demoBalanceMode = false): IdeationKeywordBubble[] {
   const normalizedGraph = normalizeIdeationBubbleGraphForWorkspace(graph);
-  const visibleBubbles = normalizedGraph.bubbles
-    .filter((bubble) => bubble.display_state !== "archived")
-    .slice(0, IDEATION_KEYWORD_MAX_TOTAL_BUBBLES);
-  const labelById = new Map(visibleBubbles.map((bubble) => [bubble.id, bubble.label] as const));
+  const maxVisibleBubbles = demoBalanceMode ? DEMO_BALANCE_KEYWORD_MAX_TOTAL_BUBBLES : IDEATION_KEYWORD_MAX_TOTAL_BUBBLES;
+  const isDemoHiddenNeutralBubble = (bubble: (typeof normalizedGraph.bubbles)[number]) => (
+    demoBalanceMode
+    && (
+      bubble.id === "demo-balance-anchor-neutral"
+      || bubble.choice_affinity === "neutral"
+      || bubble.label === "미분류"
+      || bubble.canonical_label === "미분류"
+    )
+  );
+  const activeBubbles = normalizedGraph.bubbles
+    .filter((bubble) => !isDemoHiddenNeutralBubble(bubble) && bubble.display_state !== "archived" && bubble.display_state !== "exiting")
+    .slice(0, maxVisibleBubbles);
+  const exitingBubbles = normalizedGraph.bubbles
+    .filter((bubble) => !isDemoHiddenNeutralBubble(bubble) && bubble.display_state === "exiting")
+    .slice(0, demoBalanceMode ? 12 : 4);
+  const visibleBubbles = [...activeBubbles, ...exitingBubbles];
+  const displayLabelForBubble = (bubble: (typeof visibleBubbles)[number]) => bubble.canonical_label || bubble.label;
+  const labelById = new Map(visibleBubbles.map((bubble) => [bubble.id, displayLabelForBubble(bubble)] as const));
   const maxCount = Math.max(1, ...visibleBubbles.map((bubble) => Number(bubble.count || 1)));
 
   return visibleBubbles.map((bubble) => {
+    const displayLabel = displayLabelForBubble(bubble);
     const kind = normalizeIdeationKeywordBubbleKind(bubble.kind);
     const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
     const activity = clampNumber(Number(bubble.activity ?? (bubble.display_state === "dimmed" ? 0.22 : 0.72)), 0, 1);
@@ -90,12 +107,14 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
     const layoutSize = Number(bubble.size);
     return {
       id: bubble.id,
-      text: bubble.label,
+      text: displayLabel,
+      canonicalLabel: bubble.canonical_label || "",
+      aliases: Array.isArray(bubble.aliases) ? bubble.aliases : [],
       count: Math.max(1, Number(bubble.count || 1)),
       weight: Math.max(1, Number(bubble.count || 1)) / maxCount,
       related: (bubble.related_ids || [])
         .map((id) => labelById.get(id) || "")
-        .filter((label) => label && label !== bubble.label)
+        .filter((label) => label && label !== displayLabel)
         .slice(0, 6),
       kind: bubble.off_topic || kind === "off_topic" ? "off_topic" : kind,
       importance: clampNumber(Number(bubble.importance ?? 0.6), 0, 1),
@@ -114,8 +133,10 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
       orbitRadius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
       activity,
       opacity: Number.isFinite(opacity) ? clampNumber(opacity, 0, 1) : undefined,
+      displayState: bubble.display_state || "active",
+      lifecycleState: bubble.lifecycle_state || "active",
       layoutZone,
-      durable: emphasis === "primary",
+      durable: Boolean(bubble.durable) || emphasis === "primary",
       emphasis,
     };
   });
@@ -155,8 +176,8 @@ export function useIdeationKeywordBubbles(options: {
     [transcripts],
   );
   const graphBubbles = useMemo(
-    () => graphToIdeationKeywordBubbles(normalizedBubbleGraph),
-    [normalizedBubbleGraph],
+    () => graphToIdeationKeywordBubbles(normalizedBubbleGraph, demoBalanceMode),
+    [normalizedBubbleGraph, demoBalanceMode],
   );
 
   useEffect(() => {

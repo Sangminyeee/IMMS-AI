@@ -4,13 +4,17 @@ import { useMoaPresence } from "@/components/moa-ui/useMoaPresence";
 interface DashboardCreateMeetingDialogProps {
   demoMode: boolean;
   demoOptionA: string;
+  demoOptionAKeyword: string;
   demoOptionB: string;
+  demoOptionBKeyword: string;
   meetingTitle: string;
   onClose: () => void;
   onCreate: () => void;
   onDemoModeChange: (enabled: boolean) => void;
   onDemoOptionAChange: (value: string) => void;
+  onDemoOptionAKeywordChange: (value: string) => void;
   onDemoOptionBChange: (value: string) => void;
+  onDemoOptionBKeywordChange: (value: string) => void;
   onMeetingTitleChange: (title: string) => void;
   open: boolean;
 }
@@ -18,13 +22,17 @@ interface DashboardCreateMeetingDialogProps {
 export function DashboardCreateMeetingDialog({
   demoMode,
   demoOptionA,
+  demoOptionAKeyword,
   demoOptionB,
+  demoOptionBKeyword,
   meetingTitle,
   onClose,
   onCreate,
   onDemoModeChange,
   onDemoOptionAChange,
+  onDemoOptionAKeywordChange,
   onDemoOptionBChange,
+  onDemoOptionBKeywordChange,
   onMeetingTitleChange,
   open,
 }: DashboardCreateMeetingDialogProps) {
@@ -32,9 +40,14 @@ export function DashboardCreateMeetingDialog({
   const descriptionId = useId();
   const inputId = useId();
   const optionAId = useId();
+  const optionAKeywordId = useId();
   const optionBId = useId();
+  const optionBKeywordId = useId();
   const presence = useMoaPresence(open, 320);
-  const canSubmit = Boolean(meetingTitle.trim() && (!demoMode || (demoOptionA.trim() && demoOptionB.trim())));
+  const canSubmit = Boolean(
+    meetingTitle.trim() &&
+      (!demoMode || (demoOptionA.trim() && demoOptionAKeyword.trim() && demoOptionB.trim() && demoOptionBKeyword.trim())),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -142,7 +155,8 @@ export function DashboardCreateMeetingDialog({
 
             {demoMode ? (
               <div className="mt-[14px] grid gap-[10px]">
-                <div>
+                <div className="grid gap-[10px] lg:grid-cols-2">
+                  <div>
                   <label htmlFor={optionAId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
                     A 선택지
                   </label>
@@ -154,19 +168,48 @@ export function DashboardCreateMeetingDialog({
                     placeholder="예) 평생 커피 금지"
                     className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
                   />
+                  </div>
+                  <div>
+                    <label htmlFor={optionAKeywordId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      A 중심 키워드
+                    </label>
+                    <input
+                      id={optionAKeywordId}
+                      type="text"
+                      value={demoOptionAKeyword}
+                      onChange={(event) => onDemoOptionAKeywordChange(event.target.value)}
+                      placeholder="예) 커피"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor={optionBId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
-                    B 선택지
-                  </label>
-                  <input
-                    id={optionBId}
-                    type="text"
-                    value={demoOptionB}
-                    onChange={(event) => onDemoOptionBChange(event.target.value)}
-                    placeholder="예) 평생 라면 금지"
-                    className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
-                  />
+                <div className="grid gap-[10px] lg:grid-cols-2">
+                  <div>
+                    <label htmlFor={optionBId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      B 선택지
+                    </label>
+                    <input
+                      id={optionBId}
+                      type="text"
+                      value={demoOptionB}
+                      onChange={(event) => onDemoOptionBChange(event.target.value)}
+                      placeholder="예) 평생 라면 금지"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={optionBKeywordId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      B 중심 키워드
+                    </label>
+                    <input
+                      id={optionBKeywordId}
+                      type="text"
+                      value={demoOptionBKeyword}
+                      onChange={(event) => onDemoOptionBKeywordChange(event.target.value)}
+                      placeholder="예) 라면"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
                 </div>
                 <p className="rounded-[12px] bg-white px-[12px] py-[9px] text-[11px] font-semibold leading-[1.45] tracking-[-0.028px] text-[#6b7a90]">
                   참가자는 발화할 때 <span className="text-[#0542ff]">A 또는 B를 먼저 말하고</span> 이유를 설명해야 유효 의견으로 집계됩니다.

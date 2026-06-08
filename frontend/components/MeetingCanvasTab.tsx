@@ -11,6 +11,8 @@ import {
   createCanvasFinalReportShare,
   finishCanvasArtifactGeneration,
   getCanvasProblemDiscussionWorkspaceJob,
+  logCanvasBubbleDebugEvent,
+  resetMeetingRoomRuntimeState,
   saveCanvasWorkspacePatch,
   startCanvasArtifactGeneration,
   startCanvasProblemDiscussionWorkspace,
@@ -96,6 +98,7 @@ import { useCanvasWorkspaceLoader } from "@/components/canvas/useCanvasWorkspace
 import { useCanvasSelectionGuards } from "@/components/canvas/useCanvasSelectionGuards";
 import {
   buildMeetingStateSignature,
+  createDemoBalanceAnchoredIdeationBubbleGraph,
   buildWorkspaceProblemGroupsPayload,
   createEmptyIdeationBubbleGraph,
   createWorkspaceFieldSignatures,
@@ -387,6 +390,7 @@ type MeetingCanvasTabProps = {
   onToggleRecording?: () => void | Promise<void>;
   onEndMeeting?: () => void | Promise<void>;
   onStopRecording?: () => void | Promise<void>;
+  onMeetingTranscriptReset?: () => void;
   onCanvasStageContextChange?: (context: {
     stage: CanvasStage;
     targetId?: string;
@@ -748,6 +752,7 @@ export default function MeetingCanvasTab({
   onToggleRecording,
   onEndMeeting,
   onStopRecording,
+  onMeetingTranscriptReset,
   onCanvasStageContextChange,
   recordingStatusText = "",
 }: MeetingCanvasTabProps) {
@@ -1257,6 +1262,47 @@ export default function MeetingCanvasTab({
     ideationBubbleUpdateTickRef,
     ideationKeywordBubbles,
   ]);
+  const ideationKeywordBubbleSignature = useMemo(
+    () =>
+      ideationKeywordBubbles
+        .map((bubble) => `${bubble.id}:${bubble.text}:${bubble.count}:${bubble.displayState}:${bubble.anchorText || ""}`)
+        .join("|"),
+    [ideationKeywordBubbles],
+  );
+  useEffect(() => {
+    if (!meetingId || stage !== "ideation") return;
+    logCanvasBubbleDebugEvent({
+      meeting_id: meetingId,
+      user_id: userId,
+      event: "keyword_bubbles_built",
+      data: {
+        graph_cycle: ideationBubbleGraph.update_cycle,
+        graph_bubbles: ideationBubbleGraph.bubbles.length,
+        keyword_bubbles: ideationKeywordBubbles.length,
+        labels: ideationKeywordBubbles.slice(0, 24).map((bubble) => ({
+          id: bubble.id,
+          text: bubble.text,
+          count: bubble.count,
+          state: bubble.displayState,
+          lifecycle: bubble.lifecycleState,
+          anchor: bubble.anchorText,
+          target: {
+            x: bubble.layoutX,
+            y: bubble.layoutY,
+            size: bubble.layoutSize,
+          },
+        })),
+      },
+    });
+  }, [
+    ideationBubbleGraph.bubbles.length,
+    ideationBubbleGraph.update_cycle,
+    ideationKeywordBubbleSignature,
+    ideationKeywordBubbles,
+    meetingId,
+    stage,
+    userId,
+  ]);
   useEffect(() => {
     if (!ideationBubbleVisuals.some((bubble) => bubble.entering)) {
       return undefined;
@@ -1276,6 +1322,40 @@ export default function MeetingCanvasTab({
     () => (ideationBubbleVisualIdSignature ? ideationBubbleVisualIdSignature.split("|") : []),
     [ideationBubbleVisualIdSignature],
   );
+  useEffect(() => {
+    if (!meetingId || stage !== "ideation") return;
+    logCanvasBubbleDebugEvent({
+      meeting_id: meetingId,
+      user_id: userId,
+      event: "bubble_visuals_rendered",
+      data: {
+        graph_cycle: ideationBubbleGraph.update_cycle,
+        keyword_bubbles: ideationKeywordBubbles.length,
+        visual_bubbles: ideationBubbleVisuals.length,
+        labels: ideationBubbleVisuals.slice(0, 24).map((bubble) => ({
+          id: bubble.id,
+          text: bubble.text,
+          count: bubble.count,
+          state: bubble.displayState,
+          lifecycle: bubble.lifecycleState,
+          anchor: bubble.anchorText,
+          x: Math.round(bubble.targetX),
+          y: Math.round(bubble.targetY),
+          size: Math.round(bubble.size),
+          opacity: Number(bubble.opacity.toFixed(3)),
+          entering: Boolean(bubble.entering),
+        })),
+      },
+    });
+  }, [
+    ideationBubbleGraph.update_cycle,
+    ideationBubbleVisualIdSignature,
+    ideationBubbleVisuals,
+    ideationKeywordBubbles.length,
+    meetingId,
+    stage,
+    userId,
+  ]);
   useEffect(() => {
     if (ideationBubbleVisualIds.length === 0) {
       setIdeationBubbleDebugGrowthById((current) => (Object.keys(current).length === 0 ? current : {}));
@@ -2455,11 +2535,15 @@ export default function MeetingCanvasTab({
     setDemoConfig,
     setDemoBalanceClassification,
     setNodePositions,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
     setProblemGroups,
     setProblemStructureArtifactMeta,
     setProblemStructureGroups,
+    setProblemStructureMethod,
     setProblemStructureNodes,
     setProblemStructurePending,
+    setStage,
     setSummaryDocumentDraftDirty,
     setSummaryDocumentDraftMarkdown,
     setSummaryDocumentEditMode,
@@ -2469,6 +2553,22 @@ export default function MeetingCanvasTab({
     workspaceHydratingRef,
     workspaceLoadedRef,
   });
+
+  useEffect(() => {
+    if (
+      !incomingSharedCanvasSync ||
+      incomingSharedCanvasSync.meeting_id !== meetingId ||
+      incomingSharedCanvasSync.sync_scope !== "meeting_room_reset" ||
+      incomingSharedCanvasSync.updated_by === userId
+    ) {
+      return;
+    }
+    setMobileViewedStage("ideation");
+    mobileViewedStageInitializedRef.current = false;
+    setSelectedNodeId("");
+    setSelectedProblemGroupId("");
+    setSelectedProblemSourceNodeId("");
+  }, [incomingSharedCanvasSync, meetingId, userId]);
 
   const problemDefinitionArtifactGeneration = artifactGeneration[PROBLEM_DEFINITION_STEP1_ARTIFACT];
   const problemStructureArtifactGeneration = artifactGeneration[PROBLEM_DEFINITION_STEP2_ARTIFACT];
@@ -3569,16 +3669,21 @@ export default function MeetingCanvasTab({
       return;
     }
 
-    const resetProblem = scope === "problem" || scope === "all";
+    const resetRoom = scope === "room";
+    const resetProblem = scope === "problem" || scope === "all" || resetRoom;
     const resetSummary = scope === "summary" || scope === "all" || resetProblem;
     const scopeLabel =
       scope === "problem"
         ? "문제정의 이후 데이터"
         : scope === "summary"
           ? "요약 및 정리 데이터"
-          : "문제정의와 요약 및 정리 데이터";
+          : scope === "room"
+            ? "회의실 STT와 생성 데이터"
+            : "문제정의와 요약 및 정리 데이터";
     const confirmed = window.confirm(
-      `[Debug] ${scopeLabel}를 초기화할까요?\nSTT, 버블, 개인 메모는 유지됩니다.`,
+      resetRoom
+        ? `[Debug] ${scopeLabel}를 초기화할까요?\n전사, 버블, 문제정의, 요약 데이터를 삭제합니다.\n회의 제목, 목표, 데모 설정, 개인 메모는 유지됩니다.`
+        : `[Debug] ${scopeLabel}를 초기화할까요?\nSTT, 버블, 개인 메모는 유지됩니다.`,
     );
     if (!confirmed) return;
 
@@ -3622,19 +3727,39 @@ export default function MeetingCanvasTab({
       : problemStructureStatePayload;
     const nextFinalSummaryDocument = resetSummary ? createEmptyFinalSolutionSummary() : finalSummaryDocument;
     const nextDemoBalanceClassification = resetProblem ? {} : demoBalanceClassification;
-    const nextNodePositions = resetProblem
+    const currentIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+      latestSharedWorkspaceRef.current.ideationBubbleGraph || ideationBubbleGraph,
+    );
+    const nextIdeationBubbleGraph = resetRoom
+      ? createDemoBalanceAnchoredIdeationBubbleGraph(normalizedDemoConfig, {
+          updateCycle: Number(currentIdeationBubbleGraph.update_cycle || 0) + 1,
+          layoutRevision: Number(currentIdeationBubbleGraph.layout_revision || 0) + 1,
+          updatedAt: now,
+        })
+      : ideationBubbleGraph;
+    const nextImportedState = resetRoom ? null : persistedSharedImportedState;
+    const nextNodePositions = resetRoom
       ? normalizeCanvasNodePositionsForComputedIdeation({
-          ...nodePositions,
+          ideation: {},
           "problem-definition": {},
           solution: {},
         })
-      : nodePositions;
+      : resetProblem
+        ? normalizeCanvasNodePositionsForComputedIdeation({
+            ...nodePositions,
+            "problem-definition": {},
+            solution: {},
+          })
+        : nodePositions;
     const llmCacheResetPrefixes = [
       ...(resetProblem ? PROBLEM_DEFINITION_LLM_CACHE_RESET_PREFIXES : []),
       ...(resetSummary ? SUMMARY_DOCUMENT_LLM_CACHE_RESET_PREFIXES : []),
     ];
 
     try {
+      if (resetRoom && isRecording) {
+        await onStopRecording?.();
+      }
       const fullPatchPayload = {
         ...buildCurrentWorkspacePatchPayload({
           stage: "ideation",
@@ -3643,12 +3768,44 @@ export default function MeetingCanvasTab({
           demoBalanceClassification: nextDemoBalanceClassification,
           finalSolutionSummary: nextFinalSummaryDocument,
           artifactGeneration: nextArtifactGeneration,
+          ideationBubbleGraph: nextIdeationBubbleGraph,
           nodePositions: nextNodePositions,
-          importedState: persistedSharedImportedState,
+          importedState: nextImportedState,
         }),
         llm_cache_reset_prefixes: llmCacheResetPrefixes,
       };
       const patchPayload = { ...fullPatchPayload, stage: undefined };
+      if (resetRoom) {
+        onSharedCanvasSync({
+          sync_id: `meeting-room-reset-${nonce}`,
+          meeting_id: meetingId,
+          sync_scope: "meeting_room_reset",
+          updated_by: userId,
+          updated_at: now,
+          meeting_goal: fullPatchPayload.meeting_goal || "",
+          meeting_goal_context: fullPatchPayload.meeting_goal_context || "",
+          demo_config: fullPatchPayload.demo_config,
+          demo_balance_classification: fullPatchPayload.demo_balance_classification,
+          stage: "ideation",
+          agenda_overrides: fullPatchPayload.agenda_overrides,
+          canvas_items: fullPatchPayload.canvas_items,
+          custom_groups: fullPatchPayload.custom_groups,
+          problem_groups: fullPatchPayload.problem_groups,
+          problem_structure: fullPatchPayload.problem_structure,
+          solution_topics: fullPatchPayload.solution_topics,
+          final_solution_summary: fullPatchPayload.final_solution_summary,
+          artifact_generation: fullPatchPayload.artifact_generation,
+          ideation_bubble_graph: fullPatchPayload.ideation_bubble_graph,
+          node_positions: fullPatchPayload.node_positions,
+          imported_state: fullPatchPayload.imported_state,
+        });
+      }
+      if (resetRoom) {
+        await resetMeetingRoomRuntimeState({
+          meeting_id: meetingId,
+          user_id: userId,
+        });
+      }
       await saveCanvasWorkspacePatch(patchPayload);
       writeSharedWorkspaceSessionCache(meetingId, fullPatchPayload);
 
@@ -3702,6 +3859,18 @@ export default function MeetingCanvasTab({
         setLocalEditPresenceTarget(null);
       }
 
+      if (resetRoom) {
+        setIdeationBubbleGraph(nextIdeationBubbleGraph);
+        setIdeationBubbleVisuals([]);
+        setIdeationBubbleDebugGrowthById({});
+        setIdeationBubbleLayoutRevision((current) => current + 1);
+        setImportedState(null);
+        setImportOverrideActive(false);
+        setMobileViewedStage("ideation");
+        mobileViewedStageInitializedRef.current = false;
+        onMeetingTranscriptReset?.();
+      }
+
       setArtifactGeneration(nextArtifactGeneration);
       setBusy(false);
       setStage("ideation");
@@ -3712,19 +3881,22 @@ export default function MeetingCanvasTab({
         demoBalanceClassification: nextDemoBalanceClassification,
         finalSolutionSummary: nextFinalSummaryDocument,
         artifactGeneration: nextArtifactGeneration,
+        ideationBubbleGraph: nextIdeationBubbleGraph,
         nodePositions: nextNodePositions,
-        importedState: persistedSharedImportedState,
+        importedState: nextImportedState,
       };
       if (sharedSyncEnabled) {
-        forceBroadcastSharedCanvas({
-          problemGroups: nextProblemGroups,
-          problemStructure: nextProblemStructure,
-          demoBalanceClassification: nextDemoBalanceClassification,
-          finalSolutionSummary: nextFinalSummaryDocument,
-          artifactGeneration: nextArtifactGeneration,
-          nodePositions: nextNodePositions,
-          importedState: persistedSharedImportedState,
-        });
+        if (!resetRoom) {
+          forceBroadcastSharedCanvas({
+            problemGroups: nextProblemGroups,
+            problemStructure: nextProblemStructure,
+            demoBalanceClassification: nextDemoBalanceClassification,
+            finalSolutionSummary: nextFinalSummaryDocument,
+            artifactGeneration: nextArtifactGeneration,
+            nodePositions: nextNodePositions,
+            importedState: nextImportedState,
+          });
+        }
       }
       setActivityMessage(`[Debug] ${scopeLabel}를 초기화했습니다.`);
     } catch (error) {
@@ -3741,9 +3913,14 @@ export default function MeetingCanvasTab({
     demoBalanceClassification,
     finalSummaryDocument,
     forceBroadcastSharedCanvas,
+    ideationBubbleGraph,
+    isRecording,
     latestSharedWorkspaceRef,
     meetingId,
     nodePositions,
+    onMeetingTranscriptReset,
+    onSharedCanvasSync,
+    onStopRecording,
     persistedSharedImportedState,
     problemGroups,
     problemStructureArtifactMeta,
@@ -3756,6 +3933,12 @@ export default function MeetingCanvasTab({
     setDemoBalanceClassification,
     setEditingProblemGroupId,
     setFinalSummaryDocument,
+    setIdeationBubbleDebugGrowthById,
+    setIdeationBubbleGraph,
+    setIdeationBubbleLayoutRevision,
+    setIdeationBubbleVisuals,
+    setImportedState,
+    setImportOverrideActive,
     setLocalEditPresenceTarget,
     setLoadingProblemGroupIds,
     setNodePositions,

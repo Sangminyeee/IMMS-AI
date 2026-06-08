@@ -66,6 +66,11 @@ function problemGroupStatusTone(status: ProblemGroupStatus) {
   if (status === "final") return "bg-emerald-100 text-emerald-700";
   return "bg-slate-100 text-slate-600";
 }
+
+function hasExplicitIdeationBubbleEmphasis(bubble: IdeationKeywordBubble) {
+  return bubble.emphasis === "primary" || bubble.emphasis === "default";
+}
+
 export function getIdeationKeywordBubbleFontSize(text: string, size: number) {
   const weightedLength = Array.from(text).reduce((sum, char) => {
     if (/\s/.test(char)) return sum + 0.32;
@@ -90,7 +95,9 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
   }
 
   const offTopic = bubble.offTopic || bubble.kind === "off_topic";
-  const primary = !offTopic && (bubble.emphasis === "primary" || bubble.role === "center");
+  const primary = !offTopic && (
+    bubble.emphasis === "primary" || (!hasExplicitIdeationBubbleEmphasis(bubble) && bubble.role === "center")
+  );
   const fittedFontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
   const roleScaledFontSize = primary
     ? Math.round(size * 0.126)

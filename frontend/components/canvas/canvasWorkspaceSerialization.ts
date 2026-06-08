@@ -2,6 +2,7 @@ import type { Node } from "@xyflow/react";
 import { createDefaultProblemStructureState } from "@/components/canvas/problemStructureModel";
 import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDocumentHelpers";
 import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
+import { isDemoBalanceConfig, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
@@ -298,10 +299,102 @@ export function createEmptyIdeationBubbleGraph(): CanvasIdeationBubbleGraph {
     layout_mode: "orbit",
     update_cycle: 0,
     layout_revision: 0,
+    layout_overlap_resolved_count: 0,
     clusters: [],
     bubbles: [],
     processed_utterance_ids: [],
     updated_at: "",
+  };
+}
+
+const DEMO_BALANCE_ANCHOR_A_ID = "demo-balance-anchor-a";
+const DEMO_BALANCE_ANCHOR_B_ID = "demo-balance-anchor-b";
+
+function normalizeDemoAnchorLabel(value: string, fallback: string) {
+  const label = value.replace(/\s+/g, " ").trim();
+  return label || fallback;
+}
+
+export function createDemoBalanceAnchoredIdeationBubbleGraph(
+  demoConfig: CanvasDemoConfig | null | undefined,
+  options: {
+    updateCycle?: number;
+    layoutRevision?: number;
+    updatedAt?: string;
+  } = {},
+): CanvasIdeationBubbleGraph {
+  const config = normalizeCanvasDemoConfig(demoConfig);
+  const graph = {
+    ...createEmptyIdeationBubbleGraph(),
+    update_cycle: Number(options.updateCycle || 0),
+    layout_revision: Number(options.layoutRevision || 0),
+    updated_at: options.updatedAt || "",
+  };
+
+  if (!isDemoBalanceConfig(config)) {
+    return graph;
+  }
+
+  const now = options.updatedAt || new Date().toISOString();
+  const anchorSpecs = [
+    {
+      id: DEMO_BALANCE_ANCHOR_A_ID,
+      label: normalizeDemoAnchorLabel(config.option_a_keyword || config.option_a || "A", "A"),
+      choice: "a" as const,
+      count: 7,
+      importance: 0.94,
+      activity: 1,
+      opacity: 1,
+      emphasis: "primary" as const,
+      layoutZone: "core",
+      role: "center" as const,
+    },
+    {
+      id: DEMO_BALANCE_ANCHOR_B_ID,
+      label: normalizeDemoAnchorLabel(config.option_b_keyword || config.option_b || "B", "B"),
+      choice: "b" as const,
+      count: 7,
+      importance: 0.94,
+      activity: 1,
+      opacity: 1,
+      emphasis: "primary" as const,
+      layoutZone: "core",
+      role: "center" as const,
+    },
+  ];
+
+  return {
+    ...graph,
+    bubbles: anchorSpecs.map((anchor) => ({
+      id: anchor.id,
+      label: anchor.label,
+      canonical_label: anchor.label,
+      aliases: [],
+      kind: "topic",
+      count: anchor.count,
+      importance: anchor.importance,
+      relevance: 1,
+      activity: anchor.activity,
+      opacity: anchor.opacity,
+      emphasis: anchor.emphasis,
+      display_state: "active",
+      layout_zone: anchor.layoutZone,
+      missing_cycles: 0,
+      anchor_id: "",
+      choice_affinity: anchor.choice,
+      affinity_score: 1,
+      durable: true,
+      related_ids: [],
+      evidence_utterance_ids: [],
+      first_seen_at: now,
+      last_seen_at: now,
+      last_seen_cycle: graph.update_cycle,
+      off_topic: false,
+      off_topic_reason: "",
+      archive_reason: "",
+      lifecycle_state: "active",
+      role: anchor.role,
+    })),
   };
 }
 
@@ -324,6 +417,9 @@ export function normalizeIdeationBubbleGraphForWorkspace(
             ? cluster.rings.map((ring) => Number(ring)).filter((ring) => Number.isFinite(ring) && ring > 0)
             : [],
           zone: cluster.zone || "default",
+          overlap_resolved_count: Number.isFinite(Number(cluster.overlap_resolved_count))
+            ? Number(cluster.overlap_resolved_count)
+            : 0,
           bubble_ids: Array.isArray(cluster.bubble_ids)
             ? cluster.bubble_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
             : [],
@@ -334,10 +430,19 @@ export function normalizeIdeationBubbleGraphForWorkspace(
     layout_mode: graph.layout_mode || "orbit",
     update_cycle: Number(graph.update_cycle || 0),
     layout_revision: Number(graph.layout_revision || 0),
+    layout_overlap_resolved_count: Number.isFinite(Number(graph.layout_overlap_resolved_count))
+      ? Number(graph.layout_overlap_resolved_count)
+      : 0,
     clusters,
     bubbles: Array.isArray(graph.bubbles)
       ? graph.bubbles.map((bubble) => ({
           ...bubble,
+          choice_affinity:
+            bubble.choice_affinity === "a" || bubble.choice_affinity === "b" || bubble.choice_affinity === "neutral"
+              ? bubble.choice_affinity
+              : undefined,
+          affinity_score: Number.isFinite(Number(bubble.affinity_score)) ? Number(bubble.affinity_score) : undefined,
+          durable: Boolean(bubble.durable),
           role: bubble.role || "satellite",
           orbit_center_id: bubble.orbit_center_id || "",
           orbit_ring: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : 0,

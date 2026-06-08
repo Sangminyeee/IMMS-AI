@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
 import { supabase } from "@/lib/supabase";
-import { getCanvasWorkspaceState } from "@/lib/api";
+import { getCanvasWorkspaceState, logCanvasBubbleDebugEvent } from "@/lib/api";
 import type {
   CanvasEditPresencePayload,
   CanvasNodePreviewPayload,
@@ -93,8 +93,8 @@ const NORMAL_STT_RECORDER_OPTIONS = {
 };
 
 const DEMO_BALANCE_STT_RECORDER_OPTIONS = {
-  intervalMs: 3600,
-  minSendDurationMs: 1800,
+  intervalMs: 6000,
+  minSendDurationMs: 3000,
 };
 
 function createCalibrationAccumulator(): CalibrationAccumulator {
@@ -282,6 +282,7 @@ function HomeContent() {
   const liveSpeechClearTimerRef = useRef<number | null>(null);
   const transcriptPersistenceStatusTimerRef = useRef<number | null>(null);
   const ideationBubbleFinalizationTimerRef = useRef<number | null>(null);
+  const meetingRoomResetStopRequestedRef = useRef(false);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
 
@@ -403,6 +404,26 @@ function HomeContent() {
       setMeetingStatus(nextStatus);
     }
   }, []);
+
+  const resetMeetingRoomClientState = useCallback(() => {
+    if (liveSpeechClearTimerRef.current !== null) {
+      window.clearTimeout(liveSpeechClearTimerRef.current);
+      liveSpeechClearTimerRef.current = null;
+    }
+    if (transcriptPersistenceStatusTimerRef.current !== null) {
+      window.clearTimeout(transcriptPersistenceStatusTimerRef.current);
+      transcriptPersistenceStatusTimerRef.current = null;
+    }
+    setTranscripts([]);
+    transcriptsRef.current = [];
+    setAnalysisState(null);
+    setAgendas([]);
+    setLiveSpeechPreview(null);
+    setTranscriptPersistenceStatusText("");
+    setFusionSelectedUserId(null);
+    setFusionSelectedSpeaker("");
+    clearIdeationBubbleFinalization();
+  }, [clearIdeationBubbleFinalization]);
 
   useEffect(() => {
     if (!checkingAuth && user && !meetingId) {
@@ -883,6 +904,7 @@ function HomeContent() {
         currentCycle: payload.current_cycle,
         bubbles: payload.bubbles,
         usedLlm: payload.used_llm,
+        usedLocal: payload.used_local,
         resultReason: payload.result_reason,
         warning: payload.warning,
         statusCode: payload.status_code,
@@ -891,11 +913,27 @@ function HomeContent() {
         error: payload.error,
         llmRoute: payload.llm_route,
         llmError: payload.llm_error,
+        rawDirectives: payload.raw_directives,
+        extractorRoute: payload.extractor_route,
         refinedCount: payload.refined_count,
         keywordCount: payload.keyword_count,
+        renameCount: payload.rename_count,
         mergeCount: payload.merge_count,
         removeCount: payload.remove_count,
+        primaryCount: payload.primary_count,
+        promoteCount: payload.promote_count,
+        demoteCount: payload.demote_count,
+        aliasMergeCount: payload.alias_merge_count,
+        canonicalizedCount: payload.canonicalized_count,
+        localCleanupCount: payload.local_cleanup_count,
+        slowBackoffMs: payload.slow_backoff_ms,
+        overlapResolvedCount: payload.overlap_resolved_count,
         processedCount: payload.processed_count,
+        activeCount: payload.active_count,
+        dimmedCount: payload.dimmed_count,
+        exitingCount: payload.exiting_count,
+        archivedCount: payload.archived_count,
+        provisionalCount: payload.provisional_count,
       });
     });
 
@@ -911,6 +949,10 @@ function HomeContent() {
     wsClient.on("canvas_sync", (message) => {
       const payload = (message.data ?? message.workspace ?? message) as CanvasRealtimeSyncPayload | null;
       if (!payload || payload.meeting_id !== meetingId) return;
+      if (payload.sync_scope === "meeting_room_reset") {
+        meetingRoomResetStopRequestedRef.current = true;
+        resetMeetingRoomClientState();
+      }
       if (payload.sync_scope === "ideation_bubble_graph") {
         const graph: Record<string, unknown> = isRecord(payload.ideation_bubble_graph) ? payload.ideation_bubble_graph : {};
         const graphBubbles = graph.bubbles;
@@ -919,6 +961,29 @@ function HomeContent() {
           cycle: graph.update_cycle,
           updatedAt: graph.updated_at,
           bubbles,
+        });
+        logCanvasBubbleDebugEvent({
+          meeting_id: meetingId,
+          user_id: user?.id,
+          event: "graph_sync_received",
+          data: {
+            cycle: graph.update_cycle,
+            updated_at: graph.updated_at,
+            bubbles,
+            labels: Array.isArray(graphBubbles)
+              ? graphBubbles
+                  .filter(isRecord)
+                  .slice(0, 24)
+                  .map((bubble) => ({
+                    id: readString(bubble.id),
+                    label: readString(bubble.label),
+                    state: readString(bubble.display_state),
+                    lifecycle: readString(bubble.lifecycle_state),
+                    choice: readString(bubble.choice_affinity),
+                    count: Number(bubble.count || 0),
+                  }))
+              : [],
+          },
         });
       }
       setIncomingCanvasSync(payload);
@@ -994,6 +1059,7 @@ function HomeContent() {
     applyMeetingStateToUi,
     applyMeetingTimerSnapshot,
     clearIdeationBubbleFinalization,
+    resetMeetingRoomClientState,
   ]);
 
   const finishCalibration = useCallback(() => {
@@ -1301,6 +1367,16 @@ function HomeContent() {
     setIsRecording(true);
   };
 
+  useEffect(() => {
+    if (!meetingRoomResetStopRequestedRef.current) return;
+    if (!isRecording) {
+      meetingRoomResetStopRequestedRef.current = false;
+      return;
+    }
+    meetingRoomResetStopRequestedRef.current = false;
+    void toggleRecording();
+  }, [isRecording, toggleRecording]);
+
   const endMeeting = async () => {
     if (!meetingId) return;
 
@@ -1441,6 +1517,7 @@ function HomeContent() {
         meetingTimerEndedAtMs={meetingTimerEndedAtMs}
         onToggleRecording={toggleRecording}
         onStopRecording={toggleRecording}
+        onMeetingTranscriptReset={resetMeetingRoomClientState}
         onEndMeeting={endMeeting}
         onCanvasStageContextChange={setCanvasStageContext}
         recordingStatusText={

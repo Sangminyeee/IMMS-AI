@@ -20,6 +20,8 @@
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+const BUBBLE_DEBUG_FRONTEND_LOG_INTERVAL_MS = 1000;
+const bubbleDebugFrontendLogSentAt = new Map<string, number>();
 
 function apiPath(path: string): string {
   return `${API_BASE_URL}${path}`;
@@ -289,6 +291,7 @@ export async function updateCanvasIdeationBubbleGraph(payload: {
   }>;
   context_cache?: string;
   max_keywords?: number;
+  update_mode?: "local_fast_keywords" | "realtime_text_batch" | "consolidate" | "";
 }): Promise<CanvasIdeationBubbleGraphUpdateResponse> {
   return requestJson<CanvasIdeationBubbleGraphUpdateResponse>("/api/canvas/ideation-bubble-graph/update", {
     method: "POST",
@@ -399,6 +402,51 @@ export async function saveCanvasWorkspacePatch(
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
   });
+}
+
+export async function resetMeetingRoomRuntimeState(payload: {
+  meeting_id: string;
+  user_id?: string;
+}): Promise<{
+  ok: boolean;
+  meeting_id: string;
+  deleted_transcript_count: number;
+  reset_at: string;
+}> {
+  return requestJson("/api/canvas/meeting-room-reset", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export function logCanvasBubbleDebugEvent(payload: {
+  meeting_id: string;
+  user_id?: string;
+  event: string;
+  data?: Record<string, unknown>;
+}): void {
+  if (!payload.meeting_id || typeof window === "undefined") return;
+  const throttleKey = `${payload.meeting_id}:${payload.event}`;
+  const now = Date.now();
+  const lastSentAt = bubbleDebugFrontendLogSentAt.get(throttleKey) || 0;
+  if (now - lastSentAt < BUBBLE_DEBUG_FRONTEND_LOG_INTERVAL_MS) return;
+  bubbleDebugFrontendLogSentAt.set(throttleKey, now);
+
+  const body = JSON.stringify(payload);
+  const url = apiPath("/api/canvas/bubble-debug-log");
+
+  try {
+    void fetch(url, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+      keepalive: true,
+      credentials: "omit",
+    }).catch(() => {});
+  } catch {
+    // ignored
+  }
 }
 
 export function flushCanvasWorkspacePatch(payload: CanvasWorkspacePatchRequest): void {

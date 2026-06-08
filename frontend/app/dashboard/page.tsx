@@ -164,7 +164,9 @@ export default function DashboardPage() {
   const [newMeetingTitle, setNewMeetingTitle] = useState("");
   const [newMeetingDemoMode, setNewMeetingDemoMode] = useState(false);
   const [newMeetingDemoOptionA, setNewMeetingDemoOptionA] = useState("");
+  const [newMeetingDemoOptionAKeyword, setNewMeetingDemoOptionAKeyword] = useState("");
   const [newMeetingDemoOptionB, setNewMeetingDemoOptionB] = useState("");
+  const [newMeetingDemoOptionBKeyword, setNewMeetingDemoOptionBKeyword] = useState("");
   const [meetingSearchQuery, setMeetingSearchQuery] = useState("");
   const [meetingStatusFilter, setMeetingStatusFilter] = useState<MeetingStatusFilter>("all");
   const [selectedResultMeeting, setSelectedResultMeeting] = useState<DashboardMeeting | null>(null);
@@ -228,8 +230,14 @@ export default function DashboardPage() {
       alert("회의 제목을 입력해주세요.");
       return;
     }
-    if (newMeetingDemoMode && (!newMeetingDemoOptionA.trim() || !newMeetingDemoOptionB.trim())) {
-      alert("시연용 밸런스 게임은 A, B 선택지를 모두 입력해야 만들 수 있습니다.");
+    if (
+      newMeetingDemoMode &&
+      (!newMeetingDemoOptionA.trim() ||
+        !newMeetingDemoOptionAKeyword.trim() ||
+        !newMeetingDemoOptionB.trim() ||
+        !newMeetingDemoOptionBKeyword.trim())
+    ) {
+      alert("시연용 밸런스 게임은 A/B 선택지와 중심 키워드를 모두 입력해야 만들 수 있습니다.");
       return;
     }
 
@@ -241,16 +249,29 @@ export default function DashboardPage() {
               enabled: true,
               mode: "demo_balance",
               option_a: newMeetingDemoOptionA,
+              option_a_keyword: newMeetingDemoOptionAKeyword,
               option_b: newMeetingDemoOptionB,
+              option_b_keyword: newMeetingDemoOptionBKeyword,
               instruction: "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요.",
             }
           : null,
       );
       const demoGoal = demoConfig.enabled
-        ? buildDemoBalanceMeetingGoal(newMeetingTitle, demoConfig.option_a || "", demoConfig.option_b || "")
+        ? buildDemoBalanceMeetingGoal(
+            newMeetingTitle,
+            demoConfig.option_a || "",
+            demoConfig.option_b || "",
+            demoConfig.option_a_keyword || demoConfig.option_a || "",
+            demoConfig.option_b_keyword || demoConfig.option_b || "",
+          )
         : "";
       const demoContext = demoConfig.enabled
-        ? buildDemoBalanceMeetingContext(demoConfig.option_a || "", demoConfig.option_b || "")
+        ? buildDemoBalanceMeetingContext(
+            demoConfig.option_a || "",
+            demoConfig.option_b || "",
+            demoConfig.option_a_keyword || demoConfig.option_a || "",
+            demoConfig.option_b_keyword || demoConfig.option_b || "",
+          )
         : "";
 
       const { data, error } = await supabase
@@ -284,7 +305,9 @@ export default function DashboardPage() {
       setNewMeetingTitle("");
       setNewMeetingDemoMode(false);
       setNewMeetingDemoOptionA("");
+      setNewMeetingDemoOptionAKeyword("");
       setNewMeetingDemoOptionB("");
+      setNewMeetingDemoOptionBKeyword("");
 
       await loadMeetings({ keepCurrentVisible: true });
       router.push(`/?meeting_id=${data.id}`);
@@ -472,7 +495,9 @@ export default function DashboardPage() {
     setNewMeetingTitle("");
     setNewMeetingDemoMode(false);
     setNewMeetingDemoOptionA("");
+    setNewMeetingDemoOptionAKeyword("");
     setNewMeetingDemoOptionB("");
+    setNewMeetingDemoOptionBKeyword("");
   }, []);
 
   const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
@@ -546,11 +571,15 @@ export default function DashboardPage() {
         meetingTitle={newMeetingTitle}
         demoMode={newMeetingDemoMode}
         demoOptionA={newMeetingDemoOptionA}
+        demoOptionAKeyword={newMeetingDemoOptionAKeyword}
         demoOptionB={newMeetingDemoOptionB}
+        demoOptionBKeyword={newMeetingDemoOptionBKeyword}
         onMeetingTitleChange={setNewMeetingTitle}
         onDemoModeChange={setNewMeetingDemoMode}
         onDemoOptionAChange={setNewMeetingDemoOptionA}
+        onDemoOptionAKeywordChange={setNewMeetingDemoOptionAKeyword}
         onDemoOptionBChange={setNewMeetingDemoOptionB}
+        onDemoOptionBKeywordChange={setNewMeetingDemoOptionBKeyword}
         onCreate={() => void handleCreateMeeting()}
         onClose={handleCloseCreateModal}
       />
