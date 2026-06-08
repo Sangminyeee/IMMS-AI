@@ -2578,6 +2578,7 @@ class IdeationBubbleGraphUpdateInput(BaseModel):
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     context_cache: str = Field(default="", max_length=20000)
     max_keywords: int = Field(default=3, ge=1, le=6)
+    update_mode: str = Field(default="", max_length=32)
 
 
 class IdeationSuggestionTopicInput(BaseModel):
@@ -6438,15 +6439,16 @@ def _build_demo_balance_keyword_extract_prompt(
             {
                 "id": _safe_text(row.get("id")),
                 "speaker": _safe_text(row.get("speaker"), "참가자"),
-                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 420),
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 220),
                 "timestamp": _safe_text(row.get("timestamp")),
             }
-            for row in rows[-80:]
+            for row in rows[-4:]
         ],
     }
     return (
-        "너는 3분 내외의 A/B 밸런스 게임 시연에서 실시간 버블로 보여줄 핵심 명사 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 3분 내외의 A/B 밸런스 게임 시연에서 STT 발화를 보정하고 실시간 버블 그래프를 갱신하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
         "[시연 목표]\n"
+        "- target_utterances의 raw STT를 문맥에 맞게 짧고 자연스러운 한국어 발화로 보정한다.\n"
         "- 참가자가 A 또는 B를 먼저 말하고 이유를 설명하는 발화를 빠르게 반영한다.\n"
         "- A/B 선택지 자체와 선택 이유를 중심으로 짧은 명사/명사구 버블을 만든다.\n"
         "- target_utterances에서 A/B 선택이 명시된 발화를 우선 처리한다. 명시가 없으면 새로운 버블을 만들지 않거나 relevance를 낮춘다.\n"
@@ -6461,14 +6463,21 @@ def _build_demo_balance_keyword_extract_prompt(
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
         "{\n"
+        '  "refined_transcripts": [\n'
+        '    {"id": "utterance-id", "text": "보정된 발화", "choice": "a", "valid": true, "confidence": 0.82, "reason": "A 선택 이유를 설명함"}\n'
+        "  ],\n"
         '  "merge_keywords": [{"source": "가격 부담", "target": "비용", "reason": "같은 선택 근거"}],\n'
         '  "remove_keywords": ["잡담"],\n'
+        '  "ignored_utterance_ids": ["utterance-id"],\n'
         '  "keywords": [\n'
         '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.82, "relevance": 0.94, "anchor": "A 선택지", "related": ["현실성"]},\n'
         '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.76, "relevance": 0.9, "anchor": "B 선택지", "related": []}\n'
         "  ]\n"
         "}\n\n"
         "[규칙]\n"
+        "- refined_transcripts는 target_utterances마다 가능하면 1개씩 만든다. text는 원문 의미를 보존하되 STT 오류만 보정한다.\n"
+        "- choice는 a, b, unclear 중 하나다. valid는 밸런스 게임 의견이면 true, 잡담/무의미한 발화면 false다.\n"
+        "- ignored_utterance_ids에는 잡담, filler, 인명만 있는 발화, A/B 의견으로 보기 어려운 발화 id를 넣는다.\n"
         f"- keywords는 0개 이상, 최대 {max_keywords}개.\n"
         "- 가능하면 existing_keywords의 text를 재사용한다.\n"
         "- 새 text는 target_utterances에서 A/B 선택 이유로 명확히 말한 개념만 만든다.\n"
@@ -6482,8 +6491,123 @@ def _build_demo_balance_keyword_extract_prompt(
     )
 
 
-def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput, rows: list[dict[str, str]]) -> str:
+def _normalize_demo_balance_refined_transcripts(
+    parsed: Any,
+    rows: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return []
+    allowed_ids = {_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))}
+    raw_items = parsed.get("refined_transcripts") or parsed.get("refinedTranscripts") or []
+    if not isinstance(raw_items, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = _safe_text(item.get("id") or item.get("utterance_id") or item.get("utteranceId"))
+        if not item_id or item_id not in allowed_ids or item_id in seen:
+            continue
+        text = _safe_text(item.get("text") or item.get("refined_text") or item.get("refinedText"))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        choice = _safe_text(item.get("choice"), "unclear").lower()
+        if choice not in {"a", "b", "unclear"}:
+            choice = "unclear"
+        normalized.append(
+            {
+                "id": item_id,
+                "text": _truncate_text(text, 260),
+                "choice": choice,
+                "valid": bool(item.get("valid", choice in {"a", "b"})),
+                "confidence": max(0.0, min(1.0, _safe_float(item.get("confidence"), 0.0))),
+                "reason": _truncate_text(_safe_text(item.get("reason")), 160),
+            }
+        )
+        seen.add(item_id)
+    return normalized[: len(allowed_ids)]
+
+
+def _normalize_demo_balance_ignored_utterance_ids(parsed: Any, rows: list[dict[str, str]]) -> list[str]:
+    if not isinstance(parsed, dict):
+        return []
+    allowed_ids = {_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))}
+    raw_ids = parsed.get("ignored_utterance_ids") or parsed.get("ignoredUtteranceIds") or []
+    if not isinstance(raw_ids, list):
+        return []
+    return _dedup_preserve(
+        [_safe_text(value) for value in raw_ids if _safe_text(value) in allowed_ids],
+        limit=len(allowed_ids),
+    )
+
+
+def _build_demo_balance_fast_keyword_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    existing_keywords = _ideation_existing_keyword_rows(payload)
+    max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+    input_payload = {
+        "max_keywords": max_keywords,
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "meeting_goal": _safe_text(payload.meeting_goal),
+        "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+        "demo_config": demo_config,
+        "existing_keywords": existing_keywords,
+        "target_utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "speaker": _safe_text(row.get("speaker"), "참가자"),
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 160),
+                "timestamp": _safe_text(row.get("timestamp")),
+            }
+            for row in rows[-2:]
+        ],
+    }
+    return (
+        "너는 A/B 밸런스 게임 시연에서 발화 직후 화면에 띄울 버블 키워드만 빠르게 고르는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- target_utterances의 raw STT에서 A/B 선택 이유를 나타내는 핵심 명사 키워드를 빠르게 추출한다.\n"
+        "- 전사 보정, 문장 요약, 병합 판단, 삭제 판단은 하지 않는다.\n"
+        "- 참가자가 방금 말한 내용을 5초 안에 화면에서 볼 수 있게 하는 것이 목적이다.\n"
+        "- 키워드는 0~3개만 반환한다. 의미 있는 명사가 없으면 빈 배열을 반환한다.\n"
+        "- 키워드는 가능하면 1단어, 최대 2단어 이하의 한국어/영어 명사 또는 명사구여야 한다.\n"
+        "- 인명, 잡담, filler, 단독 숫자, 단독 알파벳 A/B, 문장, 동사구, 형용사구는 금지한다.\n"
+        "- A/B 선택지명 자체보다 선택 이유 명사를 우선한다. 단, 선택지명이 핵심 주제라면 허용한다.\n"
+        "- existing_keywords에 같은 의미가 있으면 새 표현을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- 확신이 낮은 단어는 만들지 않는다. 대신 keywords를 []로 둔다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "keywords": [\n'
+        '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.72, "relevance": 0.94, "anchor": "A 선택지", "related": []},\n'
+        '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.68, "relevance": 0.9, "anchor": "B 선택지", "related": []}\n'
+        "  ]\n"
+        "}\n\n"
+        "[규칙]\n"
+        f"- keywords는 최대 {max_keywords}개다.\n"
+        "- text는 반드시 명사/짧은 명사구다. 공백 기준 2단어를 넘기지 않는다.\n"
+        "- count와 support_count는 최소 1이다.\n"
+        "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
+        "- importance와 relevance는 0~1 숫자다.\n"
+        "- anchor와 related는 existing_keywords 또는 이번 keywords의 text를 참조할 때만 넣는다.\n"
+        "- merge_keywords, remove_keywords, refined_transcripts는 출력하지 않는다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _build_ideation_keyword_extract_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+    update_mode: str = "",
+) -> str:
     if _is_demo_balance_config(payload.demo_config):
+        if _safe_text(update_mode) == "fast_keywords":
+            return _build_demo_balance_fast_keyword_prompt(payload, rows)
         return _build_demo_balance_keyword_extract_prompt(payload, rows)
 
     existing_keywords = _ideation_existing_keyword_rows(payload)
@@ -8185,6 +8309,8 @@ def _apply_ideation_bubble_graph_update(
     *,
     allow_single_support: bool = False,
     decay_profile: str = "normal",
+    apply_decay: bool = True,
+    mark_processed: bool = True,
 ) -> dict[str, Any]:
     next_graph = _normalize_canvas_ideation_bubble_graph(graph)
     cycle = _safe_nonnegative_int(next_graph.get("update_cycle"), 0) + 1
@@ -8241,31 +8367,33 @@ def _apply_ideation_bubble_graph_update(
             current["anchor_id"] = _safe_text(anchor.get("id"))
 
     core_ids = _ideation_bubble_core_ids(next_graph)
-    if decay_profile == "demo_balance":
-        _apply_ideation_bubble_decay(
-            next_graph,
-            touched_ids,
-            core_ids,
-            cycle,
-            dim_cycles=2,
-            archive_cycles=3,
-            off_topic_archive_cycles=2,
-        )
-    else:
-        _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
-    _prune_archived_ideation_bubbles(next_graph)
+    if apply_decay:
+        if decay_profile == "demo_balance":
+            _apply_ideation_bubble_decay(
+                next_graph,
+                touched_ids,
+                core_ids,
+                cycle,
+                dim_cycles=2,
+                archive_cycles=3,
+                off_topic_archive_cycles=2,
+            )
+        else:
+            _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
+        _prune_archived_ideation_bubbles(next_graph)
     core_ids = _ideation_bubble_core_ids(next_graph)
     _apply_ideation_bubble_layout_zones(next_graph, core_ids)
     _apply_ideation_bubble_visual_state(next_graph, core_ids)
     _apply_ideation_bubble_server_layout(next_graph)
-    processed_ids = _dedup_preserve(
-        [
-            *(next_graph.get("processed_utterance_ids") or []),
-            *[_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
-        ],
-        limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
-    )
-    next_graph["processed_utterance_ids"] = processed_ids
+    if mark_processed:
+        processed_ids = _dedup_preserve(
+            [
+                *(next_graph.get("processed_utterance_ids") or []),
+                *[_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
+            ],
+            limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
+        )
+        next_graph["processed_utterance_ids"] = processed_ids
     next_graph["update_cycle"] = cycle
     next_graph["updated_at"] = now
 
@@ -15676,13 +15804,24 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
     if not normalized_meeting_id:
         raise HTTPException(status_code=400, detail="meeting_id is required")
     normalized_input_rows = _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
+    payload_demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    is_payload_demo_balance = _is_demo_balance_config(payload_demo_config)
+    requested_update_mode = _safe_text(payload.update_mode).lower()
+    update_mode = (
+        "fast_keywords"
+        if is_payload_demo_balance and requested_update_mode == "fast_keywords"
+        else "consolidate"
+        if is_payload_demo_balance
+        else "normal"
+    )
     request_started = time.perf_counter()
     print(
         "[canvas ideation bubble graph request]",
         {
             "meeting_id": normalized_meeting_id,
             "input_rows": len(normalized_input_rows),
-            "demo": _is_demo_balance_config(payload.demo_config),
+            "demo": is_payload_demo_balance,
+            "update_mode": update_mode,
             "max_keywords": payload.max_keywords,
         },
         flush=True,
@@ -15726,6 +15865,12 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         workspace: dict[str, Any] | None = None,
         reason: str = "",
         llm_error: dict[str, Any] | None = None,
+        refined_transcripts: list[dict[str, Any]] | None = None,
+        ignored_utterance_ids: list[str] | None = None,
+        keyword_count: int = 0,
+        merge_count: int = 0,
+        remove_count: int = 0,
+        processed_count: int = 0,
     ) -> dict[str, Any]:
         workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         workspace_payload["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(graph)
@@ -15734,8 +15879,15 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "used_llm": used_llm,
             "reason": _safe_text(reason),
             "warning": warning,
+            "update_mode": update_mode,
             "llm_route": llm_route,
             "llm_error": llm_error or {},
+            "refined_transcripts": refined_transcripts or [],
+            "ignored_utterance_ids": ignored_utterance_ids or [],
+            "keyword_count": _safe_nonnegative_int(keyword_count),
+            "merge_count": _safe_nonnegative_int(merge_count),
+            "remove_count": _safe_nonnegative_int(remove_count),
+            "processed_count": _safe_nonnegative_int(processed_count),
             "generated_at": _now_ts(),
             "source_signature": signature,
             "bubble_graph": _normalize_canvas_ideation_bubble_graph(graph),
@@ -15768,7 +15920,18 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         ]
         existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
         demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
-        max_keywords = min(6 if _is_demo_balance_config(demo_config) else 3, max(1, int(payload.max_keywords or 3)))
+        is_demo_balance = _is_demo_balance_config(demo_config)
+        update_mode = (
+            "fast_keywords"
+            if is_demo_balance and requested_update_mode == "fast_keywords"
+            else "consolidate"
+            if is_demo_balance
+            else "normal"
+        )
+        if is_demo_balance and update_mode == "fast_keywords":
+            max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+        else:
+            max_keywords = min(6 if is_demo_balance else 3, max(1, int(payload.max_keywords or 3)))
         extract_payload = IdeationKeywordExtractInput(
             meeting_id=normalized_meeting_id,
             meeting_topic=_safe_text(payload.meeting_topic),
@@ -15782,6 +15945,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         )
         context_cache = _ideation_context_cache_text(extract_payload)
         existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
+        refined_transcripts: list[dict[str, Any]] = []
+        ignored_utterance_ids: list[str] = []
         signature = _canvas_llm_signature(
             {
                 "version": 1,
@@ -15790,6 +15955,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "meeting_goal": _safe_text(payload.meeting_goal),
                 "meeting_goal_context": _safe_text(payload.meeting_goal_context),
                 "demo_config": demo_config,
+                "update_mode": update_mode,
                 "graph_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
                 "existing_keywords": existing_keyword_rows,
                 "context_cache": context_cache,
@@ -15830,10 +15996,10 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             parsed = _call_llm_json(
                 RT,
                 client,
-                prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows),
+                prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows, update_mode),
                 stage=llm_stage,
                 temperature=0.08,
-                max_tokens=1400,
+                max_tokens=320 if is_demo_balance and update_mode == "fast_keywords" else 900 if is_demo_balance else 1400,
             )
         except Exception as exc:
             elapsed_ms = round((time.perf_counter() - request_started) * 1000)
@@ -15862,6 +16028,11 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 reason="llm_exception",
                 llm_error=llm_error,
             )
+
+        if is_demo_balance:
+            if update_mode == "consolidate":
+                refined_transcripts = _normalize_demo_balance_refined_transcripts(parsed, rows)
+                ignored_utterance_ids = _normalize_demo_balance_ignored_utterance_ids(parsed, rows)
 
         normalized_keywords = _normalize_ideation_keyword_items(
             parsed,
@@ -15899,6 +16070,15 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         if not normalized_keywords and not merge_keywords and not remove_keywords:
             warning = warning or "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
             if is_demo_balance:
+                if update_mode == "fast_keywords":
+                    return _response(
+                        graph,
+                        True,
+                        warning,
+                        signature,
+                        workspace,
+                        reason="no_keywords",
+                    )
                 next_graph = _apply_ideation_bubble_graph_update(
                     graph,
                     rows,
@@ -15907,6 +16087,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     [],
                     allow_single_support=True,
                     decay_profile="demo_balance",
+                    apply_decay=True,
+                    mark_processed=True,
                 )
                 saved_at = _now_ts()
                 next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
@@ -15917,10 +16099,13 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
                 RT.last_llm_parsed_json = {
                     "stage": llm_stage,
+                    "update_mode": update_mode,
                     "source_signature": signature,
                     "merge_keywords": [],
                     "remove_keywords": [],
                     "keywords": [],
+                    "refined_transcripts": copy.deepcopy(refined_transcripts),
+                    "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
                     "bubble_graph": copy.deepcopy(next_graph),
                     "reason": "no_keywords",
                 }
@@ -15932,10 +16117,22 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                         "rows": len(rows),
                         "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
                         "cycle": next_graph.get("update_cycle"),
+                        "refined": len(refined_transcripts),
+                        "ignored": len(ignored_utterance_ids),
                     },
                     flush=True,
                 )
-                return _response(next_graph, True, warning, signature, next_workspace, reason="no_keywords")
+                return _response(
+                    next_graph,
+                    True,
+                    warning,
+                    signature,
+                    next_workspace,
+                    reason="no_keywords",
+                    refined_transcripts=refined_transcripts,
+                    ignored_utterance_ids=ignored_utterance_ids,
+                    processed_count=len(rows),
+                )
             return _response(graph, True, warning, signature, workspace, reason="no_keywords")
 
         next_graph = _apply_ideation_bubble_graph_update(
@@ -15946,6 +16143,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             remove_keywords,
             allow_single_support=is_demo_balance,
             decay_profile="demo_balance" if is_demo_balance else "normal",
+            apply_decay=not (is_demo_balance and update_mode == "fast_keywords"),
+            mark_processed=not (is_demo_balance and update_mode == "fast_keywords"),
         )
         saved_at = _now_ts()
         next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
@@ -15957,11 +16156,14 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
 
         RT.last_llm_parsed_json = {
-            "stage": "canvas_ideation_bubble_graph_update",
+            "stage": llm_stage,
+            "update_mode": update_mode,
             "source_signature": signature,
             "merge_keywords": copy.deepcopy(merge_keywords),
             "remove_keywords": copy.deepcopy(remove_keywords),
             "keywords": copy.deepcopy(normalized_keywords),
+            "refined_transcripts": copy.deepcopy(refined_transcripts),
+            "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
             "bubble_graph": copy.deepcopy(next_graph),
         }
         RT.last_llm_parsed_at = _now_ts()
@@ -15969,12 +16171,15 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "[canvas ideation bubble graph]",
             {
                 "meeting_id": normalized_meeting_id,
+                "update_mode": update_mode,
                 "rows": len(rows),
                 "keywords": len(normalized_keywords),
                 "merges": len(merge_keywords),
                 "removes": len(remove_keywords),
                 "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
                 "cycle": next_graph.get("update_cycle"),
+                "refined": len(refined_transcripts),
+                "ignored": len(ignored_utterance_ids),
                 "visible_bubbles": len(
                     [
                         item
@@ -15984,7 +16189,20 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 ),
             },
         )
-        return _response(next_graph, True, warning, signature, next_workspace, reason="updated")
+        return _response(
+            next_graph,
+            True,
+            warning,
+            signature,
+            next_workspace,
+            reason="updated",
+            refined_transcripts=refined_transcripts,
+            ignored_utterance_ids=ignored_utterance_ids,
+            keyword_count=len(normalized_keywords),
+            merge_count=len(merge_keywords),
+            remove_count=len(remove_keywords),
+            processed_count=0 if is_demo_balance and update_mode == "fast_keywords" else len(rows),
+        )
 
 
 @app.get("/api/canvas/personal-notes")

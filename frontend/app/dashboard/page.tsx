@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DashboardCreateMeetingDialog } from "@/components/dashboard/DashboardCreateMeetingDialog";
 import { DashboardMeetingsView } from "@/components/dashboard/DashboardMeetingsView";
@@ -156,6 +156,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const { loading: authLoading, signOut } = useAuth();
   const { user } = useRequireAuth();
+  const userId = user?.id || "";
 
   const [meetings, setMeetings] = useState<DashboardMeeting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -175,21 +176,21 @@ export default function DashboardPage() {
   const [resultLoadingMeetingId, setResultLoadingMeetingId] = useState<string | null>(null);
   const [resultRebuildingMeetingId, setResultRebuildingMeetingId] = useState<string | null>(null);
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
+  const loadingMeetingsRef = useRef(false);
+  const meetingsLoadedRef = useRef(false);
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
-  }, [user, authLoading, router]);
+  }, [user?.email, authLoading]);
 
-  useEffect(() => {
-    if (user) {
-      console.log("📊 Dashboard - Loading meetings for user:", user.email);
-      void loadMeetings();
-    }
-  }, [user]);
-
-  const loadMeetings = async () => {
+  const loadMeetings = useCallback(async (options?: { keepCurrentVisible?: boolean }) => {
+    if (loadingMeetingsRef.current) return;
+    loadingMeetingsRef.current = true;
+    const showInitialLoading = !options?.keepCurrentVisible && !meetingsLoadedRef.current;
     try {
-      setLoading(true);
+      if (showInitialLoading) {
+        setLoading(true);
+      }
       console.log("📊 Dashboard - Fetching meetings from Supabase...");
 
       const { data, error } = await supabase
@@ -205,13 +206,21 @@ export default function DashboardPage() {
 
       console.log("✅ Dashboard - Loaded meetings:", data?.length || 0);
       setMeetings((data || []) as DashboardMeeting[]);
+      meetingsLoadedRef.current = true;
     } catch (error) {
       console.error("Error loading meetings:", error);
       alert("회의 목록을 불러오는데 실패했습니다.");
     } finally {
       setLoading(false);
+      loadingMeetingsRef.current = false;
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    console.log("📊 Dashboard - Loading meetings for user:", user?.email);
+    void loadMeetings();
+  }, [loadMeetings, user?.email, userId]);
 
   const handleCreateMeeting = async () => {
     if (!user) return;
@@ -277,7 +286,7 @@ export default function DashboardPage() {
       setNewMeetingDemoOptionA("");
       setNewMeetingDemoOptionB("");
 
-      await loadMeetings();
+      await loadMeetings({ keepCurrentVisible: true });
       router.push(`/?meeting_id=${data.id}`);
     } catch (error) {
       console.error("Error creating meeting:", error);
@@ -454,6 +463,18 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const handleOpenCreateModal = useCallback(() => {
+    setShowCreateModal(true);
+  }, []);
+
+  const handleCloseCreateModal = useCallback(() => {
+    setShowCreateModal(false);
+    setNewMeetingTitle("");
+    setNewMeetingDemoMode(false);
+    setNewMeetingDemoOptionA("");
+    setNewMeetingDemoOptionB("");
+  }, []);
+
   const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
   const selectedResultDialogMeeting = selectedResultPresence.presentValue;
   const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
@@ -504,8 +525,6 @@ export default function DashboardPage() {
     );
   }
 
-  console.log("🎨 Dashboard - Rendering UI with", meetings.length, "meetings");
-
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
       <DashboardMeetingsView
@@ -514,7 +533,7 @@ export default function DashboardPage() {
         searchQuery={meetingSearchQuery}
         statusFilter={meetingStatusFilter}
         deletingMeetingId={deletingMeetingId}
-        onCreateMeeting={() => setShowCreateModal(true)}
+        onCreateMeeting={handleOpenCreateModal}
         onDeleteMeeting={(meeting) => void handleDeleteMeeting(meeting)}
         onJoinMeeting={handleJoinMeeting}
         onOpenMeetingResult={(meeting) => void handleOpenMeetingResult(meeting)}
@@ -533,13 +552,7 @@ export default function DashboardPage() {
         onDemoOptionAChange={setNewMeetingDemoOptionA}
         onDemoOptionBChange={setNewMeetingDemoOptionB}
         onCreate={() => void handleCreateMeeting()}
-        onClose={() => {
-          setShowCreateModal(false);
-          setNewMeetingTitle("");
-          setNewMeetingDemoMode(false);
-          setNewMeetingDemoOptionA("");
-          setNewMeetingDemoOptionB("");
-        }}
+        onClose={handleCloseCreateModal}
       />
 
       {selectedResultPresence.shouldRender && selectedResultDialogMeeting ? (

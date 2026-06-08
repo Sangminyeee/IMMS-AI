@@ -874,6 +874,7 @@ function HomeContent() {
       console.info("[Bubble] gateway debug event", {
         stage: readString(payload.stage),
         mode: payload.mode,
+        updateMode: payload.update_mode,
         reason: payload.reason,
         rows: payload.rows,
         queueSize: payload.queue_size,
@@ -890,6 +891,11 @@ function HomeContent() {
         error: payload.error,
         llmRoute: payload.llm_route,
         llmError: payload.llm_error,
+        refinedCount: payload.refined_count,
+        keywordCount: payload.keyword_count,
+        mergeCount: payload.merge_count,
+        removeCount: payload.remove_count,
+        processedCount: payload.processed_count,
       });
     });
 
