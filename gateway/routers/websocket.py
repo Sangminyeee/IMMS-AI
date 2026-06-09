@@ -78,7 +78,7 @@ DEMO_TEXT_POSTPROCESS_INTERVAL_MS = 4000
 DEMO_TEXT_POSTPROCESS_MAX_ROWS = 6
 DEMO_TEXT_POSTPROCESS_RETAIN_ROWS = 18
 DEMO_TEXT_POSTPROCESS_MAX_KEYWORDS = 8
-DEMO_CONSOLIDATION_INTERVAL_MS = 20000
+DEMO_CONSOLIDATION_INTERVAL_MS = 10000
 DEMO_CONSOLIDATION_MAX_KEYWORDS = 6
 
 
@@ -1857,6 +1857,13 @@ async def request_ideation_bubble_graph_update(
                 update_mode=update_mode if demo_balance_mode else "",
                 llm_route=error_payload.get("llm_route") if isinstance(error_payload, dict) else None,
                 llm_error=error_payload.get("llm_error") if isinstance(error_payload, dict) else None,
+                llm_trace=error_payload.get("llm_trace") if isinstance(error_payload, dict) else None,
+                model=((error_payload.get("llm_route") or {}).get("model") if isinstance(error_payload, dict) and isinstance(error_payload.get("llm_route"), dict) else ""),
+                timing={
+                    **(error_payload.get("timing") if isinstance(error_payload.get("timing"), dict) else {}),
+                    "gateway_elapsed_ms": elapsed_ms,
+                } if isinstance(error_payload, dict) else {"gateway_elapsed_ms": elapsed_ms},
+                input_utterances=len(request_rows),
             )
             if demo_balance_mode:
                 state[pause_key] = time.monotonic() + (IDEATION_BUBBLE_FAILURE_BACKOFF_MS / 1000)
@@ -1889,8 +1896,17 @@ async def request_ideation_bubble_graph_update(
         next_cycle = _ideation_bubble_graph_cycle(graph)
         refined_items = result.get("refined_transcripts") if isinstance(result, dict) else []
         refined_applied_count = 0
-        if demo_balance_mode and update_mode in {"realtime_text_batch", "consolidate"}:
+        refined_apply_ms = 0
+        if demo_balance_mode and update_mode == "realtime_text_batch":
+            refined_apply_started = time.perf_counter()
             refined_applied_count = await apply_demo_balance_refined_transcripts(meeting_id, request_rows, refined_items)
+            refined_apply_ms = round((time.perf_counter() - refined_apply_started) * 1000)
+        timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
+        timing = {
+            **timing,
+            "gateway_elapsed_ms": elapsed_ms,
+            "gateway_refined_apply_ms": refined_apply_ms,
+        }
         print(
             "[Bubble][gateway] ideation graph response",
             {
@@ -1908,7 +1924,16 @@ async def request_ideation_bubble_graph_update(
                 "bubbles": len(graph.get("bubbles") or []),
                 "llm_route": result.get("llm_route") or {},
                 "llm_error": result.get("llm_error") or {},
+                "model": (result.get("llm_route") or {}).get("model") if isinstance(result.get("llm_route"), dict) else "",
+                "llm_request": result.get("llm_request") or {},
+                "llm_response": result.get("llm_response") or {},
+                "llm_id_map": result.get("llm_id_map") or {},
+                "llm_trace": result.get("llm_trace") or {},
+                "timing": timing,
+                "input_utterances": len(request_rows),
+                "input_bubbles": result.get("input_bubble_count"),
                 "raw_directives": result.get("raw_directives") or {},
+                "ignored_refine": result.get("ignored_refine_count"),
                 "extractor_route": result.get("extractor_route") or {},
                 "layout_debug": (result.get("layout_debug") or [])[:12],
                 "refined": refined_applied_count,
@@ -1916,6 +1941,7 @@ async def request_ideation_bubble_graph_update(
                 "renames": result.get("rename_count"),
                 "merges": result.get("merge_count"),
                 "removes": result.get("remove_count"),
+                "moves": result.get("move_count") or result.get("affinity_update_count"),
                 "primary": result.get("primary_count"),
                 "promotes": result.get("promote_count"),
                 "demotes": result.get("demote_count"),
@@ -1950,7 +1976,16 @@ async def request_ideation_bubble_graph_update(
             bubbles=len(graph.get("bubbles") or []),
             llm_route=result.get("llm_route") or {},
             llm_error=result.get("llm_error") or {},
+            model=(result.get("llm_route") or {}).get("model") if isinstance(result.get("llm_route"), dict) else "",
+            llm_request=result.get("llm_request") or {},
+            llm_response=result.get("llm_response") or {},
+            llm_id_map=result.get("llm_id_map") or {},
+            llm_trace=result.get("llm_trace") or {},
+            timing=timing,
+            input_utterances=len(request_rows),
+            input_bubbles=result.get("input_bubble_count"),
             raw_directives=result.get("raw_directives") or {},
+            ignored_refine_count=result.get("ignored_refine_count"),
             extractor_route=result.get("extractor_route") or {},
             layout_debug=(result.get("layout_debug") or [])[:24],
             refined_count=refined_applied_count,
@@ -1958,6 +1993,7 @@ async def request_ideation_bubble_graph_update(
             rename_count=result.get("rename_count"),
             merge_count=result.get("merge_count"),
             remove_count=result.get("remove_count"),
+            move_count=result.get("move_count") or result.get("affinity_update_count"),
             primary_count=result.get("primary_count"),
             promote_count=result.get("promote_count"),
             demote_count=result.get("demote_count"),
@@ -2082,6 +2118,16 @@ async def request_ideation_bubble_graph_update(
                 elapsed_ms=elapsed_ms,
                 llm_route=result.get("llm_route") or {},
                 llm_error=result.get("llm_error") or {},
+                llm_trace=result.get("llm_trace") or {},
+                model=(result.get("llm_route") or {}).get("model") if isinstance(result.get("llm_route"), dict) else "",
+                llm_request=result.get("llm_request") or {},
+                llm_response=result.get("llm_response") or {},
+                timing={
+                    **(result.get("timing") if isinstance(result.get("timing"), dict) else {}),
+                    "gateway_elapsed_ms": elapsed_ms,
+                },
+                input_utterances=len(request_rows),
+                input_bubbles=result.get("input_bubble_count"),
             )
             if result_reason in {"llm_not_ready", "llm_exception"}:
                 state[pause_key] = time.monotonic() + (IDEATION_BUBBLE_FAILURE_BACKOFF_MS / 1000)

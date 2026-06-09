@@ -892,10 +892,66 @@ function HomeContent() {
       const payload = getMessagePayload(message);
       if (!isRecord(payload)) return;
       if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      const debugStage = readString(payload.stage);
+      const debugMode = readString(payload.mode);
+      const debugUpdateMode = readString(payload.update_mode);
+      if (debugMode === "demo_balance" && debugUpdateMode === "consolidate") {
+        const llmRoute = isRecord(payload.llm_route) ? payload.llm_route : {};
+        const llmError = isRecord(payload.llm_error) ? payload.llm_error : {};
+        const llmRequest = isRecord(payload.llm_request) ? payload.llm_request : {};
+        const llmResponse = isRecord(payload.llm_response) ? payload.llm_response : {};
+        const llmIdMap = isRecord(payload.llm_id_map) ? payload.llm_id_map : {};
+        const llmTrace = isRecord(payload.llm_trace) ? payload.llm_trace : {};
+        const timing = isRecord(payload.timing) ? payload.timing : {};
+        const summary = {
+          elapsedMs: payload.elapsed_ms,
+          timing,
+          llmTrace,
+          inputUtterances: payload.input_utterances ?? payload.rows,
+          inputBubbles: payload.input_bubbles,
+          renameCount: payload.rename_count,
+          mergeCount: payload.merge_count,
+          removeCount: payload.remove_count,
+          moveCount: payload.move_count ?? payload.affinity_update_count,
+          refineCount: 0,
+          ignoredRefineCount: payload.ignored_refine_count,
+          model: payload.model ?? llmRoute.model,
+          resultReason: payload.result_reason ?? payload.reason,
+          warning: payload.warning,
+        };
+        if (debugStage === "response") {
+          console.info("[DemoBubbleLLM] REQUEST", llmRequest);
+          console.info("[DemoBubbleLLM] RESPONSE", llmResponse);
+          if (Object.keys(llmIdMap).length > 0) {
+            console.info("[DemoBubbleLLM] ID MAP", llmIdMap);
+          }
+          if (Object.keys(llmTrace).length > 0) {
+            console.info("[DemoBubbleLLM] TRACE", llmTrace);
+          }
+          console.info("[DemoBubbleLLM] TIMING", timing);
+          console.info("[DemoBubbleLLM] consolidate response", summary);
+        } else if (["request_failed", "request_exception", "paused"].includes(debugStage)) {
+          console.warn("[DemoBubbleLLM] REQUEST", llmRequest);
+          if (Object.keys(llmIdMap).length > 0) {
+            console.warn("[DemoBubbleLLM] ID MAP", llmIdMap);
+          }
+          if (Object.keys(llmTrace).length > 0) {
+            console.warn("[DemoBubbleLLM] TRACE", llmTrace);
+          }
+          console.warn("[DemoBubbleLLM] TIMING", timing);
+          console.warn("[DemoBubbleLLM] consolidate failed", {
+            ...summary,
+            statusCode: payload.status_code ?? llmError.http_status,
+            errorType: payload.error_type ?? llmError.error_type,
+            errorPreview: payload.error ?? llmError.error_preview,
+            llmError,
+          });
+        }
+      }
       console.info("[Bubble] gateway debug event", {
-        stage: readString(payload.stage),
+        stage: debugStage,
         mode: payload.mode,
-        updateMode: payload.update_mode,
+        updateMode: debugUpdateMode,
         reason: payload.reason,
         rows: payload.rows,
         queueSize: payload.queue_size,
@@ -913,13 +969,23 @@ function HomeContent() {
         error: payload.error,
         llmRoute: payload.llm_route,
         llmError: payload.llm_error,
+        llmRequest: payload.llm_request,
+        llmResponse: payload.llm_response,
+        llmIdMap: payload.llm_id_map,
+        llmTrace: payload.llm_trace,
+        timing: payload.timing,
         rawDirectives: payload.raw_directives,
+        ignoredRefineCount: payload.ignored_refine_count,
         extractorRoute: payload.extractor_route,
         refinedCount: payload.refined_count,
         keywordCount: payload.keyword_count,
         renameCount: payload.rename_count,
         mergeCount: payload.merge_count,
         removeCount: payload.remove_count,
+        moveCount: payload.move_count,
+        inputUtterances: payload.input_utterances,
+        inputBubbles: payload.input_bubbles,
+        model: payload.model,
         primaryCount: payload.primary_count,
         promoteCount: payload.promote_count,
         demoteCount: payload.demote_count,

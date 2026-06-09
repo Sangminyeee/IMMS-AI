@@ -4,13 +4,14 @@ import json
 import os
 import re
 import ast
+import copy
 import random
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,8 @@ class GeminiClient:
     last_raw_preview: str = ""
     last_finish_reason: str = ""
     last_http_status: int = 0
+    last_call_trace: dict[str, Any] = field(default_factory=dict)
+    last_generate_trace: dict[str, Any] = field(default_factory=dict)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -181,6 +184,8 @@ class GeminiClient:
             "last_raw_preview": self.last_raw_preview,
             "last_finish_reason": self.last_finish_reason,
             "last_http_status": self.last_http_status,
+            "last_call_trace": copy.deepcopy(self.last_call_trace),
+            "last_generate_trace": copy.deepcopy(self.last_generate_trace),
         }
 
     def _call(
@@ -196,6 +201,9 @@ class GeminiClient:
         if not self.api_key:
             raise RuntimeError("GEMINI_API_KEY 또는 GOOGLE_API_KEY가 설정되지 않았습니다.")
 
+        call_started_at = time.perf_counter()
+        attempt_traces: list[dict[str, Any]] = []
+        retry_sleep_ms = 0
         self.request_count += 1
         self.last_request_at = _now_iso()
         self.last_operation = "generate_content"
@@ -253,9 +261,20 @@ class GeminiClient:
                 req.add_header("Content-Type", "application/json")
                 req.add_header("x-goog-api-key", self.api_key)
 
+                attempt_started_at = time.perf_counter()
                 try:
                     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
                         data = json.loads(resp.read().decode("utf-8"))
+                    attempt_traces.append(
+                        {
+                            "model": model_name,
+                            "attempt": attempt,
+                            "http_status": 200,
+                            "elapsed_ms": round((time.perf_counter() - attempt_started_at) * 1000),
+                            "retryable": False,
+                            "sleep_ms": 0,
+                        }
+                    )
                     if (
                         not model_override
                         and model_name != self.model
@@ -274,10 +293,34 @@ class GeminiClient:
 
                     if retryable and attempt < max_retries:
                         sleep_sec = retry_base * (2 ** (attempt - 1)) + random.uniform(0.0, 0.35)
+                        sleep_ms = round(sleep_sec * 1000)
+                        retry_sleep_ms += sleep_ms
+                        attempt_traces.append(
+                            {
+                                "model": model_name,
+                                "attempt": attempt,
+                                "http_status": status,
+                                "elapsed_ms": round((time.perf_counter() - attempt_started_at) * 1000),
+                                "retryable": True,
+                                "sleep_ms": sleep_ms,
+                                "error_preview": detail[:240],
+                            }
+                        )
                         self.last_error = f"{last_error_msg} (재시도 {attempt}/{max_retries}, {sleep_sec:.1f}s 대기)"
                         self.last_error_at = _now_iso()
                         time.sleep(sleep_sec)
                         continue
+                    attempt_traces.append(
+                        {
+                            "model": model_name,
+                            "attempt": attempt,
+                            "http_status": status,
+                            "elapsed_ms": round((time.perf_counter() - attempt_started_at) * 1000),
+                            "retryable": retryable,
+                            "sleep_ms": 0,
+                            "error_preview": detail[:240],
+                        }
+                    )
                     # 재시도 불가 에러는 현재 모델 시도 중단
                     break
                 except Exception as exc:
@@ -286,10 +329,34 @@ class GeminiClient:
                     last_status = status
                     if attempt < max_retries:
                         sleep_sec = retry_base * (2 ** (attempt - 1)) + random.uniform(0.0, 0.35)
+                        sleep_ms = round(sleep_sec * 1000)
+                        retry_sleep_ms += sleep_ms
+                        attempt_traces.append(
+                            {
+                                "model": model_name,
+                                "attempt": attempt,
+                                "http_status": 0,
+                                "elapsed_ms": round((time.perf_counter() - attempt_started_at) * 1000),
+                                "retryable": True,
+                                "sleep_ms": sleep_ms,
+                                "error_preview": str(exc)[:240],
+                            }
+                        )
                         self.last_error = f"{last_error_msg} (재시도 {attempt}/{max_retries}, {sleep_sec:.1f}s 대기)"
                         self.last_error_at = _now_iso()
                         time.sleep(sleep_sec)
                         continue
+                    attempt_traces.append(
+                        {
+                            "model": model_name,
+                            "attempt": attempt,
+                            "http_status": 0,
+                            "elapsed_ms": round((time.perf_counter() - attempt_started_at) * 1000),
+                            "retryable": False,
+                            "sleep_ms": 0,
+                            "error_preview": str(exc)[:240],
+                        }
+                    )
                     break
 
             if data is not None:
@@ -300,6 +367,18 @@ class GeminiClient:
             self.last_error = last_error_msg
             self.last_error_at = _now_iso()
             self.last_http_status = last_status
+            self.last_call_trace = {
+                "ok": False,
+                "elapsed_ms": round((time.perf_counter() - call_started_at) * 1000),
+                "prompt_chars": len(prompt),
+                "max_tokens": max_tokens,
+                "model": primary_model,
+                "thinking_level": thinking_level or "",
+                "http_status": last_status,
+                "retry_sleep_ms": retry_sleep_ms,
+                "attempts": attempt_traces,
+                "error_preview": last_error_msg[:500],
+            }
             raise RuntimeError(self.last_error)
 
         text = ""
@@ -318,6 +397,20 @@ class GeminiClient:
             self.error_count += 1
             self.last_error = "Gemini 응답 본문이 비어 있습니다."
             self.last_error_at = _now_iso()
+            self.last_call_trace = {
+                "ok": False,
+                "elapsed_ms": round((time.perf_counter() - call_started_at) * 1000),
+                "prompt_chars": len(prompt),
+                "max_tokens": max_tokens,
+                "model": self.last_model or primary_model,
+                "thinking_level": thinking_level or "",
+                "http_status": self.last_http_status,
+                "retry_sleep_ms": retry_sleep_ms,
+                "attempts": attempt_traces,
+                "finish_reason": finish_reason,
+                "response_chars": 0,
+                "error_preview": self.last_error,
+            }
             raise RuntimeError(self.last_error)
 
         self.success_count += 1
@@ -326,6 +419,19 @@ class GeminiClient:
         self.last_error_at = ""
         self.last_raw_preview = (text or "")[:1000]
         self.last_finish_reason = finish_reason
+        self.last_call_trace = {
+            "ok": True,
+            "elapsed_ms": round((time.perf_counter() - call_started_at) * 1000),
+            "prompt_chars": len(prompt),
+            "max_tokens": max_tokens,
+            "model": self.last_model or primary_model,
+            "thinking_level": thinking_level or "",
+            "http_status": self.last_http_status,
+            "retry_sleep_ms": retry_sleep_ms,
+            "attempts": attempt_traces,
+            "finish_reason": finish_reason,
+            "response_chars": len(text or ""),
+        }
         return text
 
     def ping(self) -> dict[str, Any]:
@@ -370,6 +476,54 @@ class GeminiClient:
         if not self.connected:
             raise RuntimeError("LLM이 연결되지 않았습니다. 먼저 연결 버튼을 눌러주세요.")
 
+        generate_started_at = time.perf_counter()
+        trace: dict[str, Any] = {
+            "prompt_chars": len(prompt),
+            "max_tokens": max_tokens,
+            "model": (model_override or self.model or "").strip(),
+            "thinking_level": (thinking_level or "").strip(),
+            "steps": [],
+            "parse_path": "",
+            "total_ms": 0,
+        }
+
+        def finish_trace(parse_path: str, *, ok: bool = True, error_preview: str = "") -> None:
+            trace["parse_path"] = parse_path
+            trace["ok"] = bool(ok)
+            trace["total_ms"] = round((time.perf_counter() - generate_started_at) * 1000)
+            if error_preview:
+                trace["error_preview"] = error_preview[:500]
+            self.last_generate_trace = copy.deepcopy(trace)
+
+        def call_step(
+            step: str,
+            step_prompt: str,
+            *,
+            step_temperature: float,
+            step_max_tokens: int,
+            step_model_override: str | None = None,
+            step_thinking_level: str | None = None,
+        ) -> str:
+            step_error: Exception | None = None
+            try:
+                raw_text = self._call(
+                    step_prompt,
+                    temperature=step_temperature,
+                    max_tokens=step_max_tokens,
+                    model_override=step_model_override if step_model_override is not None else model_override,
+                    thinking_level=step_thinking_level if step_thinking_level is not None else thinking_level,
+                )
+                return raw_text
+            except Exception as exc:
+                step_error = exc
+                raise exc
+            finally:
+                step_trace = copy.deepcopy(self.last_call_trace or {})
+                step_trace["step"] = step
+                trace.setdefault("steps", []).append(step_trace)
+                if step_error is not None:
+                    finish_trace(f"{step}_error", ok=False, error_preview=str(step_error))
+
         def parse_json(raw_text: str) -> dict[str, Any]:
             parsed_json = _extract_json(raw_text)
             if not parsed_json:
@@ -408,12 +562,11 @@ class GeminiClient:
                     f"[이미 생성된 JSON 길이]\n{len(merged)}\n\n"
                     f"[이미 생성된 JSON 마지막 부분]\n{tail}"
                 )
-                continuation_raw = self._call(
+                continuation_raw = call_step(
+                    f"continuation_{attempt}",
                     continuation_prompt,
-                    temperature=0.0,
-                    max_tokens=continuation_max_tokens,
-                    model_override=model_override,
-                    thinking_level=thinking_level,
+                    step_temperature=0.0,
+                    step_max_tokens=continuation_max_tokens,
                 )
                 finish_reasons.append(self.last_finish_reason or "")
                 continuation_payload = parse_json(continuation_raw)
@@ -441,21 +594,22 @@ class GeminiClient:
 
         finish_reasons: list[str] = []
 
-        raw = self._call(
+        raw = call_step(
+            "initial",
             prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            model_override=model_override,
-            thinking_level=thinking_level,
+            step_temperature=temperature,
+            step_max_tokens=max_tokens,
         )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(raw)
         if parsed:
+            finish_trace("initial")
             return parsed
 
         if (self.last_finish_reason or "").upper() == "MAX_TOKENS":
             parsed, raw = continue_truncated_json(raw, prompt, max_tokens)
             if parsed:
+                finish_trace("continuation")
                 return parsed
 
         repair_input = (raw or "")[:12000]
@@ -464,16 +618,16 @@ class GeminiClient:
             "설명/마크다운/코드펜스 없이 JSON만 출력하세요.\n\n"
             f"{repair_input}"
         )
-        repair_raw = self._call(
+        repair_raw = call_step(
+            "repair",
             repair_prompt,
-            temperature=0.0,
-            max_tokens=max_tokens,
-            model_override=model_override,
-            thinking_level=thinking_level,
+            step_temperature=0.0,
+            step_max_tokens=max_tokens,
         )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(repair_raw)
         if parsed:
+            finish_trace("repair")
             return parsed
 
         # 마지막 재시도: 원 프롬프트를 더 강한 JSON 제약으로 재호출
@@ -482,21 +636,22 @@ class GeminiClient:
             "설명/주석/코드펜스/추가 텍스트 금지.\n\n"
             + prompt
         )
-        strict_raw = self._call(
+        strict_raw = call_step(
+            "strict_retry",
             strict_prompt,
-            temperature=0.0,
-            max_tokens=max_tokens,
-            model_override=model_override,
-            thinking_level=thinking_level,
+            step_temperature=0.0,
+            step_max_tokens=max_tokens,
         )
         finish_reasons.append(self.last_finish_reason or "")
         parsed = parse_json(strict_raw)
         if parsed:
+            finish_trace("strict_retry")
             return parsed
 
         if (self.last_finish_reason or "").upper() == "MAX_TOKENS":
             parsed, strict_raw = continue_truncated_json(strict_raw, strict_prompt, max_tokens)
             if parsed:
+                finish_trace("strict_continuation")
                 return parsed
 
         if any(reason.upper() == "MAX_TOKENS" for reason in finish_reasons):
@@ -509,16 +664,16 @@ class GeminiClient:
                     "가능한 한 간결하게 출력하고, 배열 항목은 요청된 최대 개수를 넘기지 마세요.\n\n"
                     + prompt
                 )
-                retry_raw = self._call(
+                retry_raw = call_step(
+                    "max_tokens_retry",
                     compact_strict_prompt,
-                    temperature=0.0,
-                    max_tokens=retry_max_tokens,
-                    model_override=model_override,
-                    thinking_level=thinking_level,
+                    step_temperature=0.0,
+                    step_max_tokens=retry_max_tokens,
                 )
                 finish_reasons.append(self.last_finish_reason or "")
                 parsed = parse_json(retry_raw)
                 if parsed:
+                    finish_trace("max_tokens_retry")
                     return parsed
                 if (self.last_finish_reason or "").upper() == "MAX_TOKENS":
                     parsed, _retry_merged = continue_truncated_json(
@@ -527,11 +682,14 @@ class GeminiClient:
                         retry_max_tokens,
                     )
                     if parsed:
+                        finish_trace("max_tokens_retry_continuation")
                         return parsed
 
         if not parsed:
             finish_reason = next((reason for reason in reversed(finish_reasons) if reason), "-")
+            finish_trace("failed", ok=False, error_preview=f"LLM JSON 파싱 실패 (finish_reason={finish_reason})")
             raise RuntimeError(f"LLM JSON 파싱 실패 (finish_reason={finish_reason})")
+        finish_trace("unknown")
         return parsed
 
 
