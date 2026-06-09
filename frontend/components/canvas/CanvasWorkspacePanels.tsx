@@ -23,6 +23,7 @@ import {
   type CanvasSurfaceSolutionHandlers,
   type CanvasSurfaceSolutionState,
   type CanvasSurfaceViewState,
+  type CanvasSttFeedItem,
 } from "@/components/canvas/CanvasSurface";
 import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAsk";
 
@@ -1256,6 +1257,7 @@ export type CanvasWorkspacePanelsProps = {
   surfaceSolutionHandlers: CanvasSurfaceSolutionHandlers;
   surfaceProblemHandlers: CanvasSurfaceProblemHandlers;
   renderSummaryMarkdownPreview: (markdown: string, onEdit: () => void) => ReactNode;
+  sttFeedItems?: CanvasSttFeedItem[];
   rightDrawerLayout: CanvasRightDrawerLayoutState;
   rightDrawerComposer: CanvasRightDrawerComposerState;
   rightDrawerNotesState: CanvasRightDrawerNotesState;
@@ -1281,6 +1283,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   surfaceSolutionHandlers,
   surfaceProblemHandlers,
   renderSummaryMarkdownPreview,
+  sttFeedItems,
   rightDrawerComposer,
   rightDrawerNotesState,
   rightDrawerComposerHandlers,
@@ -1316,6 +1319,7 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
           solutionHandlers={surfaceSolutionHandlers}
           problemHandlers={surfaceProblemHandlers}
           renderSummaryMarkdownPreview={renderSummaryMarkdownPreview}
+          sttFeedItems={sttFeedItems}
         />
         {header.view.stage === "solution" ? null : <CenterTransportControls header={header} />}
       </main>

@@ -40,6 +40,7 @@ export function useCanvasWorkspacePanelModels({
   surfaceSolutionHandlers: incomingSurfaceSolutionHandlers,
   surfaceProblemHandlers: incomingSurfaceProblemHandlers,
   renderSummaryMarkdownPreview,
+  sttFeedItems: incomingSttFeedItems,
   rightDrawerLayout: incomingRightDrawerLayout,
   rightDrawerComposer: incomingRightDrawerComposer,
   rightDrawerNotesState: incomingRightDrawerNotesState,
@@ -347,6 +348,11 @@ export function useCanvasWorkspacePanelModels({
     [incomingParticipants],
   );
 
+  const sttFeedItems = useMemo(
+    () => (incomingSttFeedItems || []).map((item) => ({ ...item })),
+    [incomingSttFeedItems],
+  );
+
   return useMemo<CanvasWorkspacePanelsProps>(() => ({
     header,
     keywordSummary,
@@ -361,6 +367,7 @@ export function useCanvasWorkspacePanelModels({
     surfaceSolutionHandlers,
     surfaceProblemHandlers,
     renderSummaryMarkdownPreview,
+    sttFeedItems,
     rightDrawerLayout,
     rightDrawerComposer,
     rightDrawerNotesState,
@@ -396,6 +403,7 @@ export function useCanvasWorkspacePanelModels({
     surfaceSolution,
     surfaceSolutionHandlers,
     surfaceView,
+    sttFeedItems,
     workspaceGridColumns,
   ]);
 }

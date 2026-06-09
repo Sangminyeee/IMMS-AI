@@ -27,6 +27,7 @@ import {
   type CanvasDebugResetScope,
   type CanvasWorkspaceParticipant,
 } from "@/components/canvas/CanvasWorkspacePanels";
+import type { CanvasSttFeedItem } from "@/components/canvas/CanvasSurface";
 import {
   MobileMeetingReadOnlyView,
   type MobileMeetingViewStage,
@@ -171,6 +172,9 @@ export type MeetingTranscript = {
   timestamp: string;
   canvas_stage?: CanvasStage | string;
   canvas_target_id?: string;
+  transcript_status?: "final" | "processing" | string;
+  persisted?: boolean;
+  persistence_status?: "saving" | "retrying" | "persisted" | "persist_failed" | string;
 };
 
 export type MeetingAgenda = {
@@ -418,6 +422,47 @@ function stripLeadingTimestamp(text: string) {
       "",
     )
     .trim();
+}
+
+function normalizeSttFeedText(text: string) {
+  return stripLeadingTimestamp(text).replace(/\s+/g, " ").trim();
+}
+
+function transcriptTimeValue(timestamp: string) {
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildCanvasSttFeedItems(transcripts: MeetingTranscript[], limit = 4): CanvasSttFeedItem[] {
+  const seen = new Set<string>();
+  return [...transcripts]
+    .map((row) => ({
+      row,
+      text: normalizeSttFeedText(row.text || ""),
+      timeValue: transcriptTimeValue(row.timestamp || ""),
+    }))
+    .filter(({ row, text }) => {
+      if (!text) return false;
+      if (row.transcript_status && row.transcript_status !== "final") return false;
+      if (row.persistence_status === "persist_failed") return false;
+      return true;
+    })
+    .sort((left, right) => right.timeValue - left.timeValue)
+    .reduce<CanvasSttFeedItem[]>((items, { row, text }) => {
+      if (items.length >= limit) return items;
+      const id = row.id || `${row.timestamp}:${row.speaker}:${text}`;
+      if (seen.has(id)) return items;
+      seen.add(id);
+      items.push({
+        id,
+        text,
+        speaker: row.speaker || "",
+        timestamp: row.timestamp || "",
+        canvasStage: row.canvas_stage || "ideation",
+      });
+      return items;
+    }, [])
+    .slice(0, limit);
 }
 
 function makeProblemSummarySourceNodeId(groupId: string, index: number) {
@@ -4158,6 +4203,10 @@ export default function MeetingCanvasTab({
       ? participants
       : [{ id: userId || "current-user", label: "M", title: userEmail || "현재 사용자" }];
   }, [transcripts, userEmail, userId]);
+  const sttFeedItems = useMemo(
+    () => buildCanvasSttFeedItems(transcripts, 4),
+    [transcripts],
+  );
 
   const workspacePanelProps = useCanvasWorkspacePanelModels({
     header: headerProps,
@@ -4256,6 +4305,7 @@ export default function MeetingCanvasTab({
       onSetProblemGroupStatus: handleSetProblemGroupStatus,
     },
     renderSummaryMarkdownPreview,
+    sttFeedItems,
     rightDrawerLayout: {
       collapsed: rightDrawerCollapsed,
       contentVisible: rightDrawerContentVisible,
