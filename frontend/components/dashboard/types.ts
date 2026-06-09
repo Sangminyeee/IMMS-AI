@@ -10,4 +10,15 @@ export interface DashboardMeeting {
   host_id: string;
 }
 
+export interface DashboardMeetingTemplate {
+  id: string;
+  title: string;
+  optionA: string;
+  optionAKeyword: string;
+  optionB: string;
+  optionBKeyword: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type MeetingStatusFilter = "all" | "completed" | "scheduled" | "active";
