@@ -28,6 +28,7 @@ export type IdeationKeywordBubble = {
   offTopic?: boolean;
   offTopicReason?: string;
   anchorText?: string;
+  choiceAffinity?: "a" | "b" | string;
   layoutX?: number;
   layoutY?: number;
   layoutSize?: number;

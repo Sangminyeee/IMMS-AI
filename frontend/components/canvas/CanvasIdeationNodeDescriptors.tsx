@@ -23,6 +23,7 @@ const IDEATION_DEMO_ORBIT_TRANSFER_MS = 1800;
 const IDEATION_DEMO_ORBIT_ENTER_MS = 820;
 const IDEATION_DEMO_ORBIT_EXIT_MS = 620;
 const IDEATION_DEMO_ORBIT_GHOST_MS = 840;
+const IDEATION_DEMO_ORBIT_RAIL_PADDING = 14;
 
 type DemoOrbitMotionPhase = "ghost-exit" | "delayed-enter" | "moving" | "settling" | "idle";
 type DemoOrbitMotionType = "enter" | "arc" | "radial" | "orbit-transfer" | "exit" | "static";
@@ -74,12 +75,94 @@ type DemoOrbitMotionRecord = {
   removedAt?: number;
 };
 
+type DemoOrbitRingFlowState = {
+  offset: number;
+  velocity: number;
+};
+
 function uniqueOrbitRadii(values: number[]) {
   return [...new Set(
     values
       .map((value) => Math.round(value))
       .filter((value) => Number.isFinite(value) && value >= 96 && value <= 360),
   )].sort((left, right) => left - right);
+}
+
+function demoHashString(value: string) {
+  return Array.from(value || "demo").reduce((hash, char) => ((hash * 31) + char.charCodeAt(0)) >>> 0, 2166136261);
+}
+
+function demoOrbitRailPalette(sideIsB: boolean) {
+  return sideIsB
+    ? {
+        stroke: "rgba(255,101,68,0.28)",
+        flow: "rgba(255,101,68,0.44)",
+        fill: "rgba(255,216,201,0.028)",
+      }
+    : {
+        stroke: "rgba(35,108,243,0.3)",
+        flow: "rgba(35,108,243,0.46)",
+        fill: "rgba(157,229,255,0.03)",
+      };
+}
+
+function isDemoOrbitGuideBubble(bubble: IdeationKeywordBubbleVisual) {
+  const state = bubble.displayState || "active";
+  return (
+    (state === "active" || state === "dimmed")
+    && bubble.role !== "center"
+    && bubble.role !== "dot"
+    && bubble.emphasis !== "primary"
+    && Number.isFinite(Number(bubble.orbitRadius))
+    && Number(bubble.orbitRadius) >= 96
+  );
+}
+
+function buildDemoOrbitGuideRadii(centerId: string, bubbles: IdeationKeywordBubbleVisual[]) {
+  const candidates = bubbles.filter((bubble) => bubble.orbitCenterId === centerId && isDemoOrbitGuideBubble(bubble));
+  const activeSatelliteCount = candidates.length;
+  const groups = new Map<number, { radius: number; count: number; minRing: number }>();
+  candidates.forEach((bubble) => {
+    const radius = Math.round(Number(bubble.orbitRadius || 0));
+    const ring = Math.max(1, Math.round(Number(bubble.orbitRing || 1)));
+    if (activeSatelliteCount <= 8 && ring > 1) return;
+    const existing = groups.get(radius);
+    if (existing) {
+      existing.count += 1;
+      existing.minRing = Math.min(existing.minRing, ring);
+      return;
+    }
+    groups.set(radius, { radius, count: 1, minRing: ring });
+  });
+
+  return [...groups.values()]
+    .sort((left, right) => {
+      const ringDelta = left.minRing - right.minRing;
+      if (ringDelta !== 0) return ringDelta;
+      return left.radius - right.radius;
+    })
+    .reduce<Array<{ radius: number; count: number; minRing: number }>>((guides, guide) => {
+      const closeIndex = guides.findIndex((item) => Math.abs(item.radius - guide.radius) < 64);
+      if (closeIndex < 0) {
+        guides.push(guide);
+        return guides;
+      }
+      const existing = guides[closeIndex];
+      if (guide.count > existing.count || (guide.count === existing.count && guide.minRing < existing.minRing)) {
+        guides[closeIndex] = guide;
+      }
+      return guides;
+    }, []);
+}
+
+function demoOrbitRailFlowStyle(centerId: string, radius: number, sideIsB: boolean): React.CSSProperties {
+  const hash = demoHashString(`${centerId}:${Math.round(radius)}:${sideIsB ? "b" : "a"}`);
+  const duration = 18000 + (hash % 8000);
+  const dashOffset = sideIsB ? -84 : 84;
+  return {
+    "--demo-rail-flow-duration": `${duration}ms`,
+    "--demo-rail-flow-offset": `${dashOffset}px`,
+  } as React.CSSProperties;
 }
 
 function makeOrbitGuideLabel(radius: number, dotSeed: string, dimmed = false) {
@@ -366,13 +449,71 @@ function demoOrbitFiniteNumber(value: unknown, fallback: number) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function demoOrbitRecordTransform(record: DemoOrbitMotionRecord) {
-  return `translate3d(${Math.round(record.currentX * 100) / 100}px, ${Math.round(record.currentY * 100) / 100}px, 0) scale(${Math.round(record.currentScale * 1000) / 1000})`;
+function isDemoOrbitRingFlowEligible(record: DemoOrbitMotionRecord) {
+  const state = record.bubble.displayState || "active";
+  return (
+    record.phase === "idle"
+    && record.motionType === "static"
+    && state !== "exiting"
+    && record.bubble.demoVisualPhase !== "ghost-exit"
+    && record.bubble.role !== "center"
+    && record.bubble.role !== "dot"
+    && record.bubble.emphasis !== "primary"
+    && Number.isFinite(record.orbitCenterX)
+    && Number.isFinite(record.orbitCenterY)
+    && Number.isFinite(record.currentAngle)
+    && Number.isFinite(record.currentRadius)
+    && Number(record.currentRadius) > 0
+  );
 }
 
-function applyDemoOrbitRecordStyle(element: HTMLElement, record: DemoOrbitMotionRecord) {
-  element.style.transform = demoOrbitRecordTransform(record);
+function demoOrbitRingFlowKey(record: DemoOrbitMotionRecord) {
+  if (!record.orbitCenterId || !Number.isFinite(record.orbitRing)) return "";
+  return `${record.orbitCenterId}:${Math.round(Number(record.orbitRing))}`;
+}
+
+function makeDemoOrbitRingFlowState(key: string, record: DemoOrbitMotionRecord): DemoOrbitRingFlowState {
+  const hash = demoHashString(`${key}:${record.bubble.choiceAffinity || "a"}`);
+  const ring = Math.max(1, Math.round(Number(record.orbitRing) || 1));
+  const sideIsB = String(record.bubble.choiceAffinity || "").toLowerCase() === "b";
+  const direction = (sideIsB ? 1 : -1) * (ring % 2 === 0 ? -1 : 1);
+  const degreesPerSecond = 0.38 + ((hash % 11) * 0.018);
+  return {
+    offset: 0,
+    velocity: direction * (degreesPerSecond * Math.PI / 180) / 1000,
+  };
+}
+
+function demoOrbitVisualPosition(record: DemoOrbitMotionRecord, ringFlowOffset = 0) {
+  if (!ringFlowOffset || !isDemoOrbitRingFlowEligible(record)) {
+    return { x: record.currentX, y: record.currentY };
+  }
+  const centerX = Number(record.orbitCenterX);
+  const centerY = Number(record.orbitCenterY);
+  const radius = Number(record.currentRadius);
+  const angle = Number(record.currentAngle) + ringFlowOffset;
+  return {
+    x: centerX + Math.cos(angle) * radius - record.bubble.size / 2,
+    y: centerY + Math.sin(angle) * radius - record.bubble.size / 2,
+  };
+}
+
+function demoOrbitRecordTransform(record: DemoOrbitMotionRecord, ringFlowOffset = 0) {
+  const visualPosition = demoOrbitVisualPosition(record, ringFlowOffset);
+  return `translate3d(${Math.round(visualPosition.x * 100) / 100}px, ${Math.round(visualPosition.y * 100) / 100}px, 0) scale(${Math.round(record.currentScale * 1000) / 1000})`;
+}
+
+function applyDemoOrbitRecordStyle(element: HTMLElement, record: DemoOrbitMotionRecord, ringFlowOffset = 0) {
+  element.style.transform = demoOrbitRecordTransform(record, ringFlowOffset);
   element.style.opacity = String(Math.max(0, Math.min(1, record.currentOpacity)));
+}
+
+function foldDemoOrbitRingFlowIntoRecord(record: DemoOrbitMotionRecord, ringFlowOffset = 0) {
+  if (!ringFlowOffset || !isDemoOrbitRingFlowEligible(record)) return;
+  const visualPosition = demoOrbitVisualPosition(record, ringFlowOffset);
+  record.currentX = visualPosition.x;
+  record.currentY = visualPosition.y;
+  syncDemoOrbitRecordPolar(record, record.bubble);
 }
 
 function demoOrbitCenterForTarget(bubble: IdeationKeywordBubbleVisual) {
@@ -490,7 +631,7 @@ function retargetDemoOrbitRecord(record: DemoOrbitMotionRecord, bubble: Ideation
   record.targetOrbitSlotIndex = nextOrbitSlotIndex;
   record.bubble = { ...effectiveBubble, demoVisualPhase: record.phase };
 
-  if (motionType === "arc" || motionType === "radial") {
+  if (motionType === "arc" || motionType === "radial" || motionType === "static") {
     syncDemoOrbitRecordPolar(record, effectiveBubble);
     record.orbitAngleDirection = demoOrbitDirectionForBubble(
       effectiveBubble,
@@ -578,6 +719,7 @@ function stepDemoOrbitRecord(record: DemoOrbitMotionRecord, deltaMs: number) {
       record.phase = "idle";
       record.motionType = "static";
       record.bubble = { ...record.bubble, demoVisualPhase: "idle" };
+      syncDemoOrbitRecordPolar(record, record.bubble);
     }
   }
 
@@ -588,6 +730,7 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const previousGraphByIdRef = useRef(new Map<string, IdeationKeywordBubbleVisual>());
   const recordsRef = useRef(new Map<string, DemoOrbitMotionRecord>());
+  const ringFlowRef = useRef(new Map<string, DemoOrbitRingFlowState>());
   const visualBubblesRef = useRef<DemoOrbitVisualBubble[]>(
     bubbles.map((bubble) => ({ ...bubble, demoVisualPhase: "delayed-enter" })),
   );
@@ -619,6 +762,7 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
       bubble.count,
       bubble.activity,
       bubble.emphasis,
+      bubble.choiceAffinity,
       bubble.targetX,
       bubble.targetY,
       bubble.size,
@@ -660,8 +804,31 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
       lastFrameAtRef.current = frameTime;
       const records = recordsRef.current;
       const reduced = prefersReducedDemoOrbitMotion();
+      const ringFlows = ringFlowRef.current;
+      const activeFlowKeys = new Set<string>();
       let hasActiveMotion = false;
       let removedGhost = false;
+
+      if (reduced) {
+        ringFlows.clear();
+      } else {
+        records.forEach((record) => {
+          if (!isDemoOrbitRingFlowEligible(record)) return;
+          const key = demoOrbitRingFlowKey(record);
+          if (!key) return;
+          const flow = ringFlows.get(key) ?? makeDemoOrbitRingFlowState(key, record);
+          flow.offset = (flow.offset + flow.velocity * deltaMs) % DEMO_ORBIT_TAU;
+          ringFlows.set(key, flow);
+          activeFlowKeys.add(key);
+        });
+        ringFlows.forEach((flow, key) => {
+          if (activeFlowKeys.has(key)) return;
+          flow.offset *= 0.9;
+          if (Math.abs(flow.offset) < 0.0001) {
+            ringFlows.delete(key);
+          }
+        });
+      }
 
       records.forEach((record, id) => {
         const element = bubbleRefs.current.get(id);
@@ -685,9 +852,14 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
         }
 
         if (element) {
-          applyDemoOrbitRecordStyle(element, record);
+          const flowKey = demoOrbitRingFlowKey(record);
+          const ringFlowOffset = !reduced && activeFlowKeys.has(flowKey)
+            ? ringFlows.get(flowKey)?.offset ?? 0
+            : 0;
+          applyDemoOrbitRecordStyle(element, record, ringFlowOffset);
           element.dataset.motionType = record.motionType;
           element.dataset.motionPhase = record.phase;
+          element.dataset.ringFlow = ringFlowOffset ? "active" : "none";
         }
 
         if (record.phase === "ghost-exit") {
@@ -699,7 +871,7 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
         syncVisualBubblesFromRecords();
       }
 
-      if (hasActiveMotion) {
+      if (hasActiveMotion || activeFlowKeys.size > 0) {
         scheduleFrame();
       } else {
         lastFrameAtRef.current = null;
@@ -712,6 +884,17 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
     const records = recordsRef.current;
     const previousGraphById = previousGraphByIdRef.current;
     const nextGraphById = new Map(bubbles.map((bubble) => [bubble.id, bubble] as const));
+    const ringFlowOffsets = new Map([...ringFlowRef.current.entries()].map(([key, flow]) => [key, flow.offset] as const));
+
+    if (ringFlowOffsets.size > 0) {
+      records.forEach((record) => {
+        const offset = ringFlowOffsets.get(demoOrbitRingFlowKey(record)) ?? 0;
+        foldDemoOrbitRingFlowIntoRecord(record, offset);
+      });
+      ringFlowRef.current.forEach((flow) => {
+        flow.offset = 0;
+      });
+    }
 
     bubbles.forEach((bubble) => {
       const record = records.get(bubble.id);
@@ -769,7 +952,8 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
       bubbleRefs.current.set(id, element);
       const record = recordsRef.current.get(id);
       if (record) {
-        applyDemoOrbitRecordStyle(element, record);
+        const flowOffset = ringFlowRef.current.get(demoOrbitRingFlowKey(record))?.offset ?? 0;
+        applyDemoOrbitRecordStyle(element, record, isDemoOrbitRingFlowEligible(record) ? flowOffset : 0);
         element.dataset.motionType = record.motionType;
         element.dataset.motionPhase = record.phase;
       }
@@ -857,33 +1041,85 @@ function IdeationDemoOrbitLayer({
 
   return (
     <div className="relative h-full w-full overflow-visible" aria-hidden="true">
+      <style>
+        {`
+          @keyframes ideation-demo-orbit-rail-flow {
+            from { stroke-dashoffset: 0; }
+            to { stroke-dashoffset: var(--demo-rail-flow-offset, 84px); }
+          }
+          .ideation-demo-orbit-bubble-content {
+            transform: translate3d(0, 0, 0);
+          }
+          .ideation-demo-orbit-rail-flow {
+            animation: ideation-demo-orbit-rail-flow var(--demo-rail-flow-duration, 22000ms) linear infinite;
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .ideation-demo-orbit-rail-flow {
+              animation: none !important;
+            }
+          }
+        `}
+      </style>
       {guideGroups.flatMap((centerBubble) => {
         const centerX = centerBubble.targetX + centerBubble.size / 2;
         const centerY = centerBubble.targetY + centerBubble.size / 2;
-        const radii = uniqueOrbitRadii(
-          bubbles
-            .filter((bubble) => bubble.orbitCenterId === centerBubble.id)
-            .map((bubble) => Number(bubble.orbitRadius || 0)),
-        );
-        return radii.map((radius, index) => (
-          <div
-            key={`${centerBubble.id}-guide-${index}-${radius}`}
-            className="absolute rounded-full border border-dashed border-[#01a3ff]/20 bg-[radial-gradient(circle,rgba(157,229,255,0.045)_0%,rgba(1,163,255,0)_66%)]"
-            style={{
-              left: centerX - radius,
-              top: centerY - radius,
-              width: radius * 2,
-              height: radius * 2,
-              transition: IDEATION_ORBIT_GUIDE_TRANSITION,
-            }}
-          />
-        ));
+        const railPalette = demoOrbitRailPalette(centerBubble.choiceAffinity === "b");
+        const guides = buildDemoOrbitGuideRadii(centerBubble.id, bubbles);
+        return guides.map((guide, index) => {
+          const { radius } = guide;
+          const sideIsB = centerBubble.choiceAffinity === "b";
+          const railSize = radius * 2 + IDEATION_DEMO_ORBIT_RAIL_PADDING * 2;
+          const railOpacity = guide.count > 0 ? 0.82 : 0;
+          return (
+            <svg
+              key={`${centerBubble.id}-guide-${index}-${radius}`}
+              className="pointer-events-none absolute overflow-visible"
+              viewBox={`0 0 ${railSize} ${railSize}`}
+              style={{
+                left: centerX - radius - IDEATION_DEMO_ORBIT_RAIL_PADDING,
+                top: centerY - radius - IDEATION_DEMO_ORBIT_RAIL_PADDING,
+                width: railSize,
+                height: railSize,
+                opacity: railOpacity,
+                transition: IDEATION_ORBIT_GUIDE_TRANSITION,
+              }}
+            >
+              <circle
+                cx={railSize / 2}
+                cy={railSize / 2}
+                r={radius}
+                fill={railPalette.fill}
+              />
+              <circle
+                cx={railSize / 2}
+                cy={railSize / 2}
+                r={radius}
+                fill="none"
+                stroke={railPalette.stroke}
+                strokeWidth={1.7}
+              />
+              <circle
+                className="ideation-demo-orbit-rail-flow"
+                cx={railSize / 2}
+                cy={railSize / 2}
+                r={radius}
+                fill="none"
+                stroke={railPalette.flow}
+                strokeWidth={1.45}
+                strokeLinecap="round"
+                strokeDasharray="18 56"
+                opacity={0.34}
+                style={demoOrbitRailFlowStyle(centerBubble.id, radius, sideIsB)}
+              />
+            </svg>
+          );
+        });
       })}
       {visualBubbles.map((bubble) => (
         <div
           key={bubble.id}
           ref={setBubbleRef(bubble.id)}
-          className="absolute origin-center will-change-transform"
+          className="ideation-demo-orbit-bubble absolute origin-center will-change-transform"
           style={{
             left: 0,
             top: 0,
@@ -905,8 +1141,9 @@ function IdeationDemoOrbitLayer({
           data-radius-cost={bubble.radiusCost ?? ""}
           data-gate-blocked={bubble.gateBlocked ? "true" : "false"}
           data-visual-phase={bubble.demoVisualPhase ?? ""}
+          data-choice-affinity={bubble.choiceAffinity ?? ""}
         >
-          <div className="h-full w-full">
+          <div className="ideation-demo-orbit-bubble-content h-full w-full">
             {makeIdeationKeywordBubbleNodeLabel(bubble, bubble.size)}
           </div>
         </div>
@@ -948,6 +1185,7 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
           bubble.orbitOrderKey,
           bubble.orbitSlotIndex,
           bubble.emphasis,
+          bubble.choiceAffinity,
         ]),
       ]),
       nodeDescriptors: [

@@ -122,6 +122,7 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph, demoBal
       offTopic: Boolean(bubble.off_topic || kind === "off_topic"),
       offTopicReason: bubble.off_topic_reason || "",
       anchorText: labelById.get(bubble.anchor_id || "") || "",
+      choiceAffinity: bubble.choice_affinity === "a" || bubble.choice_affinity === "b" ? bubble.choice_affinity : undefined,
       layoutX: Number.isFinite(layoutX) ? layoutX : undefined,
       layoutY: Number.isFinite(layoutY) ? layoutY : undefined,
       layoutSize: Number.isFinite(layoutSize) && layoutSize > 0 ? layoutSize : undefined,

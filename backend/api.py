@@ -8843,6 +8843,10 @@ DEMO_BALANCE_NEUTRAL_LABEL = "미분류"
 DEMO_BALANCE_AFFINITIES = {"a", "b", "neutral"}
 DEMO_BALANCE_DISPLAY_AFFINITIES = {"a", "b"}
 DEMO_BALANCE_MIN_VISIBLE_PER_SIDE = 4
+DEMO_BALANCE_CENTER_BUBBLE_SIZE = 112
+DEMO_BALANCE_SATELLITE_BUBBLE_SIZE = 84
+DEMO_BALANCE_REVIEW_BUBBLE_SIZE = 90
+DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE = 76
 DEMO_BALANCE_LOCAL_KEYWORD_RENAMES = (
     ("사생활 치매", "사생활 침해"),
     ("사생활치매", "사생활 침해"),
@@ -10302,6 +10306,8 @@ def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
     bubble_id = _safe_text(bubble.get("id"))
     if bubble_id == center_id:
         return "center"
+    if _is_demo_balance_bubble(bubble):
+        return "satellite"
     if bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic":
         return "satellite"
     layout_zone = _normalize_ideation_bubble_layout_zone(bubble.get("layout_zone"))
@@ -10315,7 +10321,26 @@ def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
     return "satellite"
 
 
+def _is_demo_balance_bubble(bubble: dict[str, Any]) -> bool:
+    bubble_id = _safe_text(bubble.get("id"))
+    affinity = _safe_text(bubble.get("choice_affinity")).lower()
+    return bubble_id in _demo_balance_anchor_ids() or affinity in DEMO_BALANCE_AFFINITIES
+
+
 def _ideation_bubble_orbit_size(bubble: dict[str, Any], max_count: int, role: str) -> int:
+    if _is_demo_balance_bubble(bubble):
+        current_size = _safe_nonnegative_int(bubble.get("size"), 0)
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting" and current_size > 0:
+            return current_size
+        bubble_id = _safe_text(bubble.get("id"))
+        if role == "center":
+            if bubble_id == DEMO_BALANCE_ANCHOR_NEUTRAL_ID:
+                return DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE
+            return DEMO_BALANCE_CENTER_BUBBLE_SIZE
+        if bool(bubble.get("needs_affinity_review") or bubble.get("needsAffinityReview")):
+            return DEMO_BALANCE_REVIEW_BUBBLE_SIZE
+        return DEMO_BALANCE_SATELLITE_BUBBLE_SIZE
+
     base = _ideation_bubble_layout_size(bubble, max_count)
     if role == "center":
         if _safe_text(bubble.get("id")) == DEMO_BALANCE_ANCHOR_NEUTRAL_ID:
@@ -11234,6 +11259,17 @@ def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
         not isinstance(bubble.get("x"), (int, float))
         or not isinstance(bubble.get("y"), (int, float))
         or not isinstance(bubble.get("size"), int)
+        or (
+            _is_demo_balance_bubble(bubble)
+            and _normalize_ideation_bubble_state(bubble.get("display_state")) != "exiting"
+            and int(bubble.get("size") or 0)
+            not in {
+                DEMO_BALANCE_CENTER_BUBBLE_SIZE,
+                DEMO_BALANCE_SATELLITE_BUBBLE_SIZE,
+                DEMO_BALANCE_REVIEW_BUBBLE_SIZE,
+                DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE,
+            }
+        )
         or not _safe_text(bubble.get("cluster_id"))
         or not _ideation_bubble_has_number(bubble.get("cluster_x"))
         or not _ideation_bubble_has_number(bubble.get("cluster_y"))

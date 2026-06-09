@@ -26,6 +26,7 @@ type IdeationKeywordBubble = {
   offTopic?: boolean;
   offTopicReason?: string;
   anchorText?: string;
+  choiceAffinity?: "a" | "b" | string;
   activity?: number;
   opacity?: number;
   emphasis?: "primary" | "default";
@@ -98,6 +99,9 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
   const primary = !offTopic && (
     bubble.emphasis === "primary" || (!hasExplicitIdeationBubbleEmphasis(bubble) && bubble.role === "center")
   );
+  const hasChoiceAffinity = bubble.choiceAffinity === "a" || bubble.choiceAffinity === "b";
+  const sideIsB = bubble.choiceAffinity === "b";
+  const demoGeneralBubble = hasChoiceAffinity && !primary && !offTopic;
   const fittedFontSize = getIdeationKeywordBubbleFontSize(bubble.text, size);
   const roleScaledFontSize = primary
     ? Math.round(size * 0.126)
@@ -108,9 +112,11 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
   const borderWidth = Number(clampNumber(size / 94, 0.517, 1.041).toFixed(3));
   const normalShadowY = Number(clampNumber(size * 0.00532, 0.259, 0.521).toFixed(3));
   const satelliteIsMedium = size >= 78;
+  const satelliteIsSmall = size < 92;
+  const demoRingWidth = satelliteIsSmall ? 1.75 : 1.35;
   const satelliteVariantKey = Array.from(bubble.id || bubble.text).reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const satelliteUsesSoftSweep = satelliteIsMedium && (bubble.orbitRing === 1 || satelliteVariantKey % 2 === 0);
-  const backgroundImage = offTopic
+  const legacyBackgroundImage = offTopic
     ? undefined
     : primary
       ? "radial-gradient(ellipse 68% 68% at 84.3% 14.9%, #011aff 0%, #013dff 25%, #015fff 50%, #0181ff 75%, #01a3ff 100%)"
@@ -119,39 +125,111 @@ export function makeIdeationKeywordBubbleNodeLabel(bubble: IdeationKeywordBubble
           ? "linear-gradient(232.095deg, #09caff 0.194%, #e8faff 81.224%)"
           : "linear-gradient(169.603deg, #09caff 7.752%, #b2eaff 49.345%, #fdfeff 95.14%)"
         : "linear-gradient(153.493deg, #f4ffff 16.639%, #bdedff 69.555%, #fdfeff 83.198%)";
+  const blueLayerBackground = primary
+    ? "radial-gradient(ellipse 68% 68% at 84.3% 14.9%, #011aff 0%, #013dff 25%, #015fff 50%, #0181ff 75%, #01a3ff 100%)"
+    : satelliteIsMedium
+      ? satelliteUsesSoftSweep
+        ? "linear-gradient(232.095deg, #d8f3ff 0%, #f7fdff 82%)"
+        : "linear-gradient(169.603deg, #f7fdff 12%, #d8f3ff 76%, #ffffff 96%)"
+      : "linear-gradient(153.493deg, #f7fdff 16%, #d8f3ff 72%, #ffffff 90%)";
+  const coralLayerBackground = primary
+    ? "radial-gradient(ellipse 68% 68% at 84.3% 14.9%, #8f2417 0%, #b8321f 36%, #e2482d 70%, #ff6544 100%)"
+    : satelliteIsMedium
+      ? satelliteUsesSoftSweep
+        ? "linear-gradient(232.095deg, #ffd8c9 0%, #fff8f4 82%)"
+        : "linear-gradient(169.603deg, #fff8f4 12%, #ffd8c9 76%, #fffdfb 96%)"
+      : "linear-gradient(153.493deg, #fff8f4 16%, #ffd8c9 72%, #fffdfb 90%)";
   const bubbleClassName = offTopic
     ? "border-[#ef4e4e]/45 bg-[#fff5f5]"
     : primary
       ? "border-white"
       : "border-white";
+  const textColor = offTopic ? "#a43131" : primary ? "#ffffff" : hasChoiceAffinity ? (sideIsB ? "#6f2418" : "#0b2f66") : "#004fe2";
+  const textHalo = offTopic
+    ? undefined
+    : primary
+      ? hasChoiceAffinity
+        ? sideIsB
+          ? "0 1px 2px rgba(97,25,12,0.34)"
+          : "0 1px 2px rgba(0,42,130,0.3)"
+        : "0 0 3.244px #01a3ff"
+      : hasChoiceAffinity
+        ? sideIsB
+          ? "0 1px 1px rgba(255,248,244,0.78)"
+          : "0 1px 1px rgba(255,255,255,0.78)"
+        : undefined;
   const bubbleStyle: React.CSSProperties = {
-    backgroundImage,
+    backgroundImage: hasChoiceAffinity ? (offTopic ? undefined : "none") : legacyBackgroundImage,
     borderWidth,
+    borderColor: offTopic
+      ? "rgba(239,78,78,0.45)"
+      : primary
+        ? "rgba(255,255,255,0.95)"
+        : hasChoiceAffinity && sideIsB
+          ? "rgba(255,180,157,0.86)"
+          : "rgba(255,255,255,0.92)",
     boxShadow: offTopic
       ? `0 ${normalShadowY}px 6.75px rgba(239,78,78,0.22)`
       : primary
-        ? "0 3.244px 12.016px rgba(1,163,255,0.3), inset 0 3.244px 37.877px rgba(255,255,255,0.22)"
-        : satelliteIsMedium
-          ? "0 0.462px 10.394px rgba(91,173,255,0.18)"
-          : "0 0.361px 8.116px rgba(91,173,255,0.18)",
+        ? sideIsB
+          ? "0 3.244px 12.016px rgba(184,50,31,0.26), inset 0 3.244px 37.877px rgba(255,255,255,0.2)"
+          : "0 3.244px 12.016px rgba(1,163,255,0.3), inset 0 3.244px 37.877px rgba(255,255,255,0.22)"
+        : demoGeneralBubble
+          ? sideIsB
+            ? `0 0 0 ${demoRingWidth}px rgba(255,101,68,${satelliteIsSmall ? 0.42 : 0.34}), 0 1px 8px rgba(255,101,68,0.13), inset 0 1px 8px rgba(255,252,249,0.5)`
+            : `0 0 0 ${demoRingWidth}px rgba(35,108,243,${satelliteIsSmall ? 0.4 : 0.32}), 0 1px 8px rgba(35,108,243,0.13), inset 0 1px 8px rgba(255,255,255,0.52)`
+          : satelliteIsMedium
+            ? hasChoiceAffinity && sideIsB
+              ? "0 0.462px 10.394px rgba(255,101,68,0.16)"
+              : "0 0.462px 10.394px rgba(91,173,255,0.18)"
+            : hasChoiceAffinity && sideIsB
+              ? "0 0.361px 8.116px rgba(255,101,68,0.15)"
+              : "0 0.361px 8.116px rgba(91,173,255,0.18)",
+    transition: "border-color 560ms ease, box-shadow 560ms ease, filter 560ms ease",
   };
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center rounded-full border px-4 text-center font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] ${bubbleClassName}`}
+      className={`relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-full border px-4 text-center font-['Pretendard','Inter','Noto_Sans_KR',sans-serif] ${bubbleClassName}`}
       style={bubbleStyle}
     >
+      {hasChoiceAffinity && !offTopic ? (
+        <>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-full transition-opacity duration-[560ms] ease-out"
+            style={{ backgroundImage: blueLayerBackground, opacity: sideIsB ? 0 : 1 }}
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-full transition-opacity duration-[560ms] ease-out"
+            style={{ backgroundImage: coralLayerBackground, opacity: sideIsB ? 1 : 0 }}
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-[1px] rounded-full shadow-[inset_0_2px_14px_rgba(255,255,255,0.32)]"
+          />
+          {demoGeneralBubble ? (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-[3px] rounded-full border border-white/30"
+            />
+          ) : null}
+        </>
+      ) : null}
       {offTopic && size >= 92 ? (
-        <span className="mb-1 rounded-full bg-[#ef4e4e]/10 px-2 py-0.5 text-[10px] font-semibold leading-none text-[#b23b3b]">
+        <span className="relative z-[1] mb-1 rounded-full bg-[#ef4e4e]/10 px-2 py-0.5 text-[10px] font-semibold leading-none text-[#b23b3b]">
           이탈
         </span>
       ) : null}
       <strong
-        className={`max-w-full whitespace-nowrap antialiased ${primary ? "font-bold" : "font-medium"} ${offTopic ? "text-[#a43131]" : primary ? "text-white" : "text-[#004fe2]"}`}
+        className={`relative z-[1] max-w-full whitespace-nowrap antialiased ${primary ? "font-bold" : hasChoiceAffinity ? "font-semibold" : "font-medium"}`}
         style={{
+          color: textColor,
           fontSize,
           lineHeight: 1.4,
           maxWidth: Math.max(44, Math.round(size * 0.82)),
-          textShadow: primary ? "0 0 3.244px #01a3ff" : undefined,
+          textShadow: textHalo,
+          transition: "color 560ms ease, text-shadow 560ms ease",
           textRendering: "geometricPrecision",
           wordBreak: "keep-all",
         }}
