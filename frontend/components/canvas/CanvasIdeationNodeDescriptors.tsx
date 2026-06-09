@@ -1,5 +1,5 @@
 import { Position } from "@xyflow/react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { makeIdeationKeywordBubbleNodeLabel } from "@/components/canvas/CanvasNodeLabels";
 import {
   CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT,
@@ -17,9 +17,56 @@ import {
 const IDEATION_ORBIT_GUIDE_TRANSITION = "transform 2800ms cubic-bezier(0.22, 1, 0.36, 1), opacity 720ms ease";
 const IDEATION_BUBBLE_ARC_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const IDEATION_DEMO_ORBIT_LAYER_ID = "ideation-demo-orbit-layer";
-const IDEATION_DEMO_ORBIT_MOTION_MS = 3200;
-const IDEATION_DEMO_ORBIT_ENTER_MS = 840;
-const IDEATION_DEMO_ORBIT_EXIT_MS = 920;
+const IDEATION_DEMO_ORBIT_ARC_MS = 1900;
+const IDEATION_DEMO_ORBIT_RADIAL_MS = 1400;
+const IDEATION_DEMO_ORBIT_TRANSFER_MS = 1800;
+const IDEATION_DEMO_ORBIT_ENTER_MS = 820;
+const IDEATION_DEMO_ORBIT_EXIT_MS = 620;
+const IDEATION_DEMO_ORBIT_GHOST_MS = 840;
+
+type DemoOrbitMotionPhase = "ghost-exit" | "delayed-enter" | "moving" | "settling" | "idle";
+type DemoOrbitMotionType = "enter" | "arc" | "radial" | "orbit-transfer" | "exit" | "static";
+type DemoOrbitVisualPhase = "ghost-exit" | "delayed-enter" | "moving" | "idle";
+
+type DemoOrbitVisualBubble = IdeationKeywordBubbleVisual & {
+  demoVisualPhase?: DemoOrbitVisualPhase;
+  demoRemovedAt?: number;
+};
+
+type DemoOrbitPreparedMotion = {
+  id: string;
+  bubble: DemoOrbitVisualBubble;
+  motionType: DemoOrbitMotionType;
+  phase: DemoOrbitMotionPhase;
+  retargeted: boolean;
+  fromAngle?: number;
+  toAngle?: number;
+};
+
+type DemoOrbitMotionRecord = {
+  id: string;
+  bubble: DemoOrbitVisualBubble;
+  currentX: number;
+  currentY: number;
+  targetX: number;
+  targetY: number;
+  currentScale: number;
+  targetScale: number;
+  currentOpacity: number;
+  targetOpacity: number;
+  motionType: DemoOrbitMotionType;
+  phase: DemoOrbitVisualPhase;
+  orbitCenterId?: string;
+  orbitRing?: number;
+  orbitSlotIndex?: number;
+  orbitCenterX?: number;
+  orbitCenterY?: number;
+  currentAngle?: number;
+  targetAngle?: number;
+  currentRadius?: number;
+  targetRadius?: number;
+  removedAt?: number;
+};
 
 function uniqueOrbitRadii(values: number[]) {
   return [...new Set(
@@ -167,99 +214,429 @@ function demoBubbleTopLeftToCenter(bubble: Pick<IdeationKeywordBubbleVisual, "ta
   };
 }
 
-function demoBubbleTransformFromDelta(dx: number, dy: number, scale = 1) {
-  return `translate(${Math.round(dx * 100) / 100}px, ${Math.round(dy * 100) / 100}px) scale(${scale})`;
+function demoOrbitNow() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
 function demoBubbleOpacityForState(bubble: IdeationKeywordBubbleVisual) {
   return bubble.displayState === "exiting" ? 0 : bubble.opacity ?? 1;
 }
 
-function buildDemoBubbleArcKeyframes(previous: IdeationKeywordBubbleVisual, next: IdeationKeywordBubbleVisual) {
-  const previousAngle = Number(previous.orbitAngle);
-  const nextAngle = Number(next.orbitAngle);
-  const previousRadius = Number(previous.orbitRadius);
-  const nextRadius = Number(next.orbitRadius);
-  if (
-    !Number.isFinite(previousAngle)
-    || !Number.isFinite(nextAngle)
-    || !Number.isFinite(previousRadius)
-    || !Number.isFinite(nextRadius)
-    || previousRadius <= 0
-    || nextRadius <= 0
-  ) {
-    return null;
-  }
+function demoOrbitMotionDuration(motionType: DemoOrbitMotionType) {
+  if (motionType === "enter") return IDEATION_DEMO_ORBIT_ENTER_MS;
+  if (motionType === "exit") return IDEATION_DEMO_ORBIT_EXIT_MS;
+  if (motionType === "arc") return IDEATION_DEMO_ORBIT_ARC_MS;
+  if (motionType === "radial") return IDEATION_DEMO_ORBIT_RADIAL_MS;
+  if (motionType === "orbit-transfer") return IDEATION_DEMO_ORBIT_TRANSFER_MS;
+  return 0;
+}
 
-  const nextCenter = demoBubbleTopLeftToCenter(next);
-  const orbitCenter = {
-    x: nextCenter.x - Math.cos(nextAngle) * nextRadius,
-    y: nextCenter.y - Math.sin(nextAngle) * nextRadius,
-  };
-  const delta = shortestDemoOrbitAngleDelta(previousAngle, nextAngle);
-  const keyframeOffsets = [0, 0.24, 0.5, 0.76, 1];
-  return keyframeOffsets.map((offset) => {
-    const angle = previousAngle + delta * offset;
-    const radius = previousRadius + (nextRadius - previousRadius) * offset;
-    const center = {
-      x: orbitCenter.x + Math.cos(angle) * radius,
-      y: orbitCenter.y + Math.sin(angle) * radius,
-    };
-    return {
-      transform: demoBubbleTransformFromDelta(center.x - nextCenter.x, center.y - nextCenter.y),
-      opacity: demoBubbleOpacityForState(next),
-      offset,
-    };
+function demoOrbitMotionPhase(motionType: DemoOrbitMotionType): DemoOrbitMotionPhase {
+  if (motionType === "enter") return "delayed-enter";
+  if (motionType === "exit") return "ghost-exit";
+  if (motionType === "static") return "idle";
+  return "moving";
+}
+
+function logDemoOrbitMotionBatch(
+  lastDebugAtRef: MutableRefObject<number>,
+  batchId: number,
+  graphVersion: number,
+  motions: DemoOrbitPreparedMotion[],
+) {
+  if (process.env.NODE_ENV === "production") return;
+  const now = Date.now();
+  if (now - lastDebugAtRef.current < 900) return;
+  lastDebugAtRef.current = now;
+  const sampled = motions.slice(0, 12).map((motion) => ({
+    bubble_id: motion.id,
+    motion_type: motion.motionType,
+    phase: motion.phase,
+    from_angle: motion.fromAngle,
+    to_angle: motion.toAngle,
+    ring: motion.bubble.orbitRing,
+    slot: motion.bubble.orbitSlotIndex,
+    retargeted: motion.retargeted,
+  }));
+  console.debug("[Bubble][DemoOrbitMotion]", {
+    motion_batch_id: batchId,
+    graph_version: graphVersion,
+    motion_count: motions.length,
+    ghost_count: motions.filter((motion) => motion.phase === "ghost-exit").length,
+    entering_count: motions.filter((motion) => motion.phase === "delayed-enter").length,
+    retargeted_count: motions.filter((motion) => motion.retargeted).length,
+    motions: sampled,
   });
 }
 
-function buildDemoBubbleTransferKeyframes(previous: IdeationKeywordBubbleVisual, next: IdeationKeywordBubbleVisual) {
-  const previousCenter = demoBubbleTopLeftToCenter(previous);
-  const nextCenter = demoBubbleTopLeftToCenter(next);
-  const fromX = previousCenter.x - nextCenter.x;
-  const fromY = previousCenter.y - nextCenter.y;
-  const curveX = fromX * 0.54;
-  const curveY = fromY * 0.54 - Math.min(96, Math.hypot(fromX, fromY) * 0.16);
-  return [
-    { transform: demoBubbleTransformFromDelta(fromX, fromY), opacity: previous.opacity ?? 1, offset: 0 },
-    { transform: demoBubbleTransformFromDelta(curveX, curveY), opacity: 1, offset: 0.52 },
-    { transform: demoBubbleTransformFromDelta(0, 0), opacity: demoBubbleOpacityForState(next), offset: 1 },
-  ];
+function demoOrbitFiniteNumber(value: unknown, fallback: number) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function buildDemoBubbleMotionKeyframes(previous: IdeationKeywordBubbleVisual | undefined, next: IdeationKeywordBubbleVisual) {
-  if (!previous) {
-    return [
-      { transform: demoBubbleTransformFromDelta(0, 0, 0.65), opacity: 0, offset: 0 },
-      { transform: demoBubbleTransformFromDelta(0, 0, 1.08), opacity: demoBubbleOpacityForState(next), offset: 0.72 },
-      { transform: demoBubbleTransformFromDelta(0, 0, 1), opacity: demoBubbleOpacityForState(next), offset: 1 },
-    ];
-  }
-
-  if (next.displayState === "exiting") {
-    return [
-      { transform: demoBubbleTransformFromDelta(0, 0, 1), opacity: previous.opacity ?? 1, offset: 0 },
-      { transform: demoBubbleTransformFromDelta(0, 0, 0.86), opacity: 0, offset: 1 },
-    ];
-  }
-
-  const sameOrbit = previous.orbitCenterId && previous.orbitCenterId === next.orbitCenterId;
-  const sameRing = Number(previous.orbitRing ?? -1) === Number(next.orbitRing ?? -2);
-  if (sameOrbit && sameRing && Number(next.orbitRing ?? 0) > 0) {
-    const arcKeyframes = buildDemoBubbleArcKeyframes(previous, next);
-    if (arcKeyframes) return arcKeyframes;
-  }
-
-  return buildDemoBubbleTransferKeyframes(previous, next);
+function demoOrbitRecordTransform(record: DemoOrbitMotionRecord) {
+  return `translate3d(${Math.round(record.currentX * 100) / 100}px, ${Math.round(record.currentY * 100) / 100}px, 0) scale(${Math.round(record.currentScale * 1000) / 1000})`;
 }
 
-function demoBubbleMotionType(previous: IdeationKeywordBubbleVisual | undefined, next: IdeationKeywordBubbleVisual) {
-  if (!previous) return "enter";
+function applyDemoOrbitRecordStyle(element: HTMLElement, record: DemoOrbitMotionRecord) {
+  element.style.transform = demoOrbitRecordTransform(record);
+  element.style.opacity = String(Math.max(0, Math.min(1, record.currentOpacity)));
+}
+
+function demoOrbitCenterForTarget(bubble: IdeationKeywordBubbleVisual) {
+  const angle = Number(bubble.orbitAngle);
+  const radius = Number(bubble.orbitRadius);
+  if (!Number.isFinite(angle) || !Number.isFinite(radius) || radius <= 0) return null;
+  const center = demoBubbleTopLeftToCenter(bubble);
+  return {
+    x: center.x - Math.cos(angle) * radius,
+    y: center.y - Math.sin(angle) * radius,
+    angle,
+    radius,
+  };
+}
+
+function syncDemoOrbitRecordPolar(record: DemoOrbitMotionRecord, bubble: IdeationKeywordBubbleVisual) {
+  const orbit = demoOrbitCenterForTarget(bubble);
+  if (!orbit) {
+    record.orbitCenterX = undefined;
+    record.orbitCenterY = undefined;
+    record.currentAngle = undefined;
+    record.targetAngle = undefined;
+    record.currentRadius = undefined;
+    record.targetRadius = undefined;
+    return false;
+  }
+
+  const currentCenterX = record.currentX + bubble.size / 2;
+  const currentCenterY = record.currentY + bubble.size / 2;
+  record.orbitCenterX = orbit.x;
+  record.orbitCenterY = orbit.y;
+  record.currentAngle = Math.atan2(currentCenterY - orbit.y, currentCenterX - orbit.x);
+  record.currentRadius = Math.hypot(currentCenterX - orbit.x, currentCenterY - orbit.y);
+  record.targetAngle = orbit.angle;
+  record.targetRadius = orbit.radius;
+  return true;
+}
+
+function makeDemoOrbitMotionRecord(bubble: IdeationKeywordBubbleVisual): DemoOrbitMotionRecord {
+  const targetOpacity = demoBubbleOpacityForState(bubble);
+  const record: DemoOrbitMotionRecord = {
+    id: bubble.id,
+    bubble: { ...bubble, demoVisualPhase: "delayed-enter" },
+    currentX: bubble.targetX,
+    currentY: bubble.targetY,
+    targetX: bubble.targetX,
+    targetY: bubble.targetY,
+    currentScale: 0.72,
+    targetScale: 1,
+    currentOpacity: 0,
+    targetOpacity,
+    motionType: "enter",
+    phase: "delayed-enter",
+    orbitCenterId: bubble.orbitCenterId,
+    orbitRing: demoOrbitFiniteNumber(bubble.orbitRing, 0),
+    orbitSlotIndex: demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0),
+  };
+  syncDemoOrbitRecordPolar(record, bubble);
+  return record;
+}
+
+function demoOrbitMotionTypeForTarget(
+  record: DemoOrbitMotionRecord,
+  next: IdeationKeywordBubbleVisual,
+): DemoOrbitMotionType {
   if (next.displayState === "exiting") return "exit";
-  const sameOrbit = previous.orbitCenterId && previous.orbitCenterId === next.orbitCenterId;
-  if (sameOrbit && Number(previous.orbitRing ?? -1) === Number(next.orbitRing ?? -2)) return "arc";
+  const distance = Math.hypot(record.currentX - next.targetX, record.currentY - next.targetY);
+  const opacityDelta = Math.abs(record.currentOpacity - demoBubbleOpacityForState(next));
+  const sizeDelta = Math.abs(record.bubble.size - next.size);
+  if (distance < 0.5 && opacityDelta < 0.01 && sizeDelta < 0.5) return "static";
+  const nextOrbitCenterId = next.orbitCenterId || "";
+  const previousOrbitCenterId = record.orbitCenterId || "";
+  const sameOrbit = previousOrbitCenterId && previousOrbitCenterId === nextOrbitCenterId;
+  if (sameOrbit && Number(record.orbitRing ?? -1) === Number(next.orbitRing ?? -2)) return "arc";
   if (sameOrbit) return "radial";
   return "orbit-transfer";
+}
+
+function retargetDemoOrbitRecord(record: DemoOrbitMotionRecord, bubble: IdeationKeywordBubbleVisual) {
+  const motionType = demoOrbitMotionTypeForTarget(record, bubble);
+  const targetOpacity = demoBubbleOpacityForState(bubble);
+  record.targetX = bubble.targetX;
+  record.targetY = bubble.targetY;
+  record.targetScale = 1;
+  record.targetOpacity = targetOpacity;
+  record.motionType = motionType;
+  record.phase = motionType === "static" ? "idle" : "moving";
+  record.removedAt = undefined;
+  record.orbitCenterId = bubble.orbitCenterId;
+  record.orbitRing = demoOrbitFiniteNumber(bubble.orbitRing, 0);
+  record.orbitSlotIndex = demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0);
+  record.bubble = { ...bubble, demoVisualPhase: record.phase };
+
+  if (motionType === "arc" || motionType === "radial") {
+    syncDemoOrbitRecordPolar(record, bubble);
+  } else {
+    record.orbitCenterX = undefined;
+    record.orbitCenterY = undefined;
+    record.currentAngle = undefined;
+    record.targetAngle = undefined;
+    record.currentRadius = undefined;
+    record.targetRadius = undefined;
+  }
+}
+
+function markDemoOrbitRecordExiting(record: DemoOrbitMotionRecord, now: number) {
+  if (record.phase === "ghost-exit") return;
+  record.phase = "ghost-exit";
+  record.motionType = "exit";
+  record.removedAt = now;
+  record.targetX = record.currentX;
+  record.targetY = record.currentY;
+  record.targetScale = 0.82;
+  record.targetOpacity = 0;
+  record.bubble = {
+    ...record.bubble,
+    displayState: "exiting",
+    opacity: Math.max(record.currentOpacity, record.bubble.opacity ?? 1),
+    demoVisualPhase: "ghost-exit",
+    demoRemovedAt: now,
+  };
+}
+
+function demoOrbitFrameAlpha(deltaMs: number, durationMs: number) {
+  const tau = Math.max(48, durationMs / 3.2);
+  return 1 - Math.exp(-Math.max(0, deltaMs) / tau);
+}
+
+function demoOrbitDistanceToTarget(record: DemoOrbitMotionRecord) {
+  return Math.hypot(record.currentX - record.targetX, record.currentY - record.targetY);
+}
+
+function stepDemoOrbitRecord(record: DemoOrbitMotionRecord, deltaMs: number) {
+  const moveAlpha = demoOrbitFrameAlpha(deltaMs, demoOrbitMotionDuration(record.motionType) || IDEATION_DEMO_ORBIT_ARC_MS);
+  if (
+    (record.motionType === "arc" || record.motionType === "radial")
+    && Number.isFinite(record.orbitCenterX)
+    && Number.isFinite(record.orbitCenterY)
+    && Number.isFinite(record.currentAngle)
+    && Number.isFinite(record.targetAngle)
+    && Number.isFinite(record.currentRadius)
+    && Number.isFinite(record.targetRadius)
+  ) {
+    const centerX = record.orbitCenterX ?? 0;
+    const centerY = record.orbitCenterY ?? 0;
+    const angleDelta = shortestDemoOrbitAngleDelta(record.currentAngle ?? 0, record.targetAngle ?? 0);
+    record.currentAngle = (record.currentAngle ?? 0) + angleDelta * moveAlpha;
+    record.currentRadius = (record.currentRadius ?? 0) + ((record.targetRadius ?? 0) - (record.currentRadius ?? 0)) * moveAlpha;
+    record.currentX = centerX + Math.cos(record.currentAngle) * record.currentRadius - record.bubble.size / 2;
+    record.currentY = centerY + Math.sin(record.currentAngle) * record.currentRadius - record.bubble.size / 2;
+  } else {
+    record.currentX += (record.targetX - record.currentX) * moveAlpha;
+    record.currentY += (record.targetY - record.currentY) * moveAlpha;
+  }
+
+  const scaleAlpha = demoOrbitFrameAlpha(deltaMs, record.motionType === "enter" ? IDEATION_DEMO_ORBIT_ENTER_MS : 520);
+  const opacityAlpha = demoOrbitFrameAlpha(deltaMs, record.motionType === "exit" ? IDEATION_DEMO_ORBIT_EXIT_MS : 360);
+  record.currentScale += (record.targetScale - record.currentScale) * scaleAlpha;
+  record.currentOpacity += (record.targetOpacity - record.currentOpacity) * opacityAlpha;
+
+  const closeEnough = demoOrbitDistanceToTarget(record) < 0.35
+    && Math.abs(record.currentScale - record.targetScale) < 0.006
+    && Math.abs(record.currentOpacity - record.targetOpacity) < 0.01;
+  if (closeEnough) {
+    record.currentX = record.targetX;
+    record.currentY = record.targetY;
+    record.currentScale = record.targetScale;
+    record.currentOpacity = record.targetOpacity;
+    if (record.phase !== "ghost-exit") {
+      record.phase = "idle";
+      record.motionType = "static";
+      record.bubble = { ...record.bubble, demoVisualPhase: "idle" };
+    }
+  }
+
+  return !closeEnough || record.phase === "ghost-exit";
+}
+
+function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion: number) {
+  const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
+  const previousGraphByIdRef = useRef(new Map<string, IdeationKeywordBubbleVisual>());
+  const recordsRef = useRef(new Map<string, DemoOrbitMotionRecord>());
+  const visualBubblesRef = useRef<DemoOrbitVisualBubble[]>(
+    bubbles.map((bubble) => ({ ...bubble, demoVisualPhase: "delayed-enter" })),
+  );
+  const frameRef = useRef<number | null>(null);
+  const lastFrameAtRef = useRef<number | null>(null);
+  const batchIdRef = useRef(0);
+  const lastDebugAtRef = useRef(0);
+  const [visualBubbles, setVisualBubbles] = useState<DemoOrbitVisualBubble[]>(() => visualBubblesRef.current);
+
+  if (recordsRef.current.size === 0 && bubbles.length > 0) {
+    const records = new Map<string, DemoOrbitMotionRecord>();
+    bubbles.forEach((bubble) => {
+      const record = makeDemoOrbitMotionRecord(bubble);
+      record.currentScale = 1;
+      record.currentOpacity = demoBubbleOpacityForState(bubble);
+      record.phase = "idle";
+      record.motionType = "static";
+      record.bubble = { ...bubble, demoVisualPhase: "idle" };
+      records.set(bubble.id, record);
+    });
+    recordsRef.current = records;
+    visualBubblesRef.current = [...records.values()].map((record) => record.bubble);
+  }
+
+  const inputSignature = bubbles
+    .map((bubble) => [
+      bubble.id,
+      bubble.text,
+      bubble.count,
+      bubble.activity,
+      bubble.emphasis,
+      bubble.targetX,
+      bubble.targetY,
+      bubble.size,
+      bubble.orbitCenterId,
+      bubble.orbitRing,
+      bubble.orbitAngle,
+      bubble.orbitRadius,
+      bubble.orbitSlotIndex,
+      bubble.displayState,
+      bubble.opacity,
+    ].join(":"))
+    .join("|");
+
+  const syncVisualBubblesFromRecords = useCallback(() => {
+    const nextVisualBubbles = [...recordsRef.current.values()].map((record) => record.bubble);
+    visualBubblesRef.current = nextVisualBubbles;
+    setVisualBubbles(nextVisualBubbles);
+  }, []);
+
+  const scheduleFrame = useCallback(() => {
+    if (frameRef.current !== null || typeof window === "undefined") return;
+    frameRef.current = window.requestAnimationFrame((frameTime) => {
+      frameRef.current = null;
+      const previousFrameAt = lastFrameAtRef.current ?? frameTime;
+      const deltaMs = Math.min(64, Math.max(8, frameTime - previousFrameAt));
+      lastFrameAtRef.current = frameTime;
+      const records = recordsRef.current;
+      const reduced = prefersReducedDemoOrbitMotion();
+      let hasActiveMotion = false;
+      let removedGhost = false;
+
+      records.forEach((record, id) => {
+        const element = bubbleRefs.current.get(id);
+        if (record.phase === "ghost-exit" && record.removedAt != null && frameTime - record.removedAt >= IDEATION_DEMO_ORBIT_GHOST_MS) {
+          records.delete(id);
+          removedGhost = true;
+          return;
+        }
+
+        if (reduced) {
+          record.currentX = record.targetX;
+          record.currentY = record.targetY;
+          record.currentScale = record.targetScale;
+          record.currentOpacity = record.targetOpacity;
+          if (record.phase !== "ghost-exit") {
+            record.phase = "idle";
+            record.motionType = "static";
+          }
+        } else if (stepDemoOrbitRecord(record, deltaMs)) {
+          hasActiveMotion = true;
+        }
+
+        if (element) {
+          applyDemoOrbitRecordStyle(element, record);
+          element.dataset.motionType = record.motionType;
+          element.dataset.motionPhase = record.phase;
+        }
+
+        if (record.phase === "ghost-exit") {
+          hasActiveMotion = true;
+        }
+      });
+
+      if (removedGhost) {
+        syncVisualBubblesFromRecords();
+      }
+
+      if (hasActiveMotion) {
+        scheduleFrame();
+      } else {
+        lastFrameAtRef.current = null;
+      }
+    });
+  }, [syncVisualBubblesFromRecords]);
+
+  useLayoutEffect(() => {
+    const now = demoOrbitNow();
+    const records = recordsRef.current;
+    const previousGraphById = previousGraphByIdRef.current;
+    const nextGraphById = new Map(bubbles.map((bubble) => [bubble.id, bubble] as const));
+
+    bubbles.forEach((bubble) => {
+      const record = records.get(bubble.id);
+      if (record) {
+        retargetDemoOrbitRecord(record, bubble);
+      } else {
+        records.set(bubble.id, makeDemoOrbitMotionRecord(bubble));
+      }
+    });
+
+    previousGraphById.forEach((_, id) => {
+      if (nextGraphById.has(id)) return;
+      const record = records.get(id);
+      if (record) {
+        markDemoOrbitRecordExiting(record, now);
+      }
+    });
+
+    previousGraphByIdRef.current = nextGraphById;
+    const batchId = batchIdRef.current + 1;
+    batchIdRef.current = batchId;
+    const debugMotions: DemoOrbitPreparedMotion[] = [...records.values()].map((record) => ({
+      id: record.id,
+      bubble: record.bubble,
+      motionType: record.motionType,
+      phase: demoOrbitMotionPhase(record.motionType),
+      keyframes: [],
+      duration: demoOrbitMotionDuration(record.motionType),
+      delay: 0,
+      retargeted: record.phase === "moving",
+      fromAngle: record.currentAngle,
+      toAngle: record.targetAngle,
+      staggerMs: 0,
+    }));
+    logDemoOrbitMotionBatch(lastDebugAtRef, batchId, graphVersion, debugMotions);
+
+    syncVisualBubblesFromRecords();
+    scheduleFrame();
+  }, [graphVersion, inputSignature, scheduleFrame, syncVisualBubblesFromRecords]);
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  const setBubbleRef = useCallback((id: string) => (element: HTMLDivElement | null) => {
+    if (element) {
+      bubbleRefs.current.set(id, element);
+      const record = recordsRef.current.get(id);
+      if (record) {
+        applyDemoOrbitRecordStyle(element, record);
+        element.dataset.motionType = record.motionType;
+        element.dataset.motionPhase = record.phase;
+      }
+      scheduleFrame();
+    } else {
+      bubbleRefs.current.delete(id);
+    }
+  }, [scheduleFrame]);
+
+  return { setBubbleRef, visualBubbles };
 }
 
 function IdeationBubbleAnimatedLabel({
@@ -322,85 +699,12 @@ function IdeationBubbleAnimatedLabel({
 
 function IdeationDemoOrbitLayer({
   bubbles,
+  layoutRevision,
 }: {
   bubbles: IdeationKeywordBubbleVisual[];
+  layoutRevision: number;
 }) {
-  const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
-  const previousByIdRef = useRef(new Map<string, IdeationKeywordBubbleVisual>());
-  const signature = bubbles
-    .map((bubble) => [
-      bubble.id,
-      bubble.targetX,
-      bubble.targetY,
-      bubble.size,
-      bubble.orbitCenterId,
-      bubble.orbitRing,
-      bubble.orbitAngle,
-      bubble.orbitRadius,
-      bubble.orbitSlotIndex,
-      bubble.displayState,
-    ].join(":"))
-    .join("|");
-
-  useLayoutEffect(() => {
-    const previousById = previousByIdRef.current;
-    const nextById = new Map(bubbles.map((bubble) => [bubble.id, bubble] as const));
-    const reduced = prefersReducedDemoOrbitMotion();
-
-    bubbles.forEach((bubble) => {
-      const element = bubbleRefs.current.get(bubble.id);
-      if (!element) return;
-      element.getAnimations().forEach((animation) => animation.cancel());
-      const previous = previousById.get(bubble.id);
-      const motionType = demoBubbleMotionType(previous, bubble);
-      element.dataset.motionType = motionType;
-
-      if (reduced || typeof element.animate !== "function") {
-        element.style.opacity = String(demoBubbleOpacityForState(bubble));
-        element.style.transform = "translate(0px, 0px) scale(1)";
-        return;
-      }
-
-      const keyframes = buildDemoBubbleMotionKeyframes(previous, bubble);
-      const duration = motionType === "enter"
-        ? IDEATION_DEMO_ORBIT_ENTER_MS
-        : motionType === "exit"
-          ? IDEATION_DEMO_ORBIT_EXIT_MS
-          : IDEATION_DEMO_ORBIT_MOTION_MS;
-      element.animate(keyframes, {
-        duration,
-        easing: IDEATION_BUBBLE_ARC_EASING,
-        fill: "both",
-      });
-    });
-
-    previousById.forEach((previous, id) => {
-      if (nextById.has(id)) return;
-      const element = bubbleRefs.current.get(id);
-      if (!element || reduced || typeof element.animate !== "function") return;
-      element.animate(
-        [
-          { transform: "translate(0px, 0px) scale(1)", opacity: previous.opacity ?? 1 },
-          { transform: "translate(0px, 0px) scale(0.82)", opacity: 0 },
-        ],
-        {
-          duration: IDEATION_DEMO_ORBIT_EXIT_MS,
-          easing: IDEATION_BUBBLE_ARC_EASING,
-          fill: "both",
-        },
-      );
-    });
-
-    previousByIdRef.current = nextById;
-  }, [bubbles, signature]);
-
-  const setBubbleRef = (id: string) => (element: HTMLDivElement | null) => {
-    if (element) {
-      bubbleRefs.current.set(id, element);
-    } else {
-      bubbleRefs.current.delete(id);
-    }
-  };
+  const { setBubbleRef, visualBubbles } = useDemoOrbitMotion(bubbles, layoutRevision);
 
   const guideGroups = [...new Map(
     bubbles
@@ -432,25 +736,26 @@ function IdeationDemoOrbitLayer({
           />
         ));
       })}
-      {bubbles.map((bubble) => (
+      {visualBubbles.map((bubble) => (
         <div
           key={bubble.id}
           ref={setBubbleRef(bubble.id)}
           className="absolute origin-center will-change-transform"
           style={{
-            left: bubble.targetX,
-            top: bubble.targetY,
+            left: 0,
+            top: 0,
             width: bubble.size,
             height: bubble.size,
-            opacity: demoBubbleOpacityForState(bubble),
-            transform: "translate(0px, 0px) scale(1)",
             zIndex: bubble.role === "center" || bubble.emphasis === "primary" ? 20 : bubble.role === "dot" ? 6 : 12,
           }}
           data-bubble-id={bubble.id}
           data-orbit-ring={bubble.orbitRing ?? ""}
           data-orbit-slot={bubble.orbitSlotIndex ?? ""}
+          data-visual-phase={bubble.demoVisualPhase ?? ""}
         >
-          {makeIdeationKeywordBubbleNodeLabel(bubble, bubble.size)}
+          <div className="h-full w-full">
+            {makeIdeationKeywordBubbleNodeLabel(bubble, bubble.size)}
+          </div>
         </div>
       ))}
     </div>
@@ -531,7 +836,7 @@ export function buildIdeationKeywordBubbleBlueprint(input: {
                 bubble.emphasis,
               ]),
             ]),
-            label: <IdeationDemoOrbitLayer bubbles={bubbles} />,
+            label: <IdeationDemoOrbitLayer bubbles={bubbles} layoutRevision={layoutRevision} />,
           },
         },
       ],

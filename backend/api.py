@@ -9627,6 +9627,17 @@ def _demo_balance_orbit_ring_slot_count(ring: int, total: int) -> int:
     return min(_demo_balance_orbit_ring_capacity_limit(ring), total - start_index)
 
 
+def _demo_balance_revolver_insert_angle() -> float:
+    # Screen coordinates use positive Y downward; -135deg is visually near 10 o'clock.
+    return -math.pi * 3 / 4
+
+
+def _demo_balance_revolver_slot_angle(slot_index: int, slot_count: int) -> float:
+    safe_slot_count = max(1, slot_count)
+    # Decreasing mathematical angle rotates visually counterclockwise in screen coordinates.
+    return _demo_balance_revolver_insert_angle() - slot_index * (math.pi * 2 / safe_slot_count)
+
+
 def _relax_ideation_bubble_orbit_placements(
     placements: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
@@ -9720,7 +9731,7 @@ def _place_ideation_bubble_orbit_cluster(
             cluster,
             key=lambda bubble: (
                 0 if _safe_text(bubble.get("id")) == center_id else 1,
-                _safe_float(bubble.get("orbit_order_key"), 0.0),
+                -_safe_float(bubble.get("orbit_order_key"), 0.0),
                 _safe_text(bubble.get("id")),
             ),
         )
@@ -9763,7 +9774,7 @@ def _place_ideation_bubble_orbit_cluster(
         ring_index = 1
         while _demo_balance_orbit_ring_start_index(ring_index) < len(satellite_sizes):
             ring_start_index = _demo_balance_orbit_ring_start_index(ring_index)
-            ring_slot_count = _demo_balance_orbit_ring_slot_count(ring_index, len(satellite_sizes))
+            ring_slot_count = _demo_balance_orbit_ring_capacity_limit(ring_index)
             ring_sizes = satellite_sizes[ring_start_index:ring_start_index + ring_slot_count]
             max_ring_size = max(ring_sizes or [64])
             previous_radius = demo_rings[-1] if demo_rings else 0.0
@@ -9810,7 +9821,7 @@ def _place_ideation_bubble_orbit_cluster(
     slot_count = max(6, len(satellites) + 2)
     golden_angle = math.pi * (3 - math.sqrt(5))
     if is_demo_cluster:
-        base_angle = -math.pi / 2
+        base_angle = _demo_balance_revolver_insert_angle()
     else:
         base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
     for index, bubble in enumerate(satellites):
@@ -9824,9 +9835,8 @@ def _place_ideation_bubble_orbit_cluster(
         if is_demo_cluster:
             ring_start_index = _demo_balance_orbit_ring_start_index(preferred_ring_index)
             ring_slot_index = max(0, index - ring_start_index)
-            ring_slot_count = max(1, _demo_balance_orbit_ring_slot_count(preferred_ring_index, len(satellites)))
-            ring_angle_step = math.pi * 2 / max(1, ring_slot_count)
-            angle = base_angle + ring_slot_index * ring_angle_step
+            ring_slot_count = max(1, _demo_balance_orbit_ring_capacity_limit(preferred_ring_index))
+            angle = _demo_balance_revolver_slot_angle(ring_slot_index, ring_slot_count)
             raw_x = center_x + math.cos(angle) * radius - size / 2
             raw_y = center_y + math.sin(angle) * radius - size / 2
             candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
