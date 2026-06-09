@@ -41,6 +41,9 @@ type DemoOrbitPreparedMotion = {
   retargeted: boolean;
   fromAngle?: number;
   toAngle?: number;
+  angleDelta?: number;
+  direction?: "counterclockwise" | "clockwise" | "shortest" | "direct";
+  gateBlocked?: boolean;
 };
 
 type DemoOrbitMotionRecord = {
@@ -59,12 +62,15 @@ type DemoOrbitMotionRecord = {
   orbitCenterId?: string;
   orbitRing?: number;
   orbitSlotIndex?: number;
+  previousOrbitSlotIndex?: number;
+  targetOrbitSlotIndex?: number;
   orbitCenterX?: number;
   orbitCenterY?: number;
   currentAngle?: number;
   targetAngle?: number;
   currentRadius?: number;
   targetRadius?: number;
+  orbitAngleDirection?: "counterclockwise" | "clockwise" | "shortest" | "direct";
   removedAt?: number;
 };
 
@@ -207,6 +213,80 @@ function shortestDemoOrbitAngleDelta(from: number, to: number) {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }
 
+const DEMO_ORBIT_TAU = Math.PI * 2;
+const DEMO_ORBIT_ANGLE_EPSILON = 0.0008;
+
+function unwrapDemoOrbitAngleNear(reference: number | undefined, angle: number) {
+  if (!Number.isFinite(angle)) return 0;
+  if (!Number.isFinite(reference)) return angle;
+  const safeReference = Number(reference);
+  return safeReference + shortestDemoOrbitAngleDelta(safeReference, angle);
+}
+
+function counterclockwiseDemoOrbitAngleDelta(from: number, to: number) {
+  const shortest = shortestDemoOrbitAngleDelta(from, to);
+  if (Math.abs(shortest) < DEMO_ORBIT_ANGLE_EPSILON) return 0;
+  const positiveDelta = ((to - from) % DEMO_ORBIT_TAU + DEMO_ORBIT_TAU) % DEMO_ORBIT_TAU;
+  if (positiveDelta < DEMO_ORBIT_ANGLE_EPSILON || Math.abs(positiveDelta - DEMO_ORBIT_TAU) < DEMO_ORBIT_ANGLE_EPSILON) {
+    return 0;
+  }
+  return positiveDelta - DEMO_ORBIT_TAU;
+}
+
+function clockwiseDemoOrbitAngleDelta(from: number, to: number) {
+  const shortest = shortestDemoOrbitAngleDelta(from, to);
+  if (Math.abs(shortest) < DEMO_ORBIT_ANGLE_EPSILON) return 0;
+  const positiveDelta = ((to - from) % DEMO_ORBIT_TAU + DEMO_ORBIT_TAU) % DEMO_ORBIT_TAU;
+  return positiveDelta;
+}
+
+function demoOrbitAngleDelta(record: DemoOrbitMotionRecord) {
+  const currentAngle = record.currentAngle ?? 0;
+  const targetAngle = record.targetAngle ?? 0;
+  if (record.orbitAngleDirection === "counterclockwise") {
+    return counterclockwiseDemoOrbitAngleDelta(currentAngle, targetAngle);
+  }
+  if (record.orbitAngleDirection === "clockwise") {
+    return clockwiseDemoOrbitAngleDelta(currentAngle, targetAngle);
+  }
+  if (record.orbitAngleDirection === "shortest") {
+    return shortestDemoOrbitAngleDelta(currentAngle, targetAngle);
+  }
+  return 0;
+}
+
+function demoOrbitDirectionForBubble(
+  bubble: IdeationKeywordBubbleVisual,
+  fallback: "counterclockwise" | "shortest" | "direct",
+): DemoOrbitMotionRecord["orbitAngleDirection"] {
+  if (bubble.motionReason === "relayout_transfer") return "direct";
+  if (bubble.motionReason === "relayout") return "shortest";
+  if (bubble.motionDirection === "counterclockwise" || bubble.motionDirection === "clockwise") return "shortest";
+  if (bubble.motionDirection === "nearest" || bubble.motionDirection === "nearest_arc" || bubble.motionDirection === "orbit_radial_arc") return "shortest";
+  if (bubble.motionDirection === "direct") return "direct";
+  if (bubble.motionReason === "insert_push" || bubble.motionReason === "ring_overflow" || bubble.motionReason === "gap_fill") return "shortest";
+  if (bubble.motionReason === "affinity_transfer" || bubble.motionReason === "content_update") return "direct";
+  return fallback;
+}
+
+function sanitizeExistingDemoOrbitMotionBubble(bubble: IdeationKeywordBubbleVisual) {
+  if (bubble.motionReason !== "gate_enter") return bubble;
+  return {
+    ...bubble,
+    motionReason: "content_update",
+    motionDirection: "direct",
+  };
+}
+
+function shouldBlockDemoOrbitGateCrossing(
+  record: DemoOrbitMotionRecord,
+  bubble: IdeationKeywordBubbleVisual,
+) {
+  void record;
+  void bubble;
+  return false;
+}
+
 function demoBubbleTopLeftToCenter(bubble: Pick<IdeationKeywordBubbleVisual, "targetX" | "targetY" | "size">) {
   return {
     x: bubble.targetX + bubble.size / 2,
@@ -254,8 +334,20 @@ function logDemoOrbitMotionBatch(
     phase: motion.phase,
     from_angle: motion.fromAngle,
     to_angle: motion.toAngle,
+    angle_delta: motion.angleDelta,
+    direction: motion.direction,
+    reason: motion.bubble.motionReason,
+    plan: motion.bubble.motionPlanId,
+    from_slot: motion.bubble.fromSlotIndex,
+    to_slot: motion.bubble.toSlotIndex,
+    move_cost: motion.bubble.moveCost,
+    planned_angle_delta: motion.bubble.moveAngleDelta,
+    arc_cost: motion.bubble.arcCost,
+    radius_cost: motion.bubble.radiusCost,
+    gate_blocked: motion.gateBlocked || motion.bubble.gateBlocked,
     ring: motion.bubble.orbitRing,
     slot: motion.bubble.orbitSlotIndex,
+    order: motion.bubble.orbitOrderKey,
     retargeted: motion.retargeted,
   }));
   console.debug("[Bubble][DemoOrbitMotion]", {
@@ -310,11 +402,13 @@ function syncDemoOrbitRecordPolar(record: DemoOrbitMotionRecord, bubble: Ideatio
 
   const currentCenterX = record.currentX + bubble.size / 2;
   const currentCenterY = record.currentY + bubble.size / 2;
+  const rawCurrentAngle = Math.atan2(currentCenterY - orbit.y, currentCenterX - orbit.x);
+  const currentAngle = unwrapDemoOrbitAngleNear(record.currentAngle, rawCurrentAngle);
   record.orbitCenterX = orbit.x;
   record.orbitCenterY = orbit.y;
-  record.currentAngle = Math.atan2(currentCenterY - orbit.y, currentCenterX - orbit.x);
+  record.currentAngle = currentAngle;
   record.currentRadius = Math.hypot(currentCenterX - orbit.x, currentCenterY - orbit.y);
-  record.targetAngle = orbit.angle;
+  record.targetAngle = unwrapDemoOrbitAngleNear(currentAngle, orbit.angle);
   record.targetRadius = orbit.radius;
   return true;
 }
@@ -337,6 +431,9 @@ function makeDemoOrbitMotionRecord(bubble: IdeationKeywordBubbleVisual): DemoOrb
     orbitCenterId: bubble.orbitCenterId,
     orbitRing: demoOrbitFiniteNumber(bubble.orbitRing, 0),
     orbitSlotIndex: demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0),
+    previousOrbitSlotIndex: demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0),
+    targetOrbitSlotIndex: demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0),
+    orbitAngleDirection: demoOrbitDirectionForBubble(bubble, "shortest"),
   };
   syncDemoOrbitRecordPolar(record, bubble);
   return record;
@@ -354,28 +451,51 @@ function demoOrbitMotionTypeForTarget(
   const nextOrbitCenterId = next.orbitCenterId || "";
   const previousOrbitCenterId = record.orbitCenterId || "";
   const sameOrbit = previousOrbitCenterId && previousOrbitCenterId === nextOrbitCenterId;
+  if (next.motionReason === "relayout_transfer") return "orbit-transfer";
+  if (next.motionReason === "relayout" && sameOrbit && Number(record.orbitRing ?? -1) === Number(next.orbitRing ?? -2)) return "arc";
+  if (next.motionReason === "relayout" && sameOrbit) return "radial";
   if (sameOrbit && Number(record.orbitRing ?? -1) === Number(next.orbitRing ?? -2)) return "arc";
   if (sameOrbit) return "radial";
   return "orbit-transfer";
 }
 
 function retargetDemoOrbitRecord(record: DemoOrbitMotionRecord, bubble: IdeationKeywordBubbleVisual) {
-  const motionType = demoOrbitMotionTypeForTarget(record, bubble);
-  const targetOpacity = demoBubbleOpacityForState(bubble);
-  record.targetX = bubble.targetX;
-  record.targetY = bubble.targetY;
+  const motionBubble = sanitizeExistingDemoOrbitMotionBubble(bubble);
+  const gateBlocked = shouldBlockDemoOrbitGateCrossing(record, motionBubble);
+  const effectiveBubble = gateBlocked
+    ? {
+        ...motionBubble,
+        targetX: record.currentX,
+        targetY: record.currentY,
+        motionReason: "content_update",
+        motionDirection: "direct",
+      }
+    : motionBubble;
+  const previousOrbitSlotIndex = demoOrbitFiniteNumber(record.orbitSlotIndex, -1);
+  const nextOrbitRing = demoOrbitFiniteNumber(effectiveBubble.orbitRing, 0);
+  const nextOrbitSlotIndex = demoOrbitFiniteNumber(effectiveBubble.orbitSlotIndex, 0);
+  const motionType = demoOrbitMotionTypeForTarget(record, effectiveBubble);
+  const targetOpacity = demoBubbleOpacityForState(effectiveBubble);
+  record.targetX = effectiveBubble.targetX;
+  record.targetY = effectiveBubble.targetY;
   record.targetScale = 1;
   record.targetOpacity = targetOpacity;
   record.motionType = motionType;
   record.phase = motionType === "static" ? "idle" : "moving";
   record.removedAt = undefined;
-  record.orbitCenterId = bubble.orbitCenterId;
-  record.orbitRing = demoOrbitFiniteNumber(bubble.orbitRing, 0);
-  record.orbitSlotIndex = demoOrbitFiniteNumber(bubble.orbitSlotIndex, 0);
-  record.bubble = { ...bubble, demoVisualPhase: record.phase };
+  record.orbitCenterId = effectiveBubble.orbitCenterId;
+  record.orbitRing = nextOrbitRing;
+  record.orbitSlotIndex = nextOrbitSlotIndex;
+  record.previousOrbitSlotIndex = previousOrbitSlotIndex;
+  record.targetOrbitSlotIndex = nextOrbitSlotIndex;
+  record.bubble = { ...effectiveBubble, demoVisualPhase: record.phase };
 
   if (motionType === "arc" || motionType === "radial") {
-    syncDemoOrbitRecordPolar(record, bubble);
+    syncDemoOrbitRecordPolar(record, effectiveBubble);
+    record.orbitAngleDirection = demoOrbitDirectionForBubble(
+      effectiveBubble,
+      "shortest",
+    );
   } else {
     record.orbitCenterX = undefined;
     record.orbitCenterY = undefined;
@@ -383,6 +503,10 @@ function retargetDemoOrbitRecord(record: DemoOrbitMotionRecord, bubble: Ideation
     record.targetAngle = undefined;
     record.currentRadius = undefined;
     record.targetRadius = undefined;
+    record.orbitAngleDirection = demoOrbitDirectionForBubble(
+      effectiveBubble,
+      motionType === "orbit-transfer" ? "direct" : "shortest",
+    );
   }
 }
 
@@ -417,6 +541,7 @@ function stepDemoOrbitRecord(record: DemoOrbitMotionRecord, deltaMs: number) {
   const moveAlpha = demoOrbitFrameAlpha(deltaMs, demoOrbitMotionDuration(record.motionType) || IDEATION_DEMO_ORBIT_ARC_MS);
   if (
     (record.motionType === "arc" || record.motionType === "radial")
+    && record.orbitAngleDirection !== "direct"
     && Number.isFinite(record.orbitCenterX)
     && Number.isFinite(record.orbitCenterY)
     && Number.isFinite(record.currentAngle)
@@ -426,7 +551,7 @@ function stepDemoOrbitRecord(record: DemoOrbitMotionRecord, deltaMs: number) {
   ) {
     const centerX = record.orbitCenterX ?? 0;
     const centerY = record.orbitCenterY ?? 0;
-    const angleDelta = shortestDemoOrbitAngleDelta(record.currentAngle ?? 0, record.targetAngle ?? 0);
+    const angleDelta = demoOrbitAngleDelta(record);
     record.currentAngle = (record.currentAngle ?? 0) + angleDelta * moveAlpha;
     record.currentRadius = (record.currentRadius ?? 0) + ((record.targetRadius ?? 0) - (record.currentRadius ?? 0)) * moveAlpha;
     record.currentX = centerX + Math.cos(record.currentAngle) * record.currentRadius - record.bubble.size / 2;
@@ -502,6 +627,19 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
       bubble.orbitAngle,
       bubble.orbitRadius,
       bubble.orbitSlotIndex,
+      bubble.motionReason,
+      bubble.motionDirection,
+      bubble.motionPlanId,
+      bubble.fromSlotIndex,
+      bubble.toSlotIndex,
+      bubble.moveCost,
+      bubble.moveAngleDelta,
+      bubble.arcCost,
+      bubble.radiusCost,
+      bubble.gateBlocked,
+      bubble.enterSequence,
+      bubble.enterDelayMs,
+      bubble.gateAngle,
       bubble.displayState,
       bubble.opacity,
     ].join(":"))
@@ -606,6 +744,11 @@ function useDemoOrbitMotion(bubbles: IdeationKeywordBubbleVisual[], graphVersion
       retargeted: record.phase === "moving",
       fromAngle: record.currentAngle,
       toAngle: record.targetAngle,
+      angleDelta: Number.isFinite(record.currentAngle) && Number.isFinite(record.targetAngle)
+        ? demoOrbitAngleDelta(record)
+        : undefined,
+      direction: record.orbitAngleDirection,
+      gateBlocked: Boolean(record.bubble.gateBlocked),
       staggerMs: 0,
     }));
     logDemoOrbitMotionBatch(lastDebugAtRef, batchId, graphVersion, debugMotions);
@@ -751,6 +894,16 @@ function IdeationDemoOrbitLayer({
           data-bubble-id={bubble.id}
           data-orbit-ring={bubble.orbitRing ?? ""}
           data-orbit-slot={bubble.orbitSlotIndex ?? ""}
+          data-motion-reason={bubble.motionReason ?? ""}
+          data-motion-direction={bubble.motionDirection ?? ""}
+          data-motion-plan={bubble.motionPlanId ?? ""}
+          data-from-slot={bubble.fromSlotIndex ?? ""}
+          data-to-slot={bubble.toSlotIndex ?? ""}
+          data-move-cost={bubble.moveCost ?? ""}
+          data-angle-delta={bubble.moveAngleDelta ?? ""}
+          data-arc-cost={bubble.arcCost ?? ""}
+          data-radius-cost={bubble.radiusCost ?? ""}
+          data-gate-blocked={bubble.gateBlocked ? "true" : "false"}
           data-visual-phase={bubble.demoVisualPhase ?? ""}
         >
           <div className="h-full w-full">

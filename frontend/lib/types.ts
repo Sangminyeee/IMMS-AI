@@ -836,6 +836,19 @@ export interface CanvasIdeationBubbleGraphBubble {
   orbit_radius?: number;
   orbit_order_key?: number;
   orbit_slot_index?: number;
+  motion_reason?: "gate_enter" | "insert_push" | "gap_fill" | "ring_overflow" | "affinity_transfer" | "relayout" | "relayout_transfer" | "content_update" | "exit" | string;
+  motion_direction?: "counterclockwise" | "clockwise" | "nearest" | "direct" | string;
+  motion_plan_id?: string;
+  from_slot_index?: number;
+  to_slot_index?: number;
+  move_cost?: number;
+  move_angle_delta?: number;
+  arc_cost?: number;
+  radius_cost?: number;
+  gate_blocked?: boolean;
+  enter_sequence?: number;
+  enter_delay_ms?: number;
+  gate_angle?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
@@ -875,6 +888,13 @@ export interface CanvasIdeationBubbleGraphUpdateResponse {
   generated_at: string;
   source_signature: string;
   bubble_graph: CanvasIdeationBubbleGraph;
+  broadcast_steps?: Array<{
+    delay_ms?: number;
+    reason?: string;
+    keyword?: string;
+    motion_plan_id?: string;
+    bubble_graph?: CanvasIdeationBubbleGraph;
+  }>;
   workspace?: CanvasWorkspaceStateResponse;
   rename_keywords?: Array<{
     source: string;

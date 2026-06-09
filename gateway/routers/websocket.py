@@ -1885,6 +1885,7 @@ async def request_ideation_bubble_graph_update(
                 "llm_error": result.get("llm_error") or {},
                 "raw_directives": result.get("raw_directives") or {},
                 "extractor_route": result.get("extractor_route") or {},
+                "layout_debug": (result.get("layout_debug") or [])[:12],
                 "refined": refined_applied_count,
                 "keywords": result.get("keyword_count"),
                 "renames": result.get("rename_count"),
@@ -1926,6 +1927,7 @@ async def request_ideation_bubble_graph_update(
             llm_error=result.get("llm_error") or {},
             raw_directives=result.get("raw_directives") or {},
             extractor_route=result.get("extractor_route") or {},
+            layout_debug=(result.get("layout_debug") or [])[:24],
             refined_count=refined_applied_count,
             keyword_count=result.get("keyword_count"),
             rename_count=result.get("rename_count"),
@@ -1949,6 +1951,55 @@ async def request_ideation_bubble_graph_update(
         )
         graph_updated = bool(result.get("used_llm") or result.get("used_local"))
         if graph_updated and next_cycle > current_cycle:
+            broadcast_steps = result.get("broadcast_steps") if isinstance(result.get("broadcast_steps"), list) else []
+            if demo_balance_mode and update_mode == "local_fast_keywords" and broadcast_steps:
+                last_broadcast_cycle = current_cycle
+                broadcast_count = 0
+                for step_index, step in enumerate(broadcast_steps):
+                    if not isinstance(step, dict):
+                        continue
+                    step_graph = step.get("bubble_graph")
+                    if not isinstance(step_graph, dict):
+                        continue
+                    step_cycle = _ideation_bubble_graph_cycle(step_graph)
+                    if step_cycle <= last_broadcast_cycle:
+                        continue
+                    delay_ms = max(0, int(step.get("delay_ms") or 0))
+                    if delay_ms > 0:
+                        await asyncio.sleep(delay_ms / 1000)
+                    step_workspace = copy.deepcopy(workspace)
+                    step_workspace["ideation_bubble_graph"] = step_graph
+                    step_workspace["demo_config"] = demo_config
+                    await broadcast_ideation_bubble_graph(meeting_id, step_graph, step_workspace)
+                    last_broadcast_cycle = step_cycle
+                    broadcast_count += 1
+                    await send_bubble_graph_debug(
+                        meeting_id,
+                        "broadcast_step",
+                        update_mode=update_mode,
+                        step_index=step_index,
+                        delay_ms=delay_ms,
+                        reason=step.get("reason") or "",
+                        keyword=step.get("keyword") or "",
+                        motion=step.get("motion") or {},
+                        cycle=step_cycle,
+                        bubbles=len(step_graph.get("bubbles") or []),
+                        layout_debug=(step.get("layout_debug") or [])[:16],
+                    )
+                if broadcast_count > 0:
+                    print(
+                        "[Bubble][gateway] ideation graph broadcast steps",
+                        {
+                            "meeting_id": meeting_id,
+                            "mode": "demo_balance",
+                            "update_mode": update_mode,
+                            "steps": broadcast_count,
+                            "cycle": last_broadcast_cycle,
+                            "bubbles": len(graph.get("bubbles") or []),
+                        },
+                        flush=True,
+                    )
+                    return "updated"
             next_workspace = copy.deepcopy(workspace)
             next_workspace["ideation_bubble_graph"] = graph
             if demo_balance_mode:

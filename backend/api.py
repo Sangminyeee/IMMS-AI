@@ -32,7 +32,8 @@ from security_utils import extract_client_ip, is_ip_allowed, parse_ip_whitelist
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=False)
 load_dotenv(ROOT / "gateway" / ".env", override=False)
-WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo")
+WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo").strip() or "turbo"
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "ko").strip() or "ko"
 GEMINI_DEFAULT_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
 GEMINI_FAST_MODEL_NAME = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.1-flash-lite").strip() or GEMINI_DEFAULT_MODEL_NAME
 GEMINI_FAST_STAGE_NAMES = tuple(
@@ -250,6 +251,8 @@ def _safe_text(raw: Any, fallback: str = "") -> str:
 _BUBBLE_DEBUG_LOG_DIR = ROOT / "output" / "bubble-debug"
 _BUBBLE_DEBUG_LOG_LOCK = threading.Lock()
 _BUBBLE_DEBUG_LOG_MAX_BUBBLES = 80
+DEMO_BALANCE_GATE_ENTER_DELAY_MS = 0
+DEMO_BALANCE_GATE_STEP_DELAY_MS = 340
 
 
 def _bubble_debug_safe_meeting_id(meeting_id: Any) -> str:
@@ -296,6 +299,21 @@ def _bubble_debug_compact_bubbles(graph: dict[str, Any], limit: int = _BUBBLE_DE
                 "orbit_ring": _safe_nonnegative_int(bubble.get("orbit_ring"), 0),
                 "orbit_slot_index": _safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
                 "orbit_order_key": _safe_float(bubble.get("orbit_order_key"), 0.0),
+                "orbit_angle": _safe_float(bubble.get("orbit_angle"), 0.0),
+                "orbit_radius": _safe_float(bubble.get("orbit_radius"), 0.0),
+                "motion_reason": _safe_text(bubble.get("motion_reason")),
+                "motion_direction": _safe_text(bubble.get("motion_direction")),
+                "motion_plan_id": _safe_text(bubble.get("motion_plan_id")),
+                "from_slot_index": _safe_nonnegative_int(bubble.get("from_slot_index"), 0),
+                "to_slot_index": _safe_nonnegative_int(bubble.get("to_slot_index"), 0),
+                "move_cost": round(_safe_float(bubble.get("move_cost"), 0.0), 2),
+                "move_angle_delta": round(_safe_float(bubble.get("move_angle_delta"), 0.0), 4),
+                "arc_cost": round(_safe_float(bubble.get("arc_cost"), 0.0), 2),
+                "radius_cost": round(_safe_float(bubble.get("radius_cost"), 0.0), 2),
+                "gate_blocked": bool(bubble.get("gate_blocked")),
+                "enter_sequence": _safe_nonnegative_int(bubble.get("enter_sequence"), 0),
+                "enter_delay_ms": _safe_nonnegative_int(bubble.get("enter_delay_ms"), 0),
+                "gate_angle": _safe_float(bubble.get("gate_angle"), 0.0),
                 "durable": bool(bubble.get("durable")),
                 "x": _safe_float(bubble.get("x"), 0.0),
                 "y": _safe_float(bubble.get("y"), 0.0),
@@ -7137,8 +7155,7 @@ def _normalize_ideation_keyword_rename_merges(
     existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
     merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
     merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
-    remove_texts = {_safe_text(value) for value in remove_keywords if _safe_text(value)}
-    blocked_sources = merge_sources | remove_texts
+    blocked_sources = merge_sources
     seen_pairs = {
         (_safe_text(item.get("source")), _safe_text(item.get("target")))
         for item in merge_keywords
@@ -7204,8 +7221,7 @@ def _normalize_ideation_keyword_renames(
     existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
     merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
     merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
-    remove_texts = {_safe_text(value) for value in remove_keywords if _safe_text(value)}
-    blocked_sources = merge_sources | merge_targets | remove_texts
+    blocked_sources = merge_sources | merge_targets
 
     raw_renames = (
         parsed.get("rename_keywords")
@@ -7255,6 +7271,30 @@ def _normalize_ideation_keyword_renames(
             break
 
     return rename_keywords
+
+
+def _demo_balance_local_keyword_renames(existing_keywords: list[dict[str, Any]]) -> list[dict[str, str]]:
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    renames: list[dict[str, str]] = []
+    seen_sources: set[str] = set()
+    for source_text, target_text in DEMO_BALANCE_LOCAL_KEYWORD_RENAMES:
+        source = existing_text_lookup.get(
+            _normalize_ideation_keyword_text(source_text),
+            _normalize_ideation_keyword_text(source_text),
+        )
+        target = _normalize_ideation_keyword_text(target_text)
+        if not source or not target or source == target or source not in existing_texts or source in seen_sources:
+            continue
+        renames.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": "demo local STT correction",
+            }
+        )
+        seen_sources.add(source)
+    return renames
 
 
 def _demo_balance_primary_keywords_present(parsed: Any) -> bool:
@@ -8105,6 +8145,10 @@ DEMO_BALANCE_NEUTRAL_LABEL = "미분류"
 DEMO_BALANCE_AFFINITIES = {"a", "b", "neutral"}
 DEMO_BALANCE_DISPLAY_AFFINITIES = {"a", "b"}
 DEMO_BALANCE_MIN_VISIBLE_PER_SIDE = 4
+DEMO_BALANCE_LOCAL_KEYWORD_RENAMES = (
+    ("사생활 치매", "사생활 침해"),
+    ("사생활치매", "사생활 침해"),
+)
 
 
 def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
@@ -8227,6 +8271,52 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
             if item.get("orbit_slot_index") is not None
             else item.get("orbitSlotIndex")
         )
+        motion_reason = _safe_text(item.get("motion_reason") or item.get("motionReason"))
+        if motion_reason not in {
+            "gate_enter",
+            "insert_push",
+            "gap_fill",
+            "ring_overflow",
+            "affinity_transfer",
+            "relayout",
+            "relayout_transfer",
+            "content_update",
+            "exit",
+            "",
+        }:
+            motion_reason = ""
+        motion_direction = _safe_text(item.get("motion_direction") or item.get("motionDirection"))
+        if motion_direction not in {"counterclockwise", "clockwise", "nearest", "nearest_arc", "orbit_radial_arc", "direct", ""}:
+            motion_direction = ""
+        raw_enter_sequence = (
+            item.get("enter_sequence")
+            if item.get("enter_sequence") is not None
+            else item.get("enterSequence")
+        )
+        raw_enter_delay_ms = (
+            item.get("enter_delay_ms")
+            if item.get("enter_delay_ms") is not None
+            else item.get("enterDelayMs")
+        )
+        raw_gate_angle = item.get("gate_angle") if item.get("gate_angle") is not None else item.get("gateAngle")
+        raw_from_slot_index = (
+            item.get("from_slot_index")
+            if item.get("from_slot_index") is not None
+            else item.get("fromSlotIndex")
+        )
+        raw_to_slot_index = (
+            item.get("to_slot_index")
+            if item.get("to_slot_index") is not None
+            else item.get("toSlotIndex")
+        )
+        raw_move_cost = item.get("move_cost") if item.get("move_cost") is not None else item.get("moveCost")
+        raw_move_angle_delta = (
+            item.get("move_angle_delta")
+            if item.get("move_angle_delta") is not None
+            else item.get("moveAngleDelta")
+        )
+        raw_arc_cost = item.get("arc_cost") if item.get("arc_cost") is not None else item.get("arcCost")
+        raw_radius_cost = item.get("radius_cost") if item.get("radius_cost") is not None else item.get("radiusCost")
         bubbles.append(
             {
                 "id": bubble_id,
@@ -8258,6 +8348,19 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "orbit_radius": _safe_float(raw_orbit_radius, 0.0) if raw_orbit_radius is not None else None,
                 "orbit_order_key": _safe_float(raw_orbit_order_key, 0.0) if raw_orbit_order_key is not None else None,
                 "orbit_slot_index": _safe_nonnegative_int(raw_orbit_slot_index, 0) if raw_orbit_slot_index is not None else None,
+                "motion_reason": motion_reason,
+                "motion_direction": motion_direction,
+                "motion_plan_id": _safe_text(item.get("motion_plan_id") or item.get("motionPlanId")),
+                "from_slot_index": _safe_nonnegative_int(raw_from_slot_index, 0) if raw_from_slot_index is not None else 0,
+                "to_slot_index": _safe_nonnegative_int(raw_to_slot_index, 0) if raw_to_slot_index is not None else 0,
+                "move_cost": max(0.0, _safe_float(raw_move_cost, 0.0)) if raw_move_cost is not None else 0.0,
+                "move_angle_delta": _safe_float(raw_move_angle_delta, 0.0) if raw_move_angle_delta is not None else 0.0,
+                "arc_cost": max(0.0, _safe_float(raw_arc_cost, 0.0)) if raw_arc_cost is not None else 0.0,
+                "radius_cost": max(0.0, _safe_float(raw_radius_cost, 0.0)) if raw_radius_cost is not None else 0.0,
+                "gate_blocked": bool(item.get("gate_blocked") or item.get("gateBlocked")),
+                "enter_sequence": _safe_nonnegative_int(raw_enter_sequence, 0) if raw_enter_sequence is not None else 0,
+                "enter_delay_ms": _safe_nonnegative_int(raw_enter_delay_ms, 0) if raw_enter_delay_ms is not None else 0,
+                "gate_angle": _safe_float(raw_gate_angle, 0.0) if raw_gate_angle is not None else None,
                 "display_state": display_state,
                 "layout_zone": _normalize_ideation_bubble_layout_zone(
                     item.get("layout_zone") or item.get("layoutZone")
@@ -9574,9 +9677,12 @@ def _demo_balance_reassign_orbit_orders(
         ]
         or [float(cycle * 1000)]
     )
+    used_orders: set[float] = set()
     for index, bubble in enumerate(cluster):
         if not isinstance(bubble, dict) or _safe_text(bubble.get("id")) == center_id:
             continue
+        raw_order = _safe_float(bubble.get("orbit_order_key"), 0.0)
+        rounded_raw_order = round(raw_order, 4)
         previous_anchor_id = _safe_text(bubble.get("anchor_id"))
         previous_affinity = _safe_text(bubble.get("choice_affinity")).lower()
         moved_orbit = (
@@ -9586,14 +9692,24 @@ def _demo_balance_reassign_orbit_orders(
             previous_affinity in DEMO_BALANCE_DISPLAY_AFFINITIES
             and previous_affinity != target_affinity
         )
-        if moved_orbit or not _ideation_bubble_has_number(bubble.get("orbit_order_key")) or _safe_float(bubble.get("orbit_order_key"), 0.0) <= 0:
+        needs_new_order = (
+            moved_orbit
+            or not _ideation_bubble_has_number(bubble.get("orbit_order_key"))
+            or raw_order <= 0
+            or rounded_raw_order in used_orders
+        )
+        if needs_new_order:
             next_order = max(
                 next_order + 1,
                 _demo_balance_orbit_order_key(bubble, cycle, index),
             )
-            bubble["orbit_order_key"] = round(next_order, 4)
+            assigned_order = round(next_order, 4)
+            bubble["orbit_order_key"] = assigned_order
+            used_orders.add(assigned_order)
         else:
-            bubble["orbit_order_key"] = round(_safe_float(bubble.get("orbit_order_key"), next_order), 4)
+            assigned_order = round(raw_order, 4)
+            bubble["orbit_order_key"] = assigned_order
+            used_orders.add(assigned_order)
 
 
 def _demo_balance_orbit_ring_for_slot(slot_index: int) -> int:
@@ -9636,6 +9752,385 @@ def _demo_balance_revolver_slot_angle(slot_index: int, slot_count: int) -> float
     safe_slot_count = max(1, slot_count)
     # Decreasing mathematical angle rotates visually counterclockwise in screen coordinates.
     return _demo_balance_revolver_insert_angle() - slot_index * (math.pi * 2 / safe_slot_count)
+
+
+def _demo_balance_graph_bubbles_by_id(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        _safe_text(bubble.get("id")): bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+    }
+
+
+def _demo_balance_same_orbit(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    return (
+        _safe_text(previous.get("orbit_center_id"))
+        and _safe_text(previous.get("orbit_center_id")) == _safe_text(current.get("orbit_center_id"))
+    )
+
+
+def _demo_balance_mark_motion(
+    bubble: dict[str, Any],
+    *,
+    reason: str,
+    direction: str,
+    sequence: int = 0,
+    delay_ms: int = 0,
+    plan_id: str = "",
+    from_slot_index: int = 0,
+    to_slot_index: int = 0,
+    move_cost: float = 0.0,
+    gate_blocked: bool = False,
+) -> None:
+    bubble["motion_reason"] = reason
+    bubble["motion_direction"] = direction
+    bubble["motion_plan_id"] = _safe_text(plan_id)
+    bubble["from_slot_index"] = max(0, int(from_slot_index))
+    bubble["to_slot_index"] = max(0, int(to_slot_index))
+    bubble["move_cost"] = round(max(0.0, float(move_cost or 0.0)), 2)
+    bubble["gate_blocked"] = bool(gate_blocked)
+    bubble["enter_sequence"] = max(0, int(sequence))
+    bubble["enter_delay_ms"] = max(0, int(delay_ms))
+    bubble["gate_angle"] = round(_demo_balance_revolver_insert_angle(), 6)
+
+
+_DEMO_BALANCE_SLOT_LAYOUT_FIELDS = (
+    "x",
+    "y",
+    "cluster_id",
+    "cluster_x",
+    "cluster_y",
+    "local_x",
+    "local_y",
+    "role",
+    "orbit_center_id",
+    "orbit_ring",
+    "orbit_angle",
+    "orbit_radius",
+    "orbit_slot_index",
+)
+
+
+def _demo_balance_motion_plan_id(graph: dict[str, Any], signature: str) -> str:
+    cycle = _safe_nonnegative_int(graph.get("update_cycle"), 0)
+    return f"demo-orbit-plan-{cycle}-{_stable_short_id(signature)[:8]}"
+
+
+def _demo_balance_copy_slot_layout(target: dict[str, Any], source: dict[str, Any]) -> None:
+    target_size = max(1, _safe_nonnegative_int(target.get("size"), _safe_nonnegative_int(source.get("size"), 64)))
+    source_size = max(1, _safe_nonnegative_int(source.get("size"), target_size))
+    source_center_x = _safe_float(source.get("x"), 0.0) + source_size / 2
+    source_center_y = _safe_float(source.get("y"), 0.0) + source_size / 2
+    for field in _DEMO_BALANCE_SLOT_LAYOUT_FIELDS:
+        if field in {"x", "y", "local_x", "local_y"}:
+            continue
+        target[field] = copy.deepcopy(source.get(field))
+    target["x"] = round(source_center_x - target_size / 2, 2)
+    target["y"] = round(source_center_y - target_size / 2, 2)
+    cluster_x = _safe_float(target.get("cluster_x"), 0.0)
+    cluster_y = _safe_float(target.get("cluster_y"), 0.0)
+    target["local_x"] = round(target["x"] - cluster_x, 2)
+    target["local_y"] = round(target["y"] - cluster_y, 2)
+
+
+def _demo_balance_shortest_angle_delta(from_angle: float, to_angle: float) -> float:
+    return math.atan2(math.sin(to_angle - from_angle), math.cos(to_angle - from_angle))
+
+
+def _demo_balance_apply_gate_pose(bubble: dict[str, Any]) -> None:
+    size = max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+    cluster_x = _safe_float(bubble.get("cluster_x"), IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X)
+    cluster_y = _safe_float(bubble.get("cluster_y"), IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y)
+    radius = max(1.0, _safe_float(bubble.get("orbit_radius"), 150.0))
+    angle = _demo_balance_revolver_insert_angle()
+    raw_x = cluster_x + math.cos(angle) * radius - size / 2
+    raw_y = cluster_y + math.sin(angle) * radius - size / 2
+    x, y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+    bubble["x"] = round(x, 2)
+    bubble["y"] = round(y, 2)
+    bubble["local_x"] = round(x - cluster_x, 2)
+    bubble["local_y"] = round(y - cluster_y, 2)
+    bubble["orbit_slot_index"] = 0
+    bubble["orbit_angle"] = round(angle, 6)
+
+
+def _demo_balance_assign_nearest_open_rail_slots(
+    previous_graph: dict[str, Any],
+    final_graph: dict[str, Any],
+    new_bubble_ids: set[str],
+) -> dict[str, Any]:
+    previous_by_id = _demo_balance_graph_bubbles_by_id(previous_graph)
+    final_by_id = _demo_balance_graph_bubbles_by_id(final_graph)
+    assigned_count = 0
+    total_move_cost = 0.0
+    max_move_cost = 0.0
+    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for bubble in final_by_id.values():
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id in new_bubble_ids or bubble_id not in previous_by_id or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        previous = previous_by_id.get(bubble_id) or {}
+        if _safe_text(previous.get("orbit_center_id")) != _safe_text(bubble.get("orbit_center_id")):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        key = (
+            _safe_text(bubble.get("orbit_center_id")),
+            _safe_nonnegative_int(bubble.get("orbit_ring"), 0),
+        )
+        if not key[0] or key[1] <= 0:
+            continue
+        groups.setdefault(key, []).append(bubble)
+
+    def _center_of(item: dict[str, Any]) -> tuple[float, float]:
+        size = max(1, _safe_nonnegative_int(item.get("size"), 64))
+        return (
+            _safe_float(item.get("x"), 0.0) + size / 2,
+            _safe_float(item.get("y"), 0.0) + size / 2,
+        )
+
+    def _orbit_center_for_slot(slot: dict[str, Any]) -> tuple[float, float]:
+        slot_x, slot_y = _center_of(slot)
+        angle = _safe_float(slot.get("orbit_angle"), 0.0)
+        radius = max(0.0, _safe_float(slot.get("orbit_radius"), 0.0))
+        if radius <= 0:
+            return slot_x, slot_y
+        return (
+            slot_x - math.cos(angle) * radius,
+            slot_y - math.sin(angle) * radius,
+        )
+
+    def _slot_cost_details(previous: dict[str, Any], slot: dict[str, Any]) -> dict[str, float]:
+        previous_x, previous_y = _center_of(previous)
+        orbit_x, orbit_y = _orbit_center_for_slot(slot)
+        current_angle = math.atan2(previous_y - orbit_y, previous_x - orbit_x)
+        current_radius = math.hypot(previous_x - orbit_x, previous_y - orbit_y)
+        target_angle = _safe_float(slot.get("orbit_angle"), current_angle)
+        target_radius = max(1.0, _safe_float(slot.get("orbit_radius"), current_radius or 1.0))
+        angle_delta = _demo_balance_shortest_angle_delta(current_angle, target_angle)
+        arc_radius = max(1.0, (current_radius + target_radius) / 2)
+        arc_cost = abs(angle_delta) * arc_radius
+        radius_cost = abs(target_radius - current_radius) * 0.65
+        previous_slot = _safe_nonnegative_int(previous.get("orbit_slot_index"), 0)
+        next_slot = _safe_nonnegative_int(slot.get("orbit_slot_index"), 0)
+        slot_delta = abs(next_slot - previous_slot)
+        move_cost = arc_cost + radius_cost + (arc_cost * arc_cost / 180.0) + slot_delta * 0.01
+        return {
+            "move_cost": move_cost,
+            "move_angle_delta": angle_delta,
+            "arc_cost": arc_cost,
+            "radius_cost": radius_cost,
+        }
+
+    def _slot_cost(previous: dict[str, Any], slot: dict[str, Any]) -> float:
+        return _slot_cost_details(previous, slot)["move_cost"]
+
+    def _minimum_cost_assignment(costs: list[list[float]]) -> list[int]:
+        count = len(costs)
+        if count == 0:
+            return []
+        if count > 16:
+            remaining = set(range(count))
+            assignment: list[int] = []
+            for row in costs:
+                chosen = min(remaining, key=lambda index: row[index])
+                remaining.remove(chosen)
+                assignment.append(chosen)
+            return assignment
+
+        full_mask = 1 << count
+        best_cost = [math.inf] * full_mask
+        parent: list[tuple[int, int] | None] = [None] * full_mask
+        best_cost[0] = 0.0
+        for mask in range(full_mask):
+            row_index = mask.bit_count()
+            if row_index >= count or not math.isfinite(best_cost[mask]):
+                continue
+            row = costs[row_index]
+            for slot_index in range(count):
+                if mask & (1 << slot_index):
+                    continue
+                next_mask = mask | (1 << slot_index)
+                next_cost = best_cost[mask] + row[slot_index]
+                if next_cost < best_cost[next_mask]:
+                    best_cost[next_mask] = next_cost
+                    parent[next_mask] = (mask, slot_index)
+
+        assignment = [0] * count
+        mask = full_mask - 1
+        for row_index in range(count - 1, -1, -1):
+            previous = parent[mask]
+            if previous is None:
+                assignment[row_index] = row_index
+                continue
+            previous_mask, slot_index = previous
+            assignment[row_index] = slot_index
+            mask = previous_mask
+        return assignment
+
+    for _key, bubbles in groups.items():
+        slot_snapshots = [
+            copy.deepcopy(bubble)
+            for bubble in sorted(
+                bubbles,
+                key=lambda item: (
+                    _safe_nonnegative_int(item.get("orbit_slot_index"), 0),
+                    _safe_text(item.get("id")),
+                ),
+            )
+        ]
+        ordered_bubbles = sorted(
+            bubbles,
+            key=lambda item: (
+                _safe_nonnegative_int((previous_by_id.get(_safe_text(item.get("id"))) or {}).get("orbit_slot_index"), 0),
+                _safe_text(item.get("id")),
+            ),
+        )
+        if len(slot_snapshots) != len(ordered_bubbles):
+            continue
+        costs = [
+            [
+                _slot_cost(previous_by_id.get(_safe_text(bubble.get("id"))) or bubble, slot)
+                for slot in slot_snapshots
+            ]
+            for bubble in ordered_bubbles
+        ]
+        assignment = _minimum_cost_assignment(costs)
+        for bubble_index, slot_index in enumerate(assignment):
+            if bubble_index >= len(ordered_bubbles) or slot_index >= len(slot_snapshots):
+                continue
+            bubble = ordered_bubbles[bubble_index]
+            bubble_id = _safe_text(bubble.get("id"))
+            previous = previous_by_id.get(bubble_id) or bubble
+            chosen = slot_snapshots[slot_index]
+            details = _slot_cost_details(previous, chosen)
+            move_cost = details["move_cost"]
+            _demo_balance_copy_slot_layout(bubble, chosen)
+            bubble["gate_blocked"] = False
+            bubble["move_cost"] = round(move_cost, 2)
+            bubble["move_angle_delta"] = round(details["move_angle_delta"], 6)
+            bubble["arc_cost"] = round(details["arc_cost"], 2)
+            bubble["radius_cost"] = round(details["radius_cost"], 2)
+            assigned_count += 1
+            total_move_cost += move_cost
+            max_move_cost = max(max_move_cost, move_cost)
+
+    return {
+        "assigned_count": assigned_count,
+        "gate_blocked_count": 0,
+        "total_move_cost": round(total_move_cost, 2),
+        "max_move_cost": round(max_move_cost, 2),
+    }
+
+
+def _annotate_demo_balance_motion_hints(
+    previous_graph: dict[str, Any],
+    next_graph: dict[str, Any],
+    *,
+    update_reason: str,
+    sequence: int = 0,
+    delay_ms: int = 0,
+    plan_id: str = "",
+) -> dict[str, int]:
+    previous_by_id = _demo_balance_graph_bubbles_by_id(previous_graph)
+    new_count = 0
+    relayout_count = 0
+    content_count = 0
+    exit_count = 0
+
+    for bubble in next_graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        previous = previous_by_id.get(bubble_id)
+
+        if _is_demo_balance_anchor_bubble(bubble):
+            _demo_balance_mark_motion(bubble, reason="content_update", direction="direct", plan_id=plan_id)
+            continue
+
+        if previous is None:
+            _demo_balance_mark_motion(
+                bubble,
+                reason="gate_enter",
+                direction="direct",
+                sequence=sequence,
+                delay_ms=delay_ms,
+                plan_id=plan_id,
+                from_slot_index=0,
+                to_slot_index=_safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                move_cost=0.0,
+            )
+            new_count += 1
+            continue
+
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting":
+            _demo_balance_mark_motion(
+                bubble,
+                reason="exit",
+                direction="direct",
+                plan_id=plan_id,
+                from_slot_index=_safe_nonnegative_int(previous.get("orbit_slot_index"), 0),
+                to_slot_index=_safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                move_cost=0.0,
+            )
+            exit_count += 1
+            continue
+
+        previous_slot = _safe_nonnegative_int(previous.get("orbit_slot_index"), 0)
+        current_slot = _safe_nonnegative_int(bubble.get("orbit_slot_index"), 0)
+        same_orbit = _demo_balance_same_orbit(previous, bubble)
+        same_ring = _safe_nonnegative_int(previous.get("orbit_ring"), 0) == _safe_nonnegative_int(bubble.get("orbit_ring"), 0)
+        same_position = (
+            abs(_safe_float(previous.get("x"), 0.0) - _safe_float(bubble.get("x"), 0.0)) < 0.5
+            and abs(_safe_float(previous.get("y"), 0.0) - _safe_float(bubble.get("y"), 0.0)) < 0.5
+            and same_orbit
+            and same_ring
+            and previous_slot == current_slot
+        )
+        move_cost = _safe_float(bubble.get("move_cost"), 0.0)
+
+        if same_position:
+            _demo_balance_mark_motion(
+                bubble,
+                reason="content_update",
+                direction="direct",
+                plan_id=plan_id,
+                from_slot_index=previous_slot,
+                to_slot_index=current_slot,
+                move_cost=0.0,
+            )
+            content_count += 1
+        else:
+            if not same_orbit:
+                reason = "relayout_transfer"
+                direction = "direct"
+            elif same_ring:
+                reason = "relayout"
+                direction = "nearest_arc"
+            else:
+                reason = "relayout"
+                direction = "orbit_radial_arc"
+            _demo_balance_mark_motion(
+                bubble,
+                reason=reason,
+                direction=direction,
+                plan_id=plan_id,
+                from_slot_index=previous_slot,
+                to_slot_index=current_slot,
+                move_cost=move_cost,
+            )
+            relayout_count += 1
+
+    return {
+        "new_count": new_count,
+        "relayout_count": relayout_count,
+        "push_count": 0,
+        "gap_count": 0,
+        "content_count": content_count,
+        "transfer_count": 0,
+        "overflow_count": 0,
+        "exit_count": exit_count,
+    }
 
 
 def _relax_ideation_bubble_orbit_placements(
@@ -9835,7 +10330,7 @@ def _place_ideation_bubble_orbit_cluster(
         if is_demo_cluster:
             ring_start_index = _demo_balance_orbit_ring_start_index(preferred_ring_index)
             ring_slot_index = max(0, index - ring_start_index)
-            ring_slot_count = max(1, _demo_balance_orbit_ring_capacity_limit(preferred_ring_index))
+            ring_slot_count = max(1, _demo_balance_orbit_ring_slot_count(preferred_ring_index, len(satellites)))
             angle = _demo_balance_revolver_slot_angle(ring_slot_index, ring_slot_count)
             raw_x = center_x + math.cos(angle) * radius - size / 2
             raw_y = center_y + math.sin(angle) * radius - size / 2
@@ -14398,7 +14893,7 @@ def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        kwargs = {"language": "ko", "task": "transcribe", "verbose": False}
+        kwargs = {"language": WHISPER_LANGUAGE, "task": "transcribe", "verbose": False}
         try:
             import torch
 
@@ -14407,7 +14902,7 @@ def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
             kwargs["fp16"] = False
         print(
             f"[STT][backend] whisper.transcribe start path={tmp_path} "
-            f"fp16={kwargs.get('fp16')} prompt=False",
+            f"language={WHISPER_LANGUAGE} fp16={kwargs.get('fp16')} prompt=False",
             flush=True,
         )
         result = model.transcribe(tmp_path, **kwargs)
@@ -15057,6 +15552,7 @@ def get_health():
     return {
         "ok": True,
         "whisper_model": WHISPER_MODEL_NAME,
+        "whisper_language": WHISPER_LANGUAGE,
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "deps": {
@@ -18074,6 +18570,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         used_local: bool = False,
         extractor_route: dict[str, Any] | None = None,
         raw_directives: dict[str, Any] | None = None,
+        broadcast_steps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         response_graph = _normalize_canvas_ideation_bubble_graph(graph)
@@ -18084,6 +18581,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         _ensure_ideation_bubble_graph_server_layout(response_graph)
         workspace_payload["ideation_bubble_graph"] = response_graph
         state_counts = _ideation_bubble_state_counts(response_graph)
+        layout_debug = _bubble_debug_compact_bubbles(response_graph, limit=24)
         return {
             "ok": bool(used_llm or used_local),
             "used_llm": used_llm,
@@ -18095,6 +18593,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "llm_error": llm_error or {},
             "raw_directives": raw_directives or {},
             "extractor_route": extractor_route or {},
+            "layout_debug": layout_debug,
+            "broadcast_steps": broadcast_steps or [],
             "refined_transcripts": refined_transcripts or [],
             "ignored_utterance_ids": ignored_utterance_ids or [],
             "rename_keywords": rename_keywords or [],
@@ -18296,8 +18796,14 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             )
 
         graph_metrics: dict[str, int] = {}
+        initial_graph = _normalize_canvas_ideation_bubble_graph(graph)
+        initial_ids = {
+            _safe_text(bubble.get("id"))
+            for bubble in (initial_graph.get("bubbles") or [])
+            if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+        }
         next_graph = _apply_ideation_bubble_graph_update(
-            graph,
+            initial_graph,
             rows,
             normalized_keywords,
             [],
@@ -18307,10 +18813,133 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             decay_profile="demo_balance",
             apply_decay=False,
             mark_processed=False,
-            demo_local_cleanup=True,
+            demo_local_cleanup=False,
             primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
             metrics=graph_metrics,
         )
+        _final_by_id, final_by_text = _ideation_bubble_graph_text_maps(next_graph)
+        ordered_new_ids: list[str] = []
+        for keyword in normalized_keywords:
+            bubble = final_by_text.get(_ideation_bubble_text_key(keyword.get("text")))
+            bubble_id = _safe_text((bubble or {}).get("id"))
+            if bubble_id and bubble_id not in initial_ids and bubble_id not in ordered_new_ids:
+                ordered_new_ids.append(bubble_id)
+        for bubble_id in _demo_balance_graph_bubbles_by_id(next_graph):
+            if bubble_id not in initial_ids and bubble_id not in ordered_new_ids:
+                ordered_new_ids.append(bubble_id)
+        slot_assignment_metrics = _demo_balance_assign_nearest_open_rail_slots(
+            initial_graph,
+            next_graph,
+            set(ordered_new_ids),
+        )
+        plan_id = _demo_balance_motion_plan_id(next_graph, signature)
+        base_cycle = _safe_nonnegative_int(initial_graph.get("update_cycle"), 0)
+        next_step_cycle = base_cycle
+        previous_step_graph = copy.deepcopy(initial_graph)
+        broadcast_steps: list[dict[str, Any]] = []
+        motion_metrics: dict[str, int] = {
+            "new_count": 0,
+            "relayout_count": 0,
+            "push_count": 0,
+            "gap_count": 0,
+            "content_count": 0,
+            "transfer_count": 0,
+            "overflow_count": 0,
+            "exit_count": 0,
+        }
+        if ordered_new_ids:
+            revealed_ids = set(initial_ids)
+            step_specs = [(index, bubble_id) for index, bubble_id in enumerate(ordered_new_ids)]
+        else:
+            step_specs = [(0, "")]
+
+        for keyword_index, bubble_id in step_specs:
+            next_step_cycle += 1
+            step_graph = copy.deepcopy(next_graph)
+            if bubble_id:
+                revealed_ids.add(bubble_id)
+                step_graph["bubbles"] = [
+                    bubble
+                    for bubble in (step_graph.get("bubbles") or [])
+                    if isinstance(bubble, dict)
+                    and (
+                        _safe_text(bubble.get("id")) in revealed_ids
+                        or _is_demo_balance_anchor_bubble(bubble)
+                        or _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting"
+                    )
+                ]
+                step_by_id = _demo_balance_graph_bubbles_by_id(step_graph)
+                current_new = step_by_id.get(bubble_id)
+                if current_new:
+                    _demo_balance_apply_gate_pose(current_new)
+            step_graph["update_cycle"] = next_step_cycle
+            step_delay_ms = DEMO_BALANCE_GATE_ENTER_DELAY_MS if keyword_index == 0 else DEMO_BALANCE_GATE_STEP_DELAY_MS
+            step_motion_metrics = _annotate_demo_balance_motion_hints(
+                previous_step_graph,
+                step_graph,
+                update_reason="insert" if bubble_id else "content",
+                sequence=keyword_index,
+                delay_ms=step_delay_ms,
+                plan_id=plan_id,
+            )
+            for metric_key, metric_value in step_motion_metrics.items():
+                motion_metrics[metric_key] = _safe_nonnegative_int(motion_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            broadcast_steps.append(
+                {
+                    "delay_ms": step_delay_ms,
+                    "reason": "gate_enter" if bubble_id else "content_update",
+                    "keyword": _safe_text((_demo_balance_graph_bubbles_by_id(step_graph).get(bubble_id) or {}).get("label")) if bubble_id else "",
+                    "motion": step_motion_metrics,
+                    "motion_plan_id": plan_id,
+                    "bubble_graph": copy.deepcopy(step_graph),
+                    "layout_debug": _bubble_debug_compact_bubbles(step_graph, limit=24),
+                }
+            )
+            previous_step_graph = copy.deepcopy(step_graph)
+        next_graph["update_cycle"] = next_step_cycle
+        cleanup_previous_graph = copy.deepcopy(next_graph)
+        cleanup_metrics: dict[str, int] = {}
+        cleanup_graph = _apply_ideation_bubble_graph_update(
+            next_graph,
+            rows,
+            [],
+            [],
+            [],
+            [],
+            allow_single_support=True,
+            decay_profile="demo_balance",
+            apply_decay=False,
+            mark_processed=False,
+            demo_local_cleanup=True,
+            primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
+            metrics=cleanup_metrics,
+        )
+        cleanup_count = _safe_nonnegative_int(cleanup_metrics.get("local_cleanup_count"), 0)
+        if cleanup_count > 0:
+            next_graph = cleanup_graph
+            next_step_cycle = max(next_step_cycle + 1, _safe_nonnegative_int(next_graph.get("update_cycle"), 0))
+            next_graph["update_cycle"] = next_step_cycle
+            for metric_key, metric_value in cleanup_metrics.items():
+                graph_metrics[metric_key] = _safe_nonnegative_int(graph_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            cleanup_motion_metrics = _annotate_demo_balance_motion_hints(
+                cleanup_previous_graph,
+                next_graph,
+                update_reason="cleanup",
+                plan_id=plan_id,
+            )
+            for metric_key, metric_value in cleanup_motion_metrics.items():
+                motion_metrics[metric_key] = _safe_nonnegative_int(motion_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            broadcast_steps.append(
+                {
+                    "delay_ms": DEMO_BALANCE_GATE_STEP_DELAY_MS,
+                    "reason": "cleanup",
+                    "keyword": "",
+                    "motion": cleanup_motion_metrics,
+                    "motion_plan_id": plan_id,
+                    "bubble_graph": copy.deepcopy(next_graph),
+                    "layout_debug": _bubble_debug_compact_bubbles(next_graph, limit=24),
+                }
+            )
         saved_at = _now_ts()
         next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
         next_workspace["ideation_bubble_graph"] = next_graph
@@ -18344,10 +18973,21 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                         "state": item.get("display_state"),
                         "choice": item.get("choice_affinity"),
                         "count": item.get("count"),
+                        "motion": item.get("motion_reason"),
+                        "direction": item.get("motion_direction"),
+                        "slot": item.get("orbit_slot_index"),
+                        "move_cost": item.get("move_cost"),
+                        "angle_delta": item.get("move_angle_delta"),
+                        "arc_cost": item.get("arc_cost"),
+                        "radius_cost": item.get("radius_cost"),
                     }
                     for item in _bubble_debug_compact_bubbles(next_graph, limit=16)
                 ],
                 "local_cleanup": graph_metrics.get("local_cleanup_count", 0),
+                "slot_assignment": slot_assignment_metrics,
+                "motion_plan_id": plan_id,
+                "broadcast_steps": len(broadcast_steps),
+                "motion": motion_metrics,
             },
             flush=True,
         )
@@ -18365,6 +19005,20 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "graph_cycle": next_graph.get("update_cycle"),
                 "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
                 "local_cleanup_count": _safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
+                "slot_assignment": slot_assignment_metrics,
+                "motion_plan_id": plan_id,
+                "broadcast_steps": [
+                    {
+                        "delay_ms": _safe_nonnegative_int(step.get("delay_ms"), 0),
+                        "reason": _safe_text(step.get("reason")),
+                        "keyword": _safe_text(step.get("keyword")),
+                        "motion": step.get("motion") or {},
+                        "motion_plan_id": _safe_text(step.get("motion_plan_id")),
+                        "cycle": _safe_nonnegative_int((step.get("bubble_graph") or {}).get("update_cycle"), 0),
+                    }
+                    for step in broadcast_steps
+                ],
+                "motion": motion_metrics,
             },
         )
         return _response(
@@ -18381,6 +19035,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             local_cleanup_count=_safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
             used_local=True,
             extractor_route=extractor_route,
+            broadcast_steps=broadcast_steps,
         )
 
     lock_wait_started = time.perf_counter()
@@ -18596,6 +19251,34 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             remove_keywords,
         )
         if is_demo_balance and update_mode == "consolidate":
+            local_rename_keywords = _demo_balance_local_keyword_renames(existing_keyword_rows)
+            if local_rename_keywords:
+                existing_pairs = {
+                    (_safe_text(item.get("source")), _safe_text(item.get("target")))
+                    for item in rename_keywords
+                    if _safe_text(item.get("source")) and _safe_text(item.get("target"))
+                }
+                for item in local_rename_keywords:
+                    pair = (_safe_text(item.get("source")), _safe_text(item.get("target")))
+                    if pair not in existing_pairs:
+                        rename_keywords.append(item)
+                        existing_pairs.add(pair)
+        correction_protected_texts = {
+            _safe_text(item.get("source"))
+            for item in [*merge_keywords, *rename_keywords]
+            if _safe_text(item.get("source"))
+        } | {
+            _safe_text(item.get("target"))
+            for item in [*merge_keywords, *rename_keywords]
+            if _safe_text(item.get("target"))
+        }
+        if correction_protected_texts:
+            remove_keywords = [
+                text
+                for text in remove_keywords
+                if _safe_text(text) not in correction_protected_texts
+            ]
+        if is_demo_balance and update_mode == "consolidate":
             affinity_updates = _normalize_demo_balance_affinity_updates(parsed, existing_keyword_rows)
         is_demo_balance = _is_demo_balance_config(demo_config)
         if not is_demo_balance:
@@ -18650,6 +19333,11 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     mark_processed=True,
                     primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
                 )
+                motion_metrics = _annotate_demo_balance_motion_hints(
+                    latest_graph,
+                    next_graph,
+                    update_reason="cleanup",
+                )
                 saved_at = _now_ts()
                 next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
                 next_workspace["ideation_bubble_graph"] = next_graph
@@ -18695,6 +19383,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                         "refined_count": len(refined_transcripts),
                         "ignored_count": len(ignored_utterance_ids),
                         "ignored_utterance_ids": ignored_utterance_ids,
+                        "motion": motion_metrics,
                         "state_counts": _ideation_bubble_state_counts(next_graph),
                         "graph_cycle": next_graph.get("update_cycle"),
                         "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
@@ -18736,6 +19425,13 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             affinity_updates=affinity_updates if is_demo_balance and update_mode == "consolidate" else None,
             metrics=graph_metrics,
         )
+        motion_metrics: dict[str, int] = {}
+        if is_demo_balance:
+            motion_metrics = _annotate_demo_balance_motion_hints(
+                latest_graph,
+                next_graph,
+                update_reason="cleanup" if update_mode == "consolidate" else "insert",
+            )
         saved_at = _now_ts()
         next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
         next_workspace["ideation_bubble_graph"] = next_graph
@@ -18758,6 +19454,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "keywords": copy.deepcopy(normalized_keywords),
             "refined_transcripts": copy.deepcopy(refined_transcripts),
             "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
+            "motion": copy.deepcopy(motion_metrics),
             "bubble_graph": copy.deepcopy(next_graph),
         }
         RT.last_llm_parsed_at = _now_ts()
@@ -18788,6 +19485,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                     ]
                 ),
                 "state_counts": _ideation_bubble_state_counts(next_graph),
+                "motion": motion_metrics,
             },
         )
         _write_bubble_debug_event(
@@ -18806,6 +19504,7 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "refined_count": len(refined_transcripts),
                 "ignored_count": len(ignored_utterance_ids),
                 "metrics": graph_metrics,
+                "motion": motion_metrics,
                 "state_counts": _ideation_bubble_state_counts(next_graph),
                 "graph_cycle": next_graph.get("update_cycle"),
                 "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
@@ -19524,7 +20223,7 @@ async def post_transcribe_chunk(
         started_at = time.perf_counter()
         blob = await audio_file.read()
         if not blob:
-            return {"text": "", "language": "ko", "error": "empty audio"}
+            return {"text": "", "language": WHISPER_LANGUAGE, "error": "empty audio"}
         
         suffix = Path(audio_file.filename or "chunk.webm").suffix or ".webm"
         parsed_context_pack = _parse_stt_context_pack(context_pack)
@@ -19557,7 +20256,7 @@ async def post_transcribe_chunk(
                 "uncertain_terms": [],
                 "context_terms": [],
                 "context_pack_summary": context_pack_summary,
-                "language": "ko",
+                "language": WHISPER_LANGUAGE,
                 "elapsed_ms": elapsed_ms,
                 "model": WHISPER_MODEL_NAME,
             }
@@ -19588,7 +20287,7 @@ async def post_transcribe_chunk(
             "uncertain_terms": refine_meta.get("uncertain_terms") or [],
             "context_terms": refine_meta.get("context_terms") or [],
             "context_pack_summary": refine_meta.get("context_pack_summary") or context_pack_summary,
-            "language": "ko",
+            "language": WHISPER_LANGUAGE,
             "elapsed_ms": total_elapsed_ms,
             "model": WHISPER_MODEL_NAME,
         }
@@ -19596,6 +20295,6 @@ async def post_transcribe_chunk(
         print(f"[STT][backend] transcribe chunk error: {exc}", flush=True)
         return {
             "text": "",
-            "language": "ko",
+            "language": WHISPER_LANGUAGE,
             "error": str(exc)
         }
