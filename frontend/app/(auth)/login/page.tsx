@@ -1,23 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEventHandler } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   AuthPixelAccountLink,
   AuthPixelError,
+  AuthPixelGuestLoginButton,
   AuthPixelPasswordField,
-  AuthPixelSocialLoginButtons,
   AuthPixelSubmitButton,
   AuthPixelTextField,
 } from "@/components/layout/AuthPixelControls";
 import { AuthTransitionLink } from "@/components/layout/AuthTransitionLink";
 import { useAuthRenderMode } from "@/components/layout/AuthSplitLayout";
 import { MoaButton } from "@/components/moa-ui/MoaButton";
+import { MoaGuestLoginButton } from "@/components/moa-ui/MoaSocialLoginButtons";
 import { MoaLoadingState } from "@/components/moa-ui/MoaLoadingState";
 import { MoaPasswordField } from "@/components/moa-ui/MoaPasswordField";
-import { MoaSocialLoginButtons } from "@/components/moa-ui/MoaSocialLoginButtons";
 import { MoaTextField } from "@/components/moa-ui/MoaTextField";
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -29,14 +29,57 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function getGuestLoginErrorMessage(error: unknown) {
+  const message = getErrorMessage(error, "");
+  const normalized = [
+    message,
+    typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : "",
+    typeof error === "object" && error !== null && "error_code" in error ? (error as { error_code?: unknown }).error_code : "",
+    String(error || ""),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    normalized.includes("anonymous") ||
+    normalized.includes("disabled") ||
+    normalized.includes("not allowed") ||
+    normalized.includes("not enabled") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("403")
+  ) {
+    return "관리자가 게스트 로그인을 비활성화했습니다. 관리자에게 문의해 주세요.";
+  }
+
+  return message || "게스트 로그인에 실패했습니다.";
+}
+
+function getSafeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/dashboard";
+  if (value.startsWith("/login") || value.startsWith("/register")) return "/dashboard";
+  return value;
+}
+
+function getLoginNextPath() {
+  if (typeof window === "undefined") return "/dashboard";
+  return getSafeNextPath(new URLSearchParams(window.location.search).get("next"));
+}
+
 export default function LoginPage() {
   const renderMode = useAuthRenderMode();
   const router = useRouter();
-  const { signIn, loading: authLoading } = useAuth();
+  const { signIn, signInGuest, loading: authLoading, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+    router.replace(getLoginNextPath());
+  }, [authLoading, router, user]);
 
   const handleSubmit: FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
@@ -44,12 +87,34 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await signIn(email, password);
-      router.push("/dashboard");
+      const { error: signInError } = await signIn(email, password);
+      if (signInError) {
+        setError(getErrorMessage(signInError, "로그인에 실패했습니다."));
+        return;
+      }
+      router.replace(getLoginNextPath());
     } catch (err) {
       setError(getErrorMessage(err, "로그인에 실패했습니다."));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setError("");
+    setGuestLoading(true);
+
+    try {
+      const { error: guestError } = await signInGuest();
+      if (guestError) {
+        setError(getGuestLoginErrorMessage(guestError));
+        return;
+      }
+      router.replace(getLoginNextPath());
+    } catch (err) {
+      setError(getGuestLoginErrorMessage(err));
+    } finally {
+      setGuestLoading(false);
     }
   };
 
@@ -82,11 +147,11 @@ export default function LoginPage() {
           value={password}
         />
         {error ? <AuthPixelError message={error} top={610} /> : null}
-        <AuthPixelSubmitButton disabled={loading} top={664} type="submit">
+        <AuthPixelSubmitButton disabled={loading || guestLoading} top={664} type="submit">
           {loading ? "로그인 중..." : "로그인"}
         </AuthPixelSubmitButton>
         <AuthPixelAccountLink href="/register" label="계정이 없으신가요?" linkLabel="회원가입" top={744} />
-        <AuthPixelSocialLoginButtons />
+        <AuthPixelGuestLoginButton disabled={loading} loading={guestLoading} onClick={handleGuestLogin} />
       </form>
     );
   }
@@ -117,18 +182,19 @@ export default function LoginPage() {
 
         {error ? <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div> : null}
 
-        <MoaButton type="submit" disabled={loading} fullWidth size="lg" className="!mt-[42px] !h-[38px] !rounded-[10px] !text-[13px]">
+        <MoaButton type="submit" disabled={loading || guestLoading} fullWidth size="lg" className="!mt-[30px] !h-[48px] !rounded-[14px] !text-[15px]">
           {loading ? "로그인 중..." : "로그인"}
         </MoaButton>
       </form>
 
-      <p className="mt-4 text-center text-[12px] leading-[17px] text-[var(--moa-muted)]">
+      <MoaGuestLoginButton disabled={loading} loading={guestLoading} onClick={handleGuestLogin} />
+
+      <p className="mt-5 text-center text-[13px] font-medium leading-[18px] tracking-[-0.03px] text-[var(--moa-muted)]">
         계정이 없으신가요?{" "}
         <AuthTransitionLink href="/register" className="font-bold text-[var(--moa-primary)] hover:text-[var(--moa-primary-hover)]">
           회원가입
         </AuthTransitionLink>
       </p>
-      <MoaSocialLoginButtons />
     </>
   );
 }

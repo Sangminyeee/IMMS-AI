@@ -151,9 +151,11 @@ DROP POLICY IF EXISTS "Authenticated users can view all meetings" ON meetings;
 DROP POLICY IF EXISTS "Users can create meetings" ON meetings;
 DROP POLICY IF EXISTS "Hosts can update own meetings" ON meetings;
 DROP POLICY IF EXISTS "Authenticated users can update meetings" ON meetings;
+DROP POLICY IF EXISTS "Authenticated users can delete meetings" ON meetings;
 CREATE POLICY "Authenticated users can view all meetings" ON meetings FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Users can create meetings" ON meetings FOR INSERT TO authenticated WITH CHECK ((select auth.uid()) = host_id);
 CREATE POLICY "Authenticated users can update meetings" ON meetings FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Authenticated users can delete meetings" ON meetings FOR DELETE TO authenticated USING (true);
 
 -- participants: 로그인한 모든 사용자가 참여자 목록을 볼 수 있고, 본인 참여 기록을 만들 수 있음
 DROP POLICY IF EXISTS "Anyone can view participants of their meetings" ON participants;

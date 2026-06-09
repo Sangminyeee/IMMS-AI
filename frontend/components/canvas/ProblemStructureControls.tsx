@@ -15,6 +15,7 @@ export type ProblemCanvasToolbarActionId =
 type ProblemStructureSetupModalProps = {
   draftMethod: ProblemStructureMethodId;
   draftMode: ProblemDefinitionModeId;
+  exiting?: boolean;
   problemGroupsCount: number;
   pending: boolean;
   onClose: () => void;
@@ -33,6 +34,7 @@ type ProblemStructureFloatingToolbarProps = {
 
 type ProblemCanvasToolbarProps = {
   actions: ProblemCanvasToolbarActionId[];
+  exiting?: boolean;
   getActionLabel: (action: ProblemCanvasToolbarActionId) => string;
   isActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
   isActionDisabled: (action: ProblemCanvasToolbarActionId) => boolean;
@@ -55,6 +57,7 @@ function problemDefinitionModeLabel(mode: ProblemDefinitionModeId) {
 export const ProblemStructureSetupModal = memo(function ProblemStructureSetupModal({
   draftMethod,
   draftMode,
+  exiting = false,
   problemGroupsCount,
   pending,
   onClose,
@@ -63,8 +66,8 @@ export const ProblemStructureSetupModal = memo(function ProblemStructureSetupMod
   onStart,
 }: ProblemStructureSetupModalProps) {
   return (
-    <div className="absolute inset-0 z-[7] flex items-center justify-center bg-white/82 px-4 backdrop-blur-[2px]">
-      <div className="w-[min(820px,94%)] rounded-[20px] border border-black/10 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.14)]">
+    <div className="moa-popover-backdrop absolute inset-0 z-[7] flex items-center justify-center bg-white/82 px-4 backdrop-blur-[2px]" data-exiting={exiting}>
+      <div className="moa-popover-panel w-[min(820px,94%)] rounded-[20px] border border-black/10 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.14)]" data-exiting={exiting}>
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Problem Structure</p>
@@ -227,6 +230,7 @@ export const ProblemStructureFloatingToolbar = memo(function ProblemStructureFlo
 
 export const ProblemCanvasToolbar = memo(function ProblemCanvasToolbar({
   actions,
+  exiting = false,
   getActionLabel,
   isActionActive,
   isActionDisabled,
@@ -234,7 +238,7 @@ export const ProblemCanvasToolbar = memo(function ProblemCanvasToolbar({
 }: ProblemCanvasToolbarProps) {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-[clamp(16px,3vh,32px)] z-10 flex justify-center px-3">
-      <div className="pointer-events-auto flex min-h-[clamp(48px,6.4vh,56px)] w-auto max-w-[min(860px,calc(100vw-24px))] flex-wrap items-center justify-center gap-2 rounded-[16px] border border-black/10 bg-white px-[clamp(10px,1.2vw,12px)] py-2 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)]">
+      <div className="moa-toast-pop pointer-events-auto flex min-h-[clamp(48px,6.4vh,56px)] w-auto max-w-[min(860px,calc(100vw-24px))] flex-wrap items-center justify-center gap-2 rounded-[16px] border border-black/10 bg-white px-[clamp(10px,1.2vw,12px)] py-2 text-[#4d4d4d] shadow-[0_5.64px_22.56px_rgba(0,0,0,0.05)]" data-exiting={exiting}>
         {actions.map((item) => (
           <button
             key={item}

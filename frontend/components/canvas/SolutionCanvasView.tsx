@@ -1,7 +1,12 @@
 "use client";
 
 import { memo, useMemo, type ReactNode, type RefObject } from "react";
-import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
+import type {
+  CanvasArtifactGenerationStatus,
+  CanvasEditPresencePayload,
+  CanvasFinalSolutionSummary,
+  CanvasSummaryDocumentBlock,
+} from "@/lib/types";
 import {
   buildSolutionPresentationModel,
   SolutionFinalDocumentPanel,
@@ -29,10 +34,13 @@ type SolutionCanvasViewProps = {
   draftDirty: boolean;
   editMode: boolean;
   pending: boolean;
+  generationStatus: CanvasArtifactGenerationStatus;
+  generationError: string;
   saving: boolean;
   onToggleEvidence: (groupId: string) => void;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
+  onRefreshCache: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
   onSave: () => void | Promise<void>;
   onBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -56,10 +64,13 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   draftDirty,
   editMode,
   pending,
+  generationStatus,
+  generationError,
   saving,
   onToggleEvidence,
   onSetEditMode,
   onRegenerate,
+  onRefreshCache,
   onCopy,
   onSave,
   onBlocksChange,
@@ -93,12 +104,15 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
         draftDirty={draftDirty}
         editMode={editMode}
         pending={pending}
+        generationStatus={generationStatus}
+        generationError={generationError}
         saving={saving}
         eligibleGroupCount={groups.length}
         presentation={presentation}
         remoteEditPresenceByKey={remoteEditPresenceByKey}
         onSetEditMode={onSetEditMode}
         onRegenerate={onRegenerate}
+        onRefreshCache={onRefreshCache}
         onCopy={onCopy}
         onSave={onSave}
         onBlocksChange={onBlocksChange}

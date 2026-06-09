@@ -13,6 +13,9 @@ type UseCanvasEndMeetingDialogModelsOptions = {
   onCancel: () => void;
   onConfirm: () => void | Promise<void>;
   onDownloadPdf: () => void;
+  onCreateFinalReportQr: () => void | Promise<void>;
+  onCloseFinalReportQr: () => void;
+  onCopyFinalReportQrUrl: () => void | Promise<void>;
   onBackToConfirm: () => void;
   onSaveAndEnd: (snapshot: CanvasFinalSolutionSummary) => void | Promise<void>;
   getFinalSummarySnapshot: () => CanvasFinalSolutionSummary;
@@ -23,6 +26,9 @@ export function useCanvasEndMeetingDialogModels({
   onCancel,
   onConfirm,
   onDownloadPdf,
+  onCreateFinalReportQr,
+  onCloseFinalReportQr,
+  onCopyFinalReportQrUrl,
   onBackToConfirm,
   onSaveAndEnd,
   getFinalSummarySnapshot,
@@ -33,8 +39,20 @@ export function useCanvasEndMeetingDialogModels({
     preview: incomingView.preview,
     summaryPreviewMarkdown: incomingView.summaryPreviewMarkdown,
     summaryPreviewHtml: incomingView.summaryPreviewHtml,
+    finalReportQrOpen: incomingView.finalReportQrOpen,
+    finalReportQrLoading: incomingView.finalReportQrLoading,
+    finalReportQrUrl: incomingView.finalReportQrUrl,
+    finalReportQrImageDataUrl: incomingView.finalReportQrImageDataUrl,
+    finalReportQrError: incomingView.finalReportQrError,
+    finalReportQrCopied: incomingView.finalReportQrCopied,
   }), [
     incomingView.confirmOpen,
+    incomingView.finalReportQrCopied,
+    incomingView.finalReportQrError,
+    incomingView.finalReportQrImageDataUrl,
+    incomingView.finalReportQrLoading,
+    incomingView.finalReportQrOpen,
+    incomingView.finalReportQrUrl,
     incomingView.preview,
     incomingView.saving,
     incomingView.summaryPreviewHtml,
@@ -49,17 +67,31 @@ export function useCanvasEndMeetingDialogModels({
     void onSaveAndEnd(getFinalSummarySnapshot());
   }, [getFinalSummarySnapshot, onSaveAndEnd]);
 
+  const handleCreateFinalReportQr = useCallback(() => {
+    void onCreateFinalReportQr();
+  }, [onCreateFinalReportQr]);
+
+  const handleCopyFinalReportQrUrl = useCallback(() => {
+    void onCopyFinalReportQrUrl();
+  }, [onCopyFinalReportQrUrl]);
+
   const handlers = useMemo<CanvasEndMeetingDialogsHandlers>(() => ({
     onCancel,
     onConfirm: handleConfirm,
     onDownloadPdf,
+    onCreateFinalReportQr: handleCreateFinalReportQr,
+    onCloseFinalReportQr,
+    onCopyFinalReportQrUrl: handleCopyFinalReportQrUrl,
     onBackToConfirm,
     onSaveAndEnd: handleSaveAndEnd,
   }), [
+    handleCopyFinalReportQrUrl,
+    handleCreateFinalReportQr,
     handleConfirm,
     handleSaveAndEnd,
     onBackToConfirm,
     onCancel,
+    onCloseFinalReportQr,
     onDownloadPdf,
   ]);
 

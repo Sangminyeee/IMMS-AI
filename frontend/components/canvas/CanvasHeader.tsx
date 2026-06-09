@@ -14,6 +14,8 @@ export type CanvasHeaderViewState = {
   meetingTitle: string;
   isRecording: boolean;
   recordingStartedAtMs?: number | null;
+  meetingTimerStartedAtMs?: number | null;
+  meetingTimerEndedAtMs?: number | null;
   endMeetingSaving: boolean;
   stage: CanvasStage;
   busy: boolean;
@@ -42,6 +44,7 @@ export type CanvasHeaderHandlers = {
   onOpenMeetingGoalEditor: () => void;
   onCancelMeetingGoalEdit: () => void;
   onSaveMeetingGoalEdit: () => void;
+  onSaveMeetingTitle: (title: string) => Promise<boolean>;
   onMeetingGoalEditorDraftChange: (value: string) => void;
   onMeetingGoalContextEditorDraftChange: (value: string) => void;
   onStageSelect: (stage: CanvasStage) => void;

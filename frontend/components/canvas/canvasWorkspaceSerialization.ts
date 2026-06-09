@@ -1,9 +1,12 @@
 import type { Node } from "@xyflow/react";
 import { createDefaultProblemStructureState } from "@/components/canvas/problemStructureModel";
 import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDocumentHelpers";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasLocalState,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
@@ -33,6 +36,8 @@ export type WorkspaceFieldSignatures = {
   solution_topics: string;
   final_solution_summary: string;
   node_positions: string;
+  artifact_generation: string;
+  ideation_bubble_graph: string;
   imported_state: string;
 };
 
@@ -48,6 +53,8 @@ export type FullWorkspacePatchPayloadInput = {
   problemStructure?: CanvasProblemStructureState;
   finalSolutionSummary?: CanvasFinalSolutionSummary;
   nodePositions: CanvasNodePositionsByStage;
+  artifactGeneration?: CanvasArtifactGenerationMap;
+  ideationBubbleGraph?: CanvasIdeationBubbleGraph;
   importedState: MeetingState | null;
 };
 
@@ -67,6 +74,22 @@ type CanvasPersonalNotePayloadSource = {
   title: string;
   body: string;
 };
+
+function canonicalizeProblemStructureForSharedSignature(
+  raw: CanvasProblemStructureState | undefined,
+) {
+  const problemStructure = raw || createDefaultProblemStructureState();
+  return {
+    method: problemStructure.method,
+    mode: problemStructure.mode || "",
+    revision: Number(problemStructure.revision || 0),
+    source_generation_id: problemStructure.source_generation_id || "",
+    based_on_transcript_revision: Number(problemStructure.based_on_transcript_revision || 0),
+    updated_at: problemStructure.updated_at || "",
+    nodes: problemStructure.nodes || [],
+    groups: problemStructure.groups || [],
+  };
+}
 
 function stripLeadingTimestamp(text: string) {
   return text
@@ -96,6 +119,8 @@ export function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
     solution_topics: "",
     final_solution_summary: "",
     node_positions: "",
+    artifact_generation: "",
+    ideation_bubble_graph: "",
     imported_state: "",
   };
 }
@@ -259,6 +284,34 @@ export function normalizeCanvasNodePositionsForComputedIdeation(
   return normalized;
 }
 
+export function createEmptyIdeationBubbleGraph(): CanvasIdeationBubbleGraph {
+  return {
+    version: 1,
+    update_cycle: 0,
+    bubbles: [],
+    processed_utterance_ids: [],
+    updated_at: "",
+  };
+}
+
+export function normalizeIdeationBubbleGraphForWorkspace(
+  graph: CanvasIdeationBubbleGraph | null | undefined,
+): CanvasIdeationBubbleGraph {
+  if (!graph || typeof graph !== "object") {
+    return createEmptyIdeationBubbleGraph();
+  }
+  return {
+    version: Number(graph.version || 1),
+    update_cycle: Number(graph.update_cycle || 0),
+    layout_revision: Number(graph.layout_revision || 0),
+    bubbles: Array.isArray(graph.bubbles) ? graph.bubbles : [],
+    processed_utterance_ids: Array.isArray(graph.processed_utterance_ids)
+      ? graph.processed_utterance_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [],
+    updated_at: graph.updated_at || "",
+  };
+}
+
 export function buildWorkspaceFieldSignatures(input: {
   meetingGoal: string;
   meetingGoalContext: string;
@@ -270,8 +323,12 @@ export function buildWorkspaceFieldSignatures(input: {
   problemStructure?: CanvasProblemStructureState;
   finalSolutionSummary?: CanvasFinalSolutionSummary;
   nodePositions: CanvasNodePositionsByStage;
+  artifactGeneration?: CanvasArtifactGenerationMap;
+  ideationBubbleGraph?: CanvasIdeationBubbleGraph;
   importedState: MeetingState | null;
 }): WorkspaceFieldSignatures {
+  const ideationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(input.ideationBubbleGraph);
+  const artifactGeneration = normalizeCanvasArtifactGeneration(input.artifactGeneration);
   return {
     meeting_goal: input.meetingGoal.trim(),
     meeting_goal_context: input.meetingGoalContext.trim(),
@@ -280,10 +337,12 @@ export function buildWorkspaceFieldSignatures(input: {
     canvas_items: JSON.stringify(buildWorkspaceCanvasItemsPayload(input.canvasItems)),
     custom_groups: JSON.stringify(serializeCustomGroups(input.customGroups)),
     problem_groups: JSON.stringify(buildWorkspaceProblemGroupsPayload(input.problemGroups)),
-    problem_structure: JSON.stringify(input.problemStructure || createDefaultProblemStructureState()),
+    problem_structure: JSON.stringify(canonicalizeProblemStructureForSharedSignature(input.problemStructure)),
     solution_topics: JSON.stringify([]),
     final_solution_summary: JSON.stringify(buildFinalSolutionSummaryPayload(input.finalSolutionSummary)),
     node_positions: JSON.stringify(normalizeCanvasNodePositionsForComputedIdeation(input.nodePositions)),
+    artifact_generation: JSON.stringify(artifactGeneration),
+    ideation_bubble_graph: JSON.stringify(ideationBubbleGraph),
     imported_state: JSON.stringify(input.importedState || null),
   };
 }
@@ -302,6 +361,8 @@ export function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadI
     solution_topics: [],
     final_solution_summary: buildFinalSolutionSummaryPayload(input.finalSolutionSummary),
     node_positions: normalizeCanvasNodePositionsForComputedIdeation(input.nodePositions),
+    artifact_generation: normalizeCanvasArtifactGeneration(input.artifactGeneration),
+    ideation_bubble_graph: normalizeIdeationBubbleGraphForWorkspace(input.ideationBubbleGraph),
     imported_state: input.importedState,
   };
 }
@@ -318,6 +379,8 @@ export function buildSharedCanvasSignature(payload: {
   solution_topics?: unknown[];
   final_solution_summary?: unknown;
   node_positions?: CanvasNodePositionsByStage;
+  artifact_generation?: CanvasArtifactGenerationMap;
+  ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state: MeetingState | null;
 }) {
   return JSON.stringify({
@@ -327,9 +390,13 @@ export function buildSharedCanvasSignature(payload: {
     canvas_items: payload.canvas_items,
     custom_groups: payload.custom_groups,
     problem_groups: payload.problem_groups,
-    problem_structure: payload.problem_structure,
+    problem_structure: canonicalizeProblemStructureForSharedSignature(
+      payload.problem_structure as CanvasProblemStructureState | undefined,
+    ),
     solution_topics: payload.solution_topics,
     final_solution_summary: payload.final_solution_summary,
+    artifact_generation: normalizeCanvasArtifactGeneration(payload.artifact_generation),
+    ideation_bubble_graph: normalizeIdeationBubbleGraphForWorkspace(payload.ideation_bubble_graph),
     imported_state: payload.imported_state,
   });
 }

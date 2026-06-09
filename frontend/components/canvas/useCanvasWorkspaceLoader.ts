@@ -3,8 +3,10 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { getCanvasPersonalNotes, getCanvasWorkspaceState } from "@/lib/api";
 import type {
+  CanvasArtifactGenerationMap,
   CanvasCustomGroup,
   CanvasFinalSolutionSummary,
+  CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
   CanvasPersonalNote,
   CanvasProblemDefinitionGroup,
@@ -16,17 +18,21 @@ import {
   buildMeetingStateSignature,
   buildSharedCanvasSignature,
   buildWorkspaceFieldSignatures,
+  createEmptyIdeationBubbleGraph,
   normalizeCanvasNodePositionsForComputedIdeation,
+  normalizeIdeationBubbleGraphForWorkspace,
   readSharedWorkspaceSessionCache,
   serializeCustomGroups,
   summarizeNodePositionsForDebug,
   type AgendaOverride,
   type WorkspaceFieldSignatures,
 } from "@/components/canvas/canvasWorkspaceSerialization";
+import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
 import {
   buildProblemStructureStatePayload,
   createDefaultProblemStructureState,
   hydrateProblemStructureState,
+  type ProblemStructureArtifactMeta,
   type ProblemDefinitionMode,
   type ProblemDefinitionPhase,
   type ProblemStructureGroupViewModel,
@@ -108,6 +114,8 @@ type UseCanvasWorkspaceLoaderOptions<
   setCustomGroups: Dispatch<SetStateAction<CanvasCustomGroup[]>>;
   setEditingProblemGroupId: Dispatch<SetStateAction<string>>;
   setFinalSummaryDocument: Dispatch<SetStateAction<CanvasFinalSolutionSummary>>;
+  setArtifactGeneration: Dispatch<SetStateAction<CanvasArtifactGenerationMap>>;
+  setIdeationBubbleGraph: Dispatch<SetStateAction<CanvasIdeationBubbleGraph>>;
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
   setLoadingProblemGroupIds: Dispatch<SetStateAction<string[]>>;
@@ -124,6 +132,7 @@ type UseCanvasWorkspaceLoaderOptions<
   setProblemStructureDraftMethod: Dispatch<SetStateAction<ProblemStructureMethod>>;
   setProblemStructureDraftMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
+  setProblemStructureArtifactMeta: Dispatch<SetStateAction<ProblemStructureArtifactMeta>>;
   setProblemStructureMethod: Dispatch<SetStateAction<ProblemStructureMethod>>;
   setProblemStructureNodes: Dispatch<SetStateAction<ProblemStructureNodeViewModel[]>>;
   setProblemStructurePending: Dispatch<SetStateAction<boolean>>;
@@ -164,6 +173,8 @@ export function useCanvasWorkspaceLoader<
   setCustomGroups,
   setEditingProblemGroupId,
   setFinalSummaryDocument,
+  setArtifactGeneration,
+  setIdeationBubbleGraph,
   setImportedState,
   setImportOverrideActive,
   setLoadingProblemGroupIds,
@@ -180,6 +191,7 @@ export function useCanvasWorkspaceLoader<
   setProblemStructureDraftMethod,
   setProblemStructureDraftMode,
   setProblemStructureGroups,
+  setProblemStructureArtifactMeta,
   setProblemStructureMethod,
   setProblemStructureNodes,
   setProblemStructurePending,
@@ -210,9 +222,17 @@ export function useCanvasWorkspaceLoader<
     setProblemStructureSetupOpen(false);
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
+    setProblemStructureArtifactMeta({
+      revision: 0,
+      sourceGenerationId: "",
+      basedOnTranscriptRevision: 0,
+      updatedAt: "",
+    });
     setProblemStructurePending(false);
     resetProblemStructureEditorState();
     setFinalSummaryDocument(createEmptyFinalSolutionSummary());
+    setArtifactGeneration({});
+    setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
     setSummaryDocumentEditMode(false);
     setSummaryEvidenceOpenGroupIds(new Set());
     setPersonalNotes([]);
@@ -230,6 +250,12 @@ export function useCanvasWorkspaceLoader<
     setProblemStructureSetupOpen(false);
     setProblemStructureNodes([]);
     setProblemStructureGroups([]);
+    setProblemStructureArtifactMeta({
+      revision: 0,
+      sourceGenerationId: "",
+      basedOnTranscriptRevision: 0,
+      updatedAt: "",
+    });
     setProblemStructurePending(false);
     resetProblemStructureEditorState();
     setProblemDefinitionStagePending(false);
@@ -262,7 +288,6 @@ export function useCanvasWorkspaceLoader<
             : undefined;
 
         const sharedGroups = hydrateProblemGroups(saved.problem_groups || []);
-        const sharedStage = normalizeWorkspaceStage(saved.stage);
         const nextPersonalNotes = (savedPersonalNotes.personal_notes || []).map((note) =>
           toPersonalNote(note, meetingId),
         ) as TPersonalNote[];
@@ -286,7 +311,7 @@ export function useCanvasWorkspaceLoader<
           shouldUseLocalCanvas ? savedLocalCanvasState?.problem_structure : saved.problem_structure,
           nextGroups,
         );
-        const nextStage = savedLocalStage || sharedStage;
+        const nextStage = savedLocalStage || "ideation";
         const displayStage = captureStageOverride || nextStage;
         const displayProblemStructure =
           displayStage === "problem-definition" && captureProblemPhaseOverride
@@ -300,12 +325,16 @@ export function useCanvasWorkspaceLoader<
             ? savedLocalCanvasState?.final_solution_summary || saved.final_solution_summary || null
             : saved.final_solution_summary || null,
         );
+        const nextArtifactGeneration = normalizeCanvasArtifactGeneration(saved.artifact_generation || {});
         const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(
           shouldUseLocalCanvas
             ? savedLocalCanvasState?.node_positions || {}
             : Object.keys(saved.node_positions || {}).length > 0
               ? saved.node_positions || {}
               : cachedNodePositions || {},
+        );
+        const nextIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+          saved.ideation_bubble_graph,
         );
         const nextImportedState = shouldUseLocalCanvas
           ? savedLocalCanvasState?.imported_state || null
@@ -318,6 +347,8 @@ export function useCanvasWorkspaceLoader<
 
         setProblemGroups(nextGroups);
         setFinalSummaryDocument(nextFinalSummary);
+        setArtifactGeneration(nextArtifactGeneration);
+        setIdeationBubbleGraph(nextIdeationBubbleGraph);
         setSummaryDocumentEditMode(false);
         setSummaryEvidenceOpenGroupIds(new Set());
         setPersonalNotes(nextPersonalNotes);
@@ -338,6 +369,12 @@ export function useCanvasWorkspaceLoader<
         setProblemStructureSetupOpen(false);
         setProblemStructureNodes(displayProblemStructure.nodes);
         setProblemStructureGroups(displayProblemStructure.groups);
+        setProblemStructureArtifactMeta({
+          revision: displayProblemStructure.revision,
+          sourceGenerationId: displayProblemStructure.sourceGenerationId,
+          basedOnTranscriptRevision: displayProblemStructure.basedOnTranscriptRevision,
+          updatedAt: displayProblemStructure.updatedAt,
+        });
         setProblemStructurePending(false);
         resetProblemStructureEditorState();
         analysisSignatureAtImportRef.current = nextImportedState
@@ -356,7 +393,9 @@ export function useCanvasWorkspaceLoader<
           problem_structure: buildProblemStructureStatePayload(displayProblemStructure),
           solution_topics: [],
           final_solution_summary: buildFinalSolutionSummaryPayload(nextFinalSummary),
+          artifact_generation: nextArtifactGeneration,
           node_positions: nextNodePositions,
+          ideation_bubble_graph: nextIdeationBubbleGraph,
           imported_state: nextImportedState,
         });
         lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
@@ -369,6 +408,8 @@ export function useCanvasWorkspaceLoader<
           problemGroups: nextGroups,
           problemStructure: buildProblemStructureStatePayload(displayProblemStructure),
           finalSolutionSummary: nextFinalSummary,
+          artifactGeneration: nextArtifactGeneration,
+          ideationBubbleGraph: nextIdeationBubbleGraph,
           nodePositions: nextNodePositions,
           importedState: nextImportedState,
         });
@@ -402,6 +443,8 @@ export function useCanvasWorkspaceLoader<
 
         setProblemGroups([]);
         setFinalSummaryDocument(emptyFinalSummary);
+        setArtifactGeneration({});
+        setIdeationBubbleGraph(createEmptyIdeationBubbleGraph());
         setSummaryDocumentEditMode(false);
         setSummaryEvidenceOpenGroupIds(new Set());
         setPersonalNotes([]);
@@ -420,6 +463,12 @@ export function useCanvasWorkspaceLoader<
         setProblemStructureSetupOpen(false);
         setProblemStructureNodes([]);
         setProblemStructureGroups([]);
+        setProblemStructureArtifactMeta({
+          revision: 0,
+          sourceGenerationId: "",
+          basedOnTranscriptRevision: 0,
+          updatedAt: "",
+        });
         setProblemStructurePending(false);
         resetProblemStructureEditorState();
         lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
@@ -433,7 +482,9 @@ export function useCanvasWorkspaceLoader<
           problem_structure: defaultProblemStructure,
           solution_topics: [],
           final_solution_summary: buildFinalSolutionSummaryPayload(emptyFinalSummary),
+          artifact_generation: {},
           node_positions: {},
+          ideation_bubble_graph: createEmptyIdeationBubbleGraph(),
           imported_state: null,
         });
         lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
@@ -446,6 +497,8 @@ export function useCanvasWorkspaceLoader<
           problemGroups: [],
           problemStructure: defaultProblemStructure,
           finalSolutionSummary: emptyFinalSummary,
+          artifactGeneration: {},
+          ideationBubbleGraph: createEmptyIdeationBubbleGraph(),
           nodePositions: {},
           importedState: null,
         });
@@ -486,6 +539,8 @@ export function useCanvasWorkspaceLoader<
     setCustomGroups,
     setEditingProblemGroupId,
     setFinalSummaryDocument,
+    setArtifactGeneration,
+    setIdeationBubbleGraph,
     setImportedState,
     setImportOverrideActive,
     setLoadingProblemGroupIds,
@@ -501,6 +556,7 @@ export function useCanvasWorkspaceLoader<
     setProblemGroups,
     setProblemStructureDraftMethod,
     setProblemStructureDraftMode,
+    setProblemStructureArtifactMeta,
     setProblemStructureGroups,
     setProblemStructureMethod,
     setProblemStructureNodes,

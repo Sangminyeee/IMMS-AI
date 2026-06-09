@@ -18,6 +18,7 @@ type UseCanvasHeaderActionsOptions = {
   onRefreshProblemChunkSummaries: () => void | Promise<void>;
   onDebugRegenerateProblemDefinition: () => void | Promise<void>;
   onSaveMeetingGoalEdit: () => void | Promise<void>;
+  onSaveMeetingTitle: (title: string) => Promise<boolean>;
   onStageSelect: (stage: CanvasStage) => void | Promise<void>;
   onOpenMeetingGoalEditor: () => void;
   onCancelMeetingGoalEdit: () => void;
@@ -37,6 +38,7 @@ export function useCanvasHeaderActions({
   onRefreshProblemChunkSummaries,
   onDebugRegenerateProblemDefinition,
   onSaveMeetingGoalEdit,
+  onSaveMeetingTitle,
   onStageSelect,
   onOpenMeetingGoalEditor,
   onCancelMeetingGoalEdit,
@@ -83,6 +85,10 @@ export function useCanvasHeaderActions({
     void onSaveMeetingGoalEdit();
   }, [onSaveMeetingGoalEdit]);
 
+  const handleSaveMeetingTitle = useCallback((title: string) => {
+    return onSaveMeetingTitle(title);
+  }, [onSaveMeetingTitle]);
+
   const handleStageSelect = useCallback((nextStage: CanvasStage) => {
     void onStageSelect(nextStage);
   }, [onStageSelect]);
@@ -98,6 +104,7 @@ export function useCanvasHeaderActions({
     onOpenMeetingGoalEditor,
     onCancelMeetingGoalEdit,
     onSaveMeetingGoalEdit: handleSaveMeetingGoalEdit,
+    onSaveMeetingTitle: handleSaveMeetingTitle,
     onMeetingGoalEditorDraftChange: setMeetingGoalEditorDraft,
     onMeetingGoalContextEditorDraftChange: setMeetingGoalContextEditorDraft,
     onStageSelect: handleStageSelect,

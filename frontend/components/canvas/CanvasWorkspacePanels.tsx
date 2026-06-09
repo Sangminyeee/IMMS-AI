@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type RefObject } from "react";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { MoaRouteTransitionLink } from "@/components/moa-ui/MoaRouteTransitionLink";
 import type {
   CanvasHeaderProps,
 } from "@/components/canvas/CanvasHeader";
@@ -27,41 +28,32 @@ import type { CanvasQuickAskMessage } from "@/components/canvas/useCanvasQuickAs
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 type ProblemDefinitionPhase = "explore" | "structure";
+export type CanvasDebugResetScope = "problem" | "summary" | "all";
 
 const CANVAS_SHELL_STAGES: CanvasStage[] = ["ideation", "problem-definition", "solution"];
 const AI_GUIDE_BACKGROUND_STYLE: CSSProperties = {
   backgroundImage: "url('/figma-assets/AI-background.png')",
 };
 const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
+  "--moa-canvas-stage-transition-ms": "1000ms",
+  "--moa-canvas-stage-fade-in-ms": "740ms",
   "--canvas-left-panel": "clamp(328px, 17.083vw, 437px)",
   "--canvas-right-panel": "clamp(340px, 17.708vw, 453px)",
   "--canvas-left-pad": "clamp(38px, 1.979vw, 51px)",
   "--canvas-left-content": "clamp(243px, 12.656vw, 324px)",
-  "--canvas-left-logo-top": "clamp(34px, 3.148vh, 45px)",
-  "--canvas-left-title-gap": "clamp(22px, 2.037vh, 29px)",
+  "--canvas-left-logo-top": "clamp(35px, 3.241vh, 45px)",
+  "--canvas-left-title-gap": "clamp(11px, 1.019vh, 15px)",
   "--canvas-left-keyword-gap": "clamp(12px, 1.111vh, 16px)",
-  "--canvas-left-divider": "clamp(159px, 14.722vh, 212px)",
-  "--canvas-left-content-top": "clamp(171px, 15.833vh, 228px)",
   "--canvas-note-composer-pt": "clamp(16px, 1.481vh, 21px)",
   "--canvas-note-composer-pb": "clamp(26px, 2.407vh, 35px)",
   "--canvas-note-list-pt": "clamp(29px, 2.685vh, 39px)",
-  "--canvas-note-card-gap": "clamp(12px, 1.111vh, 16px)",
+  "--canvas-note-card-gap": "clamp(15px, 1.389vh, 20px)",
   "--canvas-input-height": "clamp(33px, 3.056vh, 44px)",
   "--canvas-textarea-height": "clamp(85px, 7.87vh, 113px)",
   "--canvas-right-pad": "clamp(23px, 1.198vw, 31px)",
   "--canvas-right-header": "clamp(76px, 7.037vh, 101px)",
-  "--canvas-right-stage-bottom": "clamp(291px, 26.944vh, 388px)",
-  "--canvas-right-ai-title-top": "clamp(332px, 30.741vh, 443px)",
-  "--canvas-right-ai-status-top": "clamp(354px, 32.778vh, 472px)",
-  "--canvas-right-assistant-top": "clamp(605px, 56.019vh, 807px)",
-  "--canvas-right-search-top": "clamp(994px, 92.037vh, 1325px)",
-  "--canvas-right-search-x": "clamp(19px, 0.99vw, 25px)",
   "--canvas-ai-bg-width": "clamp(296px, 15.417vw, 395px)",
   "--canvas-ai-bg-height": "clamp(527px, 48.796vh, 703px)",
-  "--canvas-ai-bg-main-left": "clamp(180px, 9.375vw, 240px)",
-  "--canvas-ai-bg-main-top": "clamp(305px, 28.241vh, 407px)",
-  "--canvas-ai-bg-secondary-left": "clamp(15px, 0.781vw, 20px)",
-  "--canvas-ai-bg-secondary-top": "clamp(890px, 82.407vh, 1187px)",
   "--canvas-transport-bottom": "clamp(39px, 3.611vh, 52px)",
   "--canvas-transport-width": "clamp(198px, 10.313vw, 264px)",
   "--canvas-transport-height": "clamp(47px, 4.352vh, 63px)",
@@ -75,6 +67,37 @@ const canvasShellStyle: CSSProperties & Record<`--${string}`, string> = {
   "--canvas-transport-wave": "clamp(29px, 1.51vw, 39px)",
   "--canvas-transport-arrow": "clamp(18px, 0.938vw, 24px)",
   "--canvas-transport-skip": "clamp(22px, 1.146vw, 29px)",
+};
+
+const panelButtonClasses = {
+  save:
+    "moa-action-button ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-[34.535px] bg-[#eff0f6] px-[6.907px] py-[6.907px] transition hover:bg-[#e3e5ee]",
+  share:
+    "moa-action-button flex h-[32.4px] items-center justify-center gap-[8.1px] overflow-hidden rounded-[67.5px] bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.175px] transition-[width,background-color] hover:bg-[#3f3f43]",
+  stageBase:
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[292px] max-w-full items-center rounded-[17213890px] px-[12.312px] text-left transition",
+  stageActive:
+    "border-[0.781px] border-[#01a3ff] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)]",
+  stageInactive:
+    "border-[0.8px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] hover:border-[#01a3ff] hover:bg-[#f4fbff]",
+  stageNumber:
+    "grid h-[20.521px] w-[20.521px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold leading-[15.39px]",
+  primary:
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] shadow-[0_-4.05px_2.7px_rgba(255,255,255,0.29),0_1.953px_6.007px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+  secondary:
+    "moa-action-button moa-canvas-stage-control flex h-[33px] w-[300px] max-w-none items-center justify-center rounded-[674.999px] border-[0.781px] border-[rgba(1,163,255,0.33)] bg-white shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none",
+  aiInput:
+    "moa-action-input -ml-[4px] flex h-[47.936px] w-[303px] max-w-none items-center rounded-[8483.116px] border-[0.848px] border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]",
+  aiSend:
+    "moa-action-button ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-[575.735px] border-[0.666px] border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none",
+};
+
+const panelButtonTextClasses = {
+  save: "moa-font-pretendard text-center text-[10px] font-semibold leading-[1.4] tracking-[-0.025px] text-[#505050]",
+  share: "moa-font-pretendard shrink-0 whitespace-nowrap text-center text-[12px] font-semibold leading-[20.008px] tracking-[-0.03px] text-[#ededed]",
+  stage: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]",
+  primary: "moa-font-pretendard text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white",
+  secondary: "moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#236cf3]",
 };
 
 export type CanvasWorkspaceParticipant = {
@@ -121,35 +144,10 @@ function MicIcon({ className = "" }: { className?: string }) {
   );
 }
 
-function ArrowLeftIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M15 6 9 12l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SkipForwardIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M7 6.8v10.4L15 12 7 6.8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M17 7v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function SendIcon({ className = "" }: { className?: string }) {
   return (
     <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
       <path d="M5 12h13M13 7l5 5-5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PaperclipIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="m8.8 12.8 5.8-5.8a3 3 0 1 1 4.2 4.2l-7.1 7.1a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -164,11 +162,19 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 
 function ShareIcon({ className = "" }: { className?: string }) {
   return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none">
-      <path d="M8.3 12.6 15.8 17M15.7 7 8.3 11.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <circle cx="6.6" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="17.5" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="17.5" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+    <svg aria-hidden="true" className={className} viewBox="0 0 13 13" fill="none">
+      <g clipPath="url(#canvas-share-icon-clip)">
+        <path d="M9.61777 4.27656C10.5032 4.27656 11.2209 3.55882 11.2209 2.67344C11.2209 1.78806 10.5032 1.07031 9.61777 1.07031C8.73239 1.07031 8.01465 1.78806 8.01465 2.67344C8.01465 3.55882 8.73239 4.27656 9.61777 4.27656Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M3.20542 8.01484C4.0908 8.01484 4.80855 7.2971 4.80855 6.41172C4.80855 5.52634 4.0908 4.80859 3.20542 4.80859C2.32004 4.80859 1.60229 5.52634 1.60229 6.41172C1.60229 7.2971 2.32004 8.01484 3.20542 8.01484Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9.61777 11.757C10.5032 11.757 11.2209 11.0393 11.2209 10.1539C11.2209 9.26852 10.5032 8.55078 9.61777 8.55078C8.73239 8.55078 8.01465 9.26852 8.01465 10.1539C8.01465 11.0393 8.73239 11.757 9.61777 11.757Z" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4.58667 7.21875L8.23645 9.34556" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M8.23111 3.48047L4.58667 5.60728" stroke="#EDEDED" strokeWidth="1.19703" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+      <defs>
+        <clipPath id="canvas-share-icon-clip">
+          <rect width="12.825" height="12.825" fill="white" />
+        </clipPath>
+      </defs>
     </svg>
   );
 }
@@ -237,18 +243,15 @@ function StageSteps({
           <button
             key={item}
             type="button"
+            data-stage-active={active ? "true" : "false"}
             onClick={() => onStageSelect(item)}
-            className={`flex h-[33px] w-full items-center rounded-full border px-[11px] text-left shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition ${
-              active
-                ? "border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)]"
-                : "border-[rgba(1,163,255,0.33)] bg-white text-[#7c7c7c] hover:border-[#01a3ff] hover:bg-[#f4fbff]"
-            }`}
+            className={`${panelButtonClasses.stageBase} ${active ? panelButtonClasses.stageActive : panelButtonClasses.stageInactive}`}
           >
-            <span className={`grid h-[20.5px] w-[20.5px] shrink-0 place-items-center rounded-full text-[10.125px] font-semibold ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
+            <span className={`${panelButtonClasses.stageNumber} ${active ? "bg-white text-[#01a3ff]" : "bg-white text-[#7c7c7c] shadow-[0_2px_1px_rgba(52,43,79,0.05)]"}`}>
               {stageNumber(item)}
             </span>
-            <span className="ml-[8px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px]">{stageLabel(item, problemDefinitionPhase)}</span>
-            {!active ? <ChevronRightIcon className="ml-auto h-[14px] w-[14px] text-[#90a1b9]" /> : null}
+            <span className={`ml-[8px] ${panelButtonTextClasses.stage} ${active ? "text-white" : "text-[#7c7c7c]"}`}>{stageLabel(item, problemDefinitionPhase)}</span>
+            {!active ? <ChevronRightIcon className="ml-auto h-[12px] w-[7px] text-[#90a1b9]" /> : null}
           </button>
         );
       })}
@@ -259,9 +262,10 @@ function StageSteps({
 function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   const { view, meetingGoal, handlers } = header;
   const {
-    meetingTitle,
     isRecording,
     recordingStartedAtMs,
+    meetingTimerStartedAtMs,
+    meetingTimerEndedAtMs,
   } = view;
   const {
     meetingGoalDraft,
@@ -282,7 +286,8 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!isRecording || !recordingStartedAtMs) {
+    const timerRunning = Boolean((meetingTimerStartedAtMs || recordingStartedAtMs) && !meetingTimerEndedAtMs);
+    if (!timerRunning) {
       return undefined;
     }
 
@@ -293,10 +298,13 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       window.cancelAnimationFrame(frameId);
       window.clearInterval(intervalId);
     };
-  }, [isRecording, recordingStartedAtMs]);
+  }, [isRecording, meetingTimerEndedAtMs, meetingTimerStartedAtMs, recordingStartedAtMs]);
 
+  const timerStartedAtMs = meetingTimerStartedAtMs || recordingStartedAtMs || null;
+  const timerEndedAtMs = meetingTimerEndedAtMs || null;
+  const timerRunning = Boolean(timerStartedAtMs && !timerEndedAtMs);
   const recordingElapsedText = formatRecordingElapsed(
-    isRecording && recordingStartedAtMs ? nowMs - recordingStartedAtMs : 0,
+    timerStartedAtMs ? (timerEndedAtMs || nowMs) - timerStartedAtMs : 0,
   );
 
   return (
@@ -304,17 +312,19 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
       <button
         type="button"
         onClick={meetingGoalEditorOpen ? onCancelMeetingGoalEdit : onOpenMeetingGoalEditor}
-        className="pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
+        className="moa-action-button pointer-events-auto flex h-[39px] w-[212px] items-center justify-center rounded-full border border-white bg-white px-[12px] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)] transition hover:border-[#01a3ff]/25"
       >
-        {meetingGoalDraft.trim() || meetingTitle || "회의 목표 입력란"}
+        <span className="moa-font-pretendard truncate text-center text-[13px] font-semibold leading-[1.4] tracking-[-0.0325px] text-[#363636]">
+          {meetingGoalDraft.trim() || "회의 목표 입력"}
+        </span>
       </button>
       <div className="mt-[9px] inline-flex h-[32px] w-[110px] items-center justify-center gap-[8px] rounded-full border border-[#d8d8d8] bg-white px-[12px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#363636] shadow-[0_1.35px_1.35px_rgba(0,0,0,0.1)]">
-        <ClockIcon className={`h-[16.4px] w-[16.4px] ${isRecording ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
+        <ClockIcon className={`h-[16.4px] w-[16.4px] ${timerRunning ? "text-[#01a3ff]" : "text-[#7c7c7c]"}`} />
         <span>{recordingElapsedText}</span>
       </div>
 
       {meetingGoalEditorOpen ? (
-        <div className="pointer-events-auto mt-3 w-[min(520px,calc(100vw-64px))] rounded-[16px] border border-black/10 bg-white p-4 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+        <div className="moa-popover-panel pointer-events-auto mt-3 w-[min(520px,calc(100vw-64px))] rounded-[16px] border border-black/10 bg-white p-4 text-left shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
           <p className="text-[15px] font-bold text-[#111]">회의 목표 설정</p>
           <input
             value={meetingGoalEditorDraft}
@@ -327,23 +337,25 @@ function MeetingGoalOverlay({ header }: { header: CanvasHeaderProps }) {
               }
             }}
             placeholder="회의 목표"
-            className="mt-3 h-[40px] w-full rounded-[10px] border border-[#cecccc] bg-white px-3 text-[13px] text-[#111] outline-none focus:border-[#01a3ff]"
+            className="moa-action-input mt-3 h-[40px] w-full rounded-[10px] border border-[#cecccc] bg-white px-3 text-[13px] text-[#111] outline-none focus:border-[#01a3ff]"
           />
           <textarea
             value={meetingGoalContextEditorDraft}
             onChange={(event) => onMeetingGoalContextEditorDraftChange(event.target.value)}
             placeholder="관련 맥락"
-            className="mt-2 min-h-[78px] w-full resize-none rounded-[10px] border border-[#cecccc] bg-white px-3 py-2 text-[13px] leading-5 text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
+            className="moa-action-input mt-2 min-h-[78px] w-full resize-none rounded-[10px] border border-[#cecccc] bg-white px-3 py-2 text-[13px] leading-5 text-[#4d4d4d] outline-none focus:border-[#01a3ff]"
           />
           <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[#90a1b9]">
             {meetingGoalContextDraft.trim() ? `현재 맥락: ${meetingGoalContextDraft.trim()}` : "목표와 맥락은 AI 분석의 참고 정보로 사용됩니다."}
           </p>
           <div className="mt-3 flex justify-end gap-2">
-            <button type="button" onClick={onCancelMeetingGoalEdit} className="rounded-full bg-[#eff0f6] px-4 py-2 text-[12px] font-semibold text-[#505050]">
-              취소
+            <button type="button" onClick={onCancelMeetingGoalEdit} className="moa-action-button rounded-full bg-[#eff0f6] px-4 py-2">
+              <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] text-[#505050]">취소</span>
             </button>
-            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 text-[12px] font-semibold tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
-              {meetingGoalSaving ? "저장 중" : "저장"}
+            <button type="button" onClick={onSaveMeetingGoalEdit} disabled={meetingGoalSaving} className="moa-action-button rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-5 py-2 shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none">
+              <span className="moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white">
+                {meetingGoalSaving ? "저장 중" : "저장"}
+              </span>
             </button>
           </div>
         </div>
@@ -356,35 +368,16 @@ function CenterTransportControls({ header }: { header: CanvasHeaderProps }) {
   const { view, handlers } = header;
   return (
     <div className="pointer-events-none absolute bottom-[var(--canvas-transport-bottom)] left-1/2 z-20 -translate-x-1/2">
-      <div className="pointer-events-auto relative h-[var(--canvas-transport-height)] w-[var(--canvas-transport-width)] rounded-full bg-[#f9f9f9] shadow-[0_-0.675px_6.8px_rgba(0,0,0,0.07),0_0.675px_2.025px_rgba(133,133,133,0.15),0_3.375px_3.375px_rgba(133,133,133,0.13),0_7.425px_4.725px_rgba(133,133,133,0.08),0_12.825px_5.4px_rgba(133,133,133,0.02)]">
-        <button
-          type="button"
-          onClick={handlers.onBackToDashboard}
-          aria-label="대시보드로 돌아가기"
-          className="absolute left-[var(--canvas-transport-left-x)] top-1/2 grid h-[var(--canvas-transport-side)] w-[var(--canvas-transport-side)] -translate-y-1/2 place-items-center rounded-full text-[#90a1b9] transition hover:bg-white hover:text-[#01a3ff]"
-        >
-          <ArrowLeftIcon className="h-[var(--canvas-transport-arrow)] w-[var(--canvas-transport-arrow)]" />
-        </button>
-        <button
-          type="button"
-          onClick={handlers.onRecordingToggle}
-          aria-label={view.isRecording ? "녹음 중지" : "녹음 시작"}
-          className="absolute left-1/2 top-[var(--canvas-transport-fab-top)] grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] -translate-x-1/2 place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition"
-        >
-          <span className="grid h-[var(--canvas-transport-inner)] w-[var(--canvas-transport-inner)] place-items-center rounded-full border border-white/30 bg-[linear-gradient(180deg,#01a3ff_0%,#236cf3_100%)] shadow-[0_-3.44px_2.29px_rgba(255,255,255,0.29),0_1.66px_5.1px_rgba(1,231,255,0.3)]">
-            {view.isRecording ? <RecordingWaveIcon className="h-[var(--canvas-transport-wave)] w-[var(--canvas-transport-wave)]" /> : <MicIcon className="h-[var(--canvas-transport-mic)] w-[var(--canvas-transport-mic)]" />}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={handlers.onEndMeetingClick}
-          disabled={view.endMeetingSaving}
-          aria-label="회의 종료"
-          className="absolute right-[var(--canvas-transport-right-x)] top-1/2 grid h-[var(--canvas-transport-side)] w-[var(--canvas-transport-side)] -translate-y-1/2 place-items-center rounded-full text-[#90a1b9] transition hover:bg-white hover:text-[#01a3ff] disabled:opacity-50"
-        >
-          <SkipForwardIcon className="h-[var(--canvas-transport-skip)] w-[var(--canvas-transport-skip)]" />
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={handlers.onRecordingToggle}
+        aria-label={view.isRecording ? "녹음 중지" : "녹음 시작"}
+        className="moa-action-icon pointer-events-auto grid h-[var(--canvas-transport-fab)] w-[var(--canvas-transport-fab)] place-items-center rounded-full bg-white text-white shadow-[0_-2.025px_2.7px_rgba(255,255,255,0.25),0_0.675px_2.7px_rgba(209,79,167,0.27)] transition hover:scale-[1.02]"
+      >
+        <span className="grid h-[var(--canvas-transport-inner)] w-[var(--canvas-transport-inner)] place-items-center rounded-full border border-white/30 bg-[linear-gradient(180deg,#01a3ff_0%,#236cf3_100%)] shadow-[0_-3.44px_2.29px_rgba(255,255,255,0.29),0_1.66px_5.1px_rgba(1,231,255,0.3)]">
+          {view.isRecording ? <RecordingWaveIcon className="h-[var(--canvas-transport-wave)] w-[var(--canvas-transport-wave)]" /> : <MicIcon className="h-[var(--canvas-transport-mic)] w-[var(--canvas-transport-mic)]" />}
+        </span>
+      </button>
     </div>
   );
 }
@@ -405,28 +398,30 @@ function PersonalNoteComposerPanel({
   return (
     <section className="border-b border-[#dfdfdf] pb-[var(--canvas-note-composer-pb)] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-composer-pt)]">
       <div className="w-[var(--canvas-left-content)]">
-        <p className="text-[10px] font-medium leading-[11.5px] tracking-[-0.25px] text-black/50">Personal note</p>
-        <h3 className="mt-[2px] text-[14px] font-bold leading-[14.5px] tracking-[-0.35px] text-[#111]">개인 노트</h3>
+        <div className="flex flex-col gap-[3px]">
+          <p className="text-[10px] font-medium leading-[11.5px] tracking-[-0.25px] text-black/50">Personal note</p>
+          <h3 className="text-[14px] font-bold leading-[14.5px] tracking-[-0.35px] text-[#111]">개인 노트</h3>
+        </div>
         <div className="mt-[11px] space-y-[8.7px]">
           <input
             value={composerTitle}
             onChange={(event) => handlers.onTitleChange(event.target.value)}
             placeholder="메모 제목"
-            className="h-[var(--canvas-input-height)] w-full rounded-[8.66px] border border-[#cecccc] bg-white px-[8px] text-[12px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-black/50 focus:border-[#01a3ff]"
+            className="moa-action-input h-[var(--canvas-input-height)] w-full rounded-[8.66px] border border-[#cecccc] bg-white px-[8px] text-[12px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-black/50 focus:border-[#01a3ff]"
           />
           <textarea
             ref={composerBodyRef}
             value={composerBody}
             onChange={(event) => handlers.onBodyChange(event.target.value)}
             placeholder="메모 내용"
-            className="h-[var(--canvas-textarea-height)] w-full resize-none rounded-[11.55px] border border-[#cecccc] bg-white px-[8px] py-[9px] text-[12px] leading-[20px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-[#4d4d4d]/50 focus:border-[#01a3ff]"
+            className="moa-action-input h-[var(--canvas-textarea-height)] w-full resize-none rounded-[11.55px] border border-[#cecccc] bg-white px-[8px] py-[9px] text-[12px] leading-[20px] tracking-[-0.3px] text-[#4d4d4d] outline-none placeholder:text-[#4d4d4d]/50 focus:border-[#01a3ff]"
           />
           <button
             type="button"
             onClick={handlers.onSave}
-            className="ml-auto flex h-[24px] w-[52px] items-center justify-center rounded-full bg-[#eff0f6] text-[10px] font-semibold tracking-[-0.25px] text-[#505050] transition hover:bg-[#e3e5ee]"
+            className={panelButtonClasses.save}
           >
-            저장
+            <span className={panelButtonTextClasses.save}>저장</span>
           </button>
         </div>
       </div>
@@ -472,7 +467,7 @@ function PersonalNoteCard({
         handlers.onDragStart(note.id);
       }}
       onDragEnd={handlers.onDragEnd}
-      className={`min-h-[72px] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
+      className={`moa-action-card min-h-[72px] rounded-[8.66px] border border-[#cecccc] bg-white px-[12px] py-[14px] shadow-[0_0.72px_0_rgba(0,0,0,0.04)] ${stage === "problem-definition" && !isEditing ? "cursor-grab active:cursor-grabbing" : ""} ${dragging ? "opacity-60" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         {isEditing ? (
@@ -480,7 +475,7 @@ function PersonalNoteCard({
             value={draftTitle}
             onChange={(event) => handlers.onDraftTitleChange(event.target.value)}
             autoFocus
-            className="-mx-1 min-w-0 flex-1 rounded-[4px] bg-transparent px-1 py-0 text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448] outline-none transition focus:bg-[#f8fbff]"
+            className="moa-action-input -mx-1 min-w-0 flex-1 rounded-[4px] bg-transparent px-1 py-0 text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448] outline-none transition focus:bg-[#f8fbff]"
           />
         ) : (
           <h4 className="min-w-0 truncate text-[12px] font-bold leading-[1.4] tracking-[-0.3px] text-[#2c3448]">{note.title}</h4>
@@ -493,7 +488,7 @@ function PersonalNoteCard({
                 onClick={handlers.onCancelEdit}
                 aria-label="메모 수정 취소"
                 title="취소"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050]"
               >
                 <XIcon className="h-[12px] w-[12px]" />
               </button>
@@ -502,7 +497,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onSaveEdit(note.id)}
                 aria-label="메모 저장"
                 title="저장"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105"
               >
                 <CheckIcon className="h-[13px] w-[13px]" />
               </button>
@@ -514,7 +509,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onStartEdit(note)}
                 aria-label="메모 수정"
                 title="수정"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
               >
                 <PencilIcon className="h-[13px] w-[13px]" />
               </button>
@@ -523,7 +518,7 @@ function PersonalNoteCard({
                 onClick={() => handlers.onDelete(note.id)}
                 aria-label="메모 삭제"
                 title="삭제"
-                className="grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#fff4f4] hover:text-[#ef4e4e]"
+                className="moa-action-icon grid h-[22px] w-[22px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#fff4f4] hover:text-[#ef4e4e]"
               >
                 <TrashIcon className="h-[13px] w-[13px]" />
               </button>
@@ -538,7 +533,7 @@ function PersonalNoteCard({
           onChange={(event) => handlers.onDraftBodyChange(event.target.value)}
           placeholder="내용 없음"
           rows={1}
-          className="mt-[12px] block min-h-[18px] w-full resize-none overflow-hidden rounded-[4px] bg-transparent p-0 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none transition placeholder:text-[#a3aab5] focus:bg-[#f8fbff]"
+          className="moa-action-input mt-[12px] block min-h-[18px] w-full resize-none overflow-hidden rounded-[4px] bg-transparent p-0 text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982] outline-none transition placeholder:text-[#a3aab5] focus:bg-[#f8fbff]"
         />
       ) : bodyText ? (
         <p className="mt-[12px] whitespace-pre-wrap break-words text-[10px] leading-[1.4] tracking-[-0.25px] text-[#737982]">
@@ -566,53 +561,149 @@ function LeftMeetingPanel({
   composerHandlers: CanvasRightDrawerComposerHandlers;
   noteHandlers: CanvasRightDrawerNoteHandlers;
 }) {
+  const currentMeetingTitle = header.view.meetingTitle || "회의 제목";
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(currentMeetingTitle);
+  const [titleSaving, setTitleSaving] = useState(false);
+
+  useEffect(() => {
+    if (!titleEditing || !titleInputRef.current) return;
+    titleInputRef.current.focus();
+    titleInputRef.current.select();
+  }, [titleEditing]);
+
+  const handleStartTitleEdit = () => {
+    setTitleDraft(currentMeetingTitle);
+    setTitleEditing(true);
+  };
+
+  const handleCancelTitleEdit = () => {
+    setTitleDraft(currentMeetingTitle);
+    setTitleEditing(false);
+  };
+
+  const handleSaveTitleEdit = async () => {
+    if (titleSaving) return;
+    const nextTitle = titleDraft.trim();
+    if (nextTitle === currentMeetingTitle.trim()) {
+      setTitleDraft(currentMeetingTitle);
+      setTitleEditing(false);
+      return;
+    }
+
+    setTitleSaving(true);
+    const saved = await header.handlers.onSaveMeetingTitle(nextTitle);
+    setTitleSaving(false);
+    if (saved) {
+      setTitleEditing(false);
+    } else {
+      titleInputRef.current?.focus();
+    }
+  };
+
   return (
-    <aside className="relative h-full min-h-0 overflow-hidden border-r border-[#cecccc] bg-white">
-      <div className="px-[var(--canvas-left-pad)] pt-[var(--canvas-left-logo-top)]">
-        <MoaLogo size="md" markClassName="h-[23.264px] w-[38.115px]" className="moa-dt-logo gap-[11.5px]" />
+    <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-r border-[#cecccc] bg-white after:pointer-events-none after:absolute after:bottom-0 after:right-0 after:top-0 after:z-20 after:w-px after:bg-[#cecccc]">
+      <header className="shrink-0 border-b border-[#dfdfdf] px-[var(--canvas-left-pad)] pb-[20px] pt-[var(--canvas-left-logo-top)]">
+        <MoaRouteTransitionLink
+          href="/dashboard"
+          aria-label="메인화면으로 이동"
+          className="moa-action-button -m-2 inline-flex w-fit rounded-[10px] p-2 outline-none transition hover:bg-[#f5f9ff] focus-visible:ring-2 focus-visible:ring-[#01a3ff] focus-visible:ring-offset-4 focus-visible:ring-offset-white"
+        >
+          <MoaLogo size="figma" className="moa-dt-logo gap-[8px] text-[21px]" markClassName="h-[24px] w-[39px]" />
+        </MoaRouteTransitionLink>
         <div className="mt-[var(--canvas-left-title-gap)]">
-          <div className="flex items-center gap-[9px]">
-            <h2 className="min-w-0 truncate text-[17.55px] font-bold leading-[1.4] tracking-[-0.4387px] text-[#181818]">{header.view.meetingTitle || "회의 제목"}</h2>
-            <PencilIcon className="h-[12px] w-[12px] shrink-0 text-[#737982]" />
+          <div className="flex min-w-0 items-center gap-[7px]">
+            {titleEditing ? (
+              <div className="flex min-w-0 flex-1 items-center gap-[4px]">
+                <input
+                  ref={titleInputRef}
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      handleCancelTitleEdit();
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleSaveTitleEdit();
+                    }
+                  }}
+                  disabled={titleSaving}
+                  aria-label="회의 제목"
+                  className="moa-action-input min-w-0 flex-1 rounded-[6px] border border-[#cecccc] bg-white px-[7px] py-[2px] text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818] outline-none transition focus:border-[#01a3ff] disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveTitleEdit()}
+                  disabled={titleSaving}
+                  aria-label="회의 제목 저장"
+                  title="저장"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.25),0_1.5px_4px_rgba(1,231,255,0.25)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+                >
+                  <CheckIcon className="h-[13px] w-[13px]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelTitleEdit}
+                  disabled={titleSaving}
+                  aria-label="회의 제목 수정 취소"
+                  title="취소"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full bg-[#eff0f6] text-[#737982] transition hover:bg-[#e3e5ee] hover:text-[#505050] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <XIcon className="h-[12px] w-[12px]" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <h2 className="min-w-0 truncate text-[15px] font-bold leading-[1.4] tracking-[-0.375px] text-[#181818]">{currentMeetingTitle}</h2>
+                <button
+                  type="button"
+                  onClick={handleStartTitleEdit}
+                  aria-label="회의 제목 수정"
+                  title="수정"
+                  className="moa-action-icon grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full text-[#737982] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]"
+                >
+                  <PencilIcon className="h-[12px] w-[12px]" />
+                </button>
+              </>
+            )}
           </div>
           <p className="mt-[var(--canvas-left-keyword-gap)] max-w-[var(--canvas-left-content)] truncate text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[rgba(77,77,77,0.9)]">
             {keywordSummary || "키워드가 추출되면 이곳에 표시됩니다"}
           </p>
         </div>
-      </div>
+      </header>
 
-      <div className="absolute left-0 right-0 top-[var(--canvas-left-divider)] h-px bg-[#dfdfdf]" />
-      <div className="absolute inset-x-0 bottom-0 top-[var(--canvas-left-content-top)] flex min-h-0 flex-col">
-        <PersonalNoteComposerPanel composer={composer} handlers={composerHandlers} />
-        <section className="imms-overlay-scroll min-h-0 flex-1 overflow-y-auto pb-[22px] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-list-pt)]">
-          <div className="w-[var(--canvas-left-content)]">
-            <div className="mb-[14px] flex items-center gap-[7px]">
-              <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.35px] text-[#111]">내 메모 목록</h3>
-              <span className="text-[12px] font-bold tracking-[-0.3px] text-black/50">{notesState.notes.length}</span>
-            </div>
-            {notesState.notes.length === 0 ? (
-              <p className="rounded-[8.66px] border border-dashed border-[#cecccc] bg-white px-3 py-5 text-[11px] leading-5 text-[#737982]">
-                저장한 개인 메모가 없습니다.
-              </p>
-            ) : (
-              <div className="space-y-[var(--canvas-note-card-gap)]">
-                {notesState.notes.map((note) => (
-                  <PersonalNoteCard
-                    key={note.id}
-                    note={note}
-                    stage={notesState.stage}
-                    isEditing={notesState.editingPersonalNoteId === note.id}
-                    dragging={notesState.draggingPersonalNoteId === note.id}
-                    draftTitle={notesState.personalNoteDraftTitle}
-                    draftBody={notesState.personalNoteDraftBody}
-                    handlers={noteHandlers}
-                  />
-                ))}
-              </div>
-            )}
+      <PersonalNoteComposerPanel composer={composer} handlers={composerHandlers} />
+      <section className="imms-overlay-scroll min-h-0 flex-1 overflow-y-auto pb-[22px] pl-[var(--canvas-left-pad)] pr-0 pt-[var(--canvas-note-list-pt)]">
+        <div className="w-[var(--canvas-left-content)]">
+          <div className="mb-[14px] flex items-center gap-[7px]">
+            <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.35px] text-[#111]">내 메모 목록</h3>
+            <span className="text-[12px] font-bold tracking-[-0.3px] text-black/50">{notesState.notes.length}</span>
           </div>
-        </section>
-      </div>
+          {notesState.notes.length === 0 ? (
+            <p className="rounded-[8.66px] border border-dashed border-[#cecccc] bg-white px-3 py-5 text-[11px] leading-5 text-[#737982]">
+              저장한 개인 메모가 없습니다.
+            </p>
+          ) : (
+            <div className="space-y-[var(--canvas-note-card-gap)]">
+              {notesState.notes.map((note) => (
+                <PersonalNoteCard
+                  key={note.id}
+                  note={note}
+                  stage={notesState.stage}
+                  isEditing={notesState.editingPersonalNoteId === note.id}
+                  dragging={notesState.draggingPersonalNoteId === note.id}
+                  draftTitle={notesState.personalNoteDraftTitle}
+                  draftBody={notesState.personalNoteDraftBody}
+                  handlers={noteHandlers}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </aside>
   );
 }
@@ -633,36 +724,213 @@ export type CanvasWorkspaceQuickAskHandlers = {
   onSubmit: (event?: FormEvent<HTMLFormElement>) => void;
 };
 
-function CurrentProblemDefinitionStagePanel({
+function CurrentStagePanel({
+  header,
   problem,
   problemHandlers,
 }: {
+  header: CanvasHeaderProps;
   problem: CanvasSurfaceProblemState;
   problemHandlers: CanvasSurfaceProblemHandlers;
 }) {
-  const buttonDisabled = problem.problemStructurePending || problem.problemGroupsCount === 0;
+  const stage = header.view.stage;
+  const problemDefinitionPhase = problem.problemDefinitionPhase as ProblemDefinitionPhase;
+  const isProblemExplore = stage === "problem-definition" && problemDefinitionPhase !== "structure";
+  const isProblemStructure = stage === "problem-definition" && problemDefinitionPhase === "structure";
+  const hasProblemStructure = problem.problemStructureNodesCount > 0;
+  const problemDefinitionFailed = problem.problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problem.problemStructureGenerationStatus === "failed";
+  const currentProblemFailed =
+    stage === "problem-definition" && (isProblemExplore ? problemDefinitionFailed : problemStructureFailed);
+  const currentProblemError =
+    stage === "problem-definition"
+      ? isProblemExplore
+        ? problem.problemDefinitionGenerationError
+        : problem.problemStructureGenerationError
+      : "";
 
-  return (
-    <section className="absolute left-[var(--canvas-right-pad)] right-[clamp(17px,0.885vw,23px)] top-[clamp(308px,28.519vh,411px)] z-10 text-left">
-      <div className="flex items-start gap-[12px]">
-        <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
-        <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">문제정의 · 1단계</p>
-      </div>
-      <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+  let title = stageLabel(stage, problemDefinitionPhase);
+  let description = (
+    <>
+      현재 회의 흐름을 확인하고,
+      <br />
+      다음 단계로 진행할 수 있습니다.
+    </>
+  );
+  let buttonLabel = "";
+  let buttonDisabled = false;
+  let onButtonClick: (() => void) | null = null;
+
+  if (stage === "ideation") {
+    title = "아이디어 발산";
+    description = (
+      <>
+        회의 중 나온 핵심 키워드를 정리합니다.
+        <br />
+        충분히 모이면 문제정의를 시작하세요.
+      </>
+    );
+    buttonLabel = problem.problemDefinitionStagePending
+      ? "문제정의 생성 중"
+      : problemDefinitionFailed
+        ? "문제정의 다시 시작하기"
+        : "문제정의 시작하기";
+    buttonDisabled = header.view.busy || header.view.problemDefinitionStagePending;
+    onButtonClick = () => header.handlers.onStageSelect("problem-definition");
+  } else if (isProblemExplore) {
+    title = "문제정의 · 1단계";
+    description = (
+      <>
         문제 후보를 검토하고, 필요 없는 항목만 삭제하세요.
         <br />
         남은 후보는 모두 다음 단계로 이동합니다.
-      </p>
-      <button
-        type="button"
-        onClick={() => {
-          void problemHandlers.onStartProblemStructure();
-        }}
-        disabled={buttonDisabled}
-        className="mt-[20px] flex h-[33px] w-full items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-white shadow-[0_-4px_3px_rgba(255,255,255,0.29),0_2px_6px_rgba(1,231,255,0.3)] transition disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:text-white disabled:shadow-none"
+      </>
+    );
+    buttonLabel = problem.problemStructurePending
+      ? "구조화 생성 중"
+      : problemStructureFailed
+        ? "2단계 구조화 다시 시도"
+        : "2단계 · 구조화 시작하기";
+    buttonDisabled = header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0;
+    onButtonClick = () => {
+      void problemHandlers.onStartProblemStructure();
+    };
+  } else if (isProblemStructure) {
+    title = "문제정의 · 2단계";
+    description = (
+      <>
+        구조화된 문제 묶음을 검토하고,
+        <br />
+        요약 및 정리 단계로 넘깁니다.
+      </>
+    );
+    buttonLabel = "요약 및 정리 시작하기";
+    buttonDisabled = header.view.busy;
+    onButtonClick = () => {
+      void header.handlers.onStageSelect("solution");
+    };
+  } else if (stage === "solution") {
+    title = "요약 및 정리";
+    description = (
+      <>
+        최종 회의록 내용을 확인한 뒤,
+        <br />
+        회의를 종료하고 결과를 생성합니다.
+      </>
+    );
+    buttonLabel = header.view.endMeetingSaving ? "회의 종료 중" : "회의를 종료하고 회의록 생성하기";
+    buttonDisabled = header.view.endMeetingSaving;
+    onButtonClick = header.handlers.onEndMeetingClick;
+  }
+
+  const regenerateProblemDefinitionButton = isProblemExplore ? (
+    <button
+      type="button"
+      onClick={() => {
+        void problemHandlers.onRegenerateProblemDefinition();
+      }}
+      disabled={header.view.busy || problem.problemDefinitionStagePending}
+      className={`mt-[10px] ${panelButtonClasses.secondary}`}
+    >
+      <span
+        className={`${panelButtonTextClasses.secondary} ${
+          header.view.busy || problem.problemDefinitionStagePending ? "text-[#9ca3af]" : ""
+        }`}
       >
-        {problem.problemStructurePending ? "구조화 생성 중" : "2단계 · 구조화 시작하기"}
-      </button>
+        {problem.problemDefinitionStagePending
+          ? "1단계 재생성 중"
+          : problemDefinitionFailed
+            ? "1단계 다시 생성"
+            : "1단계 재생성"}
+      </span>
+    </button>
+  ) : null;
+  const regenerateProblemStructureButton = isProblemStructure ? (
+    <button
+      type="button"
+      onClick={() => {
+        void problemHandlers.onRegenerateProblemStructure();
+      }}
+      disabled={header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0}
+      className="moa-action-button moa-canvas-stage-control inline-flex h-[28px] shrink-0 items-center justify-center rounded-full border border-[rgba(1,163,255,0.33)] bg-white px-[12px] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.41)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-[#f5f5f5] disabled:shadow-none"
+    >
+      <span
+        className={`moa-font-pretendard whitespace-nowrap text-[11px] font-semibold leading-[1.4] tracking-[-0.027px] text-[#236cf3] ${
+          header.view.busy || problem.problemStructurePending || problem.problemGroupsCount === 0 ? "text-[#9ca3af]" : ""
+        }`}
+      >
+        {problem.problemStructurePending
+          ? "AI 묶는 중"
+          : problemStructureFailed
+            ? "AI 묶기 재시도"
+            : "AI 자동묶음"}
+      </span>
+    </button>
+  ) : null;
+
+  return (
+    <section className="relative z-10 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[20px] text-left">
+      <div key={`${stage}:${problemDefinitionPhase}`} className="moa-canvas-stage-detail">
+        <div className="flex items-start gap-[12px]">
+          <h3 className="text-[14px] font-bold leading-[1.4] text-[#111]">현재 단계</h3>
+          <p className="mt-[4px] text-[11px] font-semibold leading-[1.4] text-[#414141]">{title}</p>
+        </div>
+        <p className="mt-[7px] text-[10px] font-medium leading-[1.5] text-[#90a1b9]">
+          {description}
+        </p>
+        {currentProblemFailed ? (
+          <p className="moa-state-callout mt-[10px] rounded-[10px] border border-[#fecaca] bg-[#fff5f5] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#dc2626]">
+            생성에 실패했습니다. 다시 생성 버튼으로 재시도할 수 있습니다.
+            {currentProblemError ? ` (${currentProblemError})` : ""}
+          </p>
+        ) : null}
+        {buttonLabel && onButtonClick ? (
+          <button
+            type="button"
+            onClick={onButtonClick}
+            disabled={buttonDisabled}
+            className={`mt-[20px] ${panelButtonClasses.primary}`}
+          >
+            <span className={panelButtonTextClasses.primary}>{buttonLabel}</span>
+          </button>
+        ) : null}
+        {stage === "problem-definition" && hasProblemStructure ? (
+          <div className="mt-[20px] border-t border-[#dfdfdf] pt-[18px]">
+            <div className="flex min-h-[28px] items-center justify-between gap-[10px]">
+              <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">문제정의 단계</h3>
+              {regenerateProblemStructureButton}
+            </div>
+            <div className="mt-[10px] grid grid-cols-2 gap-[8px]">
+              {([
+                ["explore", "1단계"],
+                ["structure", "2단계"],
+              ] as const).map(([phase, label]) => {
+                const active = problemDefinitionPhase === phase;
+                return (
+                  <button
+                    key={phase}
+                    type="button"
+                    data-stage-active={active ? "true" : "false"}
+                    onClick={() => problemHandlers.onProblemDefinitionPhaseSelect(phase)}
+                    className={`moa-action-button moa-canvas-stage-control h-[30px] rounded-full border text-center transition ${
+                      active
+                        ? "border-[#01a3ff] shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_1.5px_5px_rgba(130,158,161,0.24)]"
+                        : "border-[rgba(1,163,255,0.33)] bg-white hover:border-[#01a3ff] hover:bg-[#f4fbff]"
+                    }`}
+                  >
+                    <span className={`moa-font-pretendard text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] ${active ? "text-white" : "text-[#7c7c7c]"}`}>
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {regenerateProblemDefinitionButton}
+          </div>
+        ) : (
+          regenerateProblemDefinitionButton
+        )}
+      </div>
     </section>
   );
 }
@@ -674,6 +942,9 @@ function RightAiPanel({
   problemHandlers,
   quickAskState,
   quickAskHandlers,
+  onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: {
   header: CanvasHeaderProps;
   participants: CanvasWorkspaceParticipant[];
@@ -681,6 +952,9 @@ function RightAiPanel({
   problemHandlers: CanvasSurfaceProblemHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
+  onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 }) {
   const {
     open: quickAskOpen,
@@ -692,25 +966,41 @@ function RightAiPanel({
   const visibleParticipants = useMemo(() => participants.slice(0, 5), [participants]);
   const hiddenParticipantCount = Math.max(0, participants.length - visibleParticipants.length);
   const recentMessages = quickAskMessages.slice(-4);
-  const showProblemStagePanel =
-    header.view.stage === "problem-definition" && (problem.problemDefinitionPhase as ProblemDefinitionPhase) !== "structure";
+  const quickAskHasMessages = quickAskMessages.length > 0;
+  const aiGuideStatusText = quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "무엇이든 질문할 수 있습니다";
+  const [shareCopied, setShareCopied] = useState(false);
+  const [debugResetOpen, setDebugResetOpen] = useState(false);
+  const shareCopiedResetTimerRef = useRef<number | null>(null);
+  const showDebugReset = header.view.stage === "ideation" && Boolean(onDebugResetWorkspace);
+
+  useEffect(() => () => {
+    if (shareCopiedResetTimerRef.current !== null) {
+      window.clearTimeout(shareCopiedResetTimerRef.current);
+    }
+  }, []);
+
+  const handleShareClick = async () => {
+    const copied = await onShareMeetingLink();
+    if (!copied) return;
+    setShareCopied(true);
+    if (shareCopiedResetTimerRef.current !== null) {
+      window.clearTimeout(shareCopiedResetTimerRef.current);
+    }
+    shareCopiedResetTimerRef.current = window.setTimeout(() => {
+      setShareCopied(false);
+      shareCopiedResetTimerRef.current = null;
+    }, 1600);
+  };
+
+  const handleDebugReset = async (scope: CanvasDebugResetScope) => {
+    if (!onDebugResetWorkspace || debugResetBusy) return;
+    setDebugResetOpen(false);
+    await onDebugResetWorkspace(scope);
+  };
 
   return (
-    <aside className="relative h-full min-h-0 overflow-hidden border-l border-[#cecccc] bg-white">
-      <div
-        aria-hidden="true"
-        className={`pointer-events-none absolute left-[var(--canvas-ai-bg-main-left)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat ${
-          showProblemStagePanel ? "top-[clamp(441px,40.833vh,588px)]" : "top-[var(--canvas-ai-bg-main-top)]"
-        }`}
-        style={AI_GUIDE_BACKGROUND_STYLE}
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute left-[var(--canvas-ai-bg-secondary-left)] top-[var(--canvas-ai-bg-secondary-top)] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat"
-        style={AI_GUIDE_BACKGROUND_STYLE}
-      />
-
-      <div className="absolute inset-x-0 top-0 z-10 flex h-[var(--canvas-right-header)] items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
+    <aside className="relative flex h-full min-h-0 flex-col overflow-hidden border-l border-[#cecccc] bg-white">
+      <header className="relative z-[80] flex h-[var(--canvas-right-header)] shrink-0 items-center justify-between border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)]">
         <div className="flex items-center">
           {visibleParticipants.map((participant, index) => (
             <span
@@ -731,13 +1021,58 @@ function RightAiPanel({
             </span>
           ) : null}
         </div>
-        <button type="button" className="flex h-[32.4px] items-center gap-[8.1px] rounded-full bg-[#4b4b50] py-[2.7px] pl-[10.8px] pr-[14.2px] text-[12px] font-semibold leading-[20px] tracking-[-0.03px] text-[#ededed] transition hover:bg-[#3f3f43]" aria-label="회의 공유">
-          <ShareIcon className="h-[12.825px] w-[12.825px]" />
-          공유
-        </button>
-      </div>
+        <div className="relative flex items-center gap-[8px]">
+          {showDebugReset ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={debugResetOpen}
+                aria-label="디버그 초기화 메뉴"
+                disabled={debugResetBusy}
+                onClick={() => setDebugResetOpen((current) => !current)}
+                className="moa-action-button inline-flex h-[32.4px] items-center justify-center rounded-[67.5px] border border-[rgba(1,163,255,0.33)] bg-white px-[12px] text-[#236cf3] shadow-[0_0.675px_2.835px_rgba(144,185,208,0.24)] transition hover:border-[#01a3ff] hover:bg-[#f4fbff] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="moa-font-pretendard text-[10px] font-bold leading-[1.4] tracking-[-0.025px] text-current">
+                  초기화
+                </span>
+              </button>
+              {debugResetOpen ? (
+                <div className="moa-popover-menu absolute right-[76px] top-[calc(100%+8px)] z-[90] w-[168px] overflow-hidden rounded-[14px] border border-[#d8e7ff] bg-white p-[5px] text-left shadow-[0_18px_52px_rgba(15,23,42,0.14)]">
+                  {([
+                    ["problem", "문제정의 초기화"],
+                    ["summary", "요약 초기화"],
+                    ["all", "문제정의+요약"],
+                  ] as const).map(([scope, label]) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      className="moa-action-row block h-[30px] w-full rounded-[10px] px-[10px] text-left transition hover:bg-[#f4fbff]"
+                      onClick={() => void handleDebugReset(scope)}
+                    >
+                      <span className="moa-font-pretendard text-[11px] font-semibold leading-[1.4] tracking-[-0.028px] text-[#526070]">
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          <button
+            type="button"
+            className={`${panelButtonClasses.share} ${shareCopied ? "w-[94px]" : "w-[66.9px]"}`}
+            aria-label={shareCopied ? "회의 링크 복사 완료" : "회의 공유"}
+            onClick={() => void handleShareClick()}
+          >
+            <ShareIcon className="h-[13px] w-[13px] shrink-0" />
+            <span className={panelButtonTextClasses.share} aria-live="polite">
+              {shareCopied ? "복사완료" : "공유"}
+            </span>
+          </button>
+        </div>
+      </header>
 
-      <div className="absolute inset-x-0 top-[var(--canvas-right-header)] z-10 h-[calc(var(--canvas-right-stage-bottom)-var(--canvas-right-header))] border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] pt-[21px]">
+      <section className="relative z-10 shrink-0 border-b border-[#dfdfdf] bg-white px-[var(--canvas-right-pad)] py-[21px]">
         <h3 className="text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">회의 단계 이동</h3>
         <div className="mt-[21px]">
           <StageSteps
@@ -746,86 +1081,79 @@ function RightAiPanel({
             onStageSelect={header.handlers.onStageSelect}
           />
         </div>
-      </div>
+      </section>
 
-      {showProblemStagePanel ? (
-        <CurrentProblemDefinitionStagePanel problem={problem} problemHandlers={problemHandlers} />
-      ) : null}
+      <CurrentStagePanel header={header} problem={problem} problemHandlers={problemHandlers} />
 
-      {showProblemStagePanel ? (
-        <div className="absolute inset-x-0 top-[clamp(441px,40.833vh,588px)] z-10 h-px bg-[#dfdfdf]" />
-      ) : null}
-
-      <div
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 ${
-          showProblemStagePanel ? "top-[clamp(458px,42.407vh,611px)]" : "top-[var(--canvas-right-ai-title-top)]"
-        }`}
-      >
-        <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
-          AI 가이드
-          <span className="text-[13px] font-bold text-[#01a3ff]">+</span>
-        </h3>
-      </div>
-      <p
-        className={`absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9] ${
-          showProblemStagePanel ? "top-[clamp(480px,44.444vh,640px)]" : "top-[var(--canvas-right-ai-status-top)]"
-        }`}
-      >
-        {quickAskPendingCount > 0 ? `${quickAskPendingCount}개 응답 대기 중` : "실시간 정리 중"}
-      </p>
-
-      {quickAskOpen && recentMessages.length > 0 ? (
+      <section className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden bg-white px-[var(--canvas-right-pad)] pb-[22px] pt-[24px]">
         <div
-          ref={quickAskScrollRef}
-          className={`imms-overlay-scroll absolute left-[var(--canvas-right-pad)] right-[var(--canvas-right-pad)] z-10 max-h-[clamp(150px,13.889vh,200px)] space-y-2 overflow-y-auto text-left ${
-            showProblemStagePanel ? "top-[clamp(511px,47.315vh,681px)]" : "top-[clamp(384px,35.556vh,512px)]"
-          }`}
-        >
-          {recentMessages.map((message) => (
-            <div key={message.id} className={`rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
-              {message.text}
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div
-        className={`absolute inset-x-0 z-10 text-center ${
-          showProblemStagePanel ? "top-[clamp(682px,63.148vh,909px)]" : "top-[var(--canvas-right-assistant-top)]"
-        }`}
-      >
-        <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">회의 어시스턴트 시작하기</h4>
-        <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
-          아이디어 확장, 회의록 요약, 실시간 정보 검색 등<br />
-          필요한 도움을 요청할 수 있습니다
-        </p>
-      </div>
-
-      <form onSubmit={quickAskHandlers.onSubmit} className="absolute left-[var(--canvas-right-search-x)] right-[var(--canvas-right-search-x)] top-[var(--canvas-right-search-top)] z-10 flex h-[48px] items-center rounded-full border border-[#cbd5e1] bg-white px-[9px] shadow-[0_4px_8px_-2px_rgba(23,23,23,0.1),0_2px_4px_-2px_rgba(23,23,23,0.06)]">
-        <button type="button" className="grid h-[33.936px] w-[33.936px] place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="파일 첨부">
-          <PaperclipIcon className="h-[20.36px] w-[20.36px]" />
-        </button>
-        <input
-          value={quickAskDraft}
-          onChange={(event) => quickAskHandlers.onDraftChange(event.target.value)}
-          onFocus={() => {
-            if (!quickAskOpen) quickAskHandlers.onToggle();
-          }}
-          placeholder="무엇이든 물어보세요"
-          className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
+          aria-hidden="true"
+          className="pointer-events-none absolute right-[-180px] top-[18px] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat opacity-95"
+          style={AI_GUIDE_BACKGROUND_STYLE}
         />
-        <button type="button" className="grid h-[33.936px] w-[33.936px] shrink-0 place-items-center rounded-full text-[#90a1b9] transition hover:bg-[#f5f7fb] hover:text-[#01a3ff]" aria-label="음성 질문">
-          <MicIcon className="h-[20.36px] w-[20.36px]" />
-        </button>
-        <button
-          type="submit"
-          disabled={!quickAskDraft.trim()}
-          aria-label="AI 가이드 질문 보내기"
-          className="ml-[5px] grid h-[29px] w-[29px] shrink-0 place-items-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#3db0f2_32.705%,#427ce9_157.88%)] text-white shadow-[0_-3.454px_2.303px_rgba(255,255,255,0.29),0_1.666px_5.124px_rgba(130,158,161,0.3)] transition hover:brightness-105 disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
-        >
-          <SendIcon className="h-[17.4px] w-[17.4px]" />
-        </button>
-      </form>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-[-330px] left-[-160px] z-0 h-[var(--canvas-ai-bg-height)] w-[var(--canvas-ai-bg-width)] bg-contain bg-no-repeat opacity-70"
+          style={AI_GUIDE_BACKGROUND_STYLE}
+        />
+
+        <div className="relative z-10 shrink-0 text-left">
+          <h3 className="flex items-center gap-[6px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-[#111]">
+            AI 가이드
+            <span className="text-[13px] font-bold text-[#01a3ff]">+</span>
+          </h3>
+          <p className="mt-[4px] text-[10.8px] leading-[1.4] tracking-[-0.027px] text-[#90a1b9]">
+            {aiGuideStatusText}
+          </p>
+        </div>
+
+        {recentMessages.length > 0 ? (
+          <div
+            ref={quickAskScrollRef}
+            className="imms-overlay-scroll relative z-10 mt-[18px] min-h-0 flex-1 space-y-2 overflow-y-auto text-left"
+          >
+            {recentMessages.map((message) => (
+              <div key={message.id} className={`moa-message-enter rounded-[12px] px-3 py-2 text-[11px] leading-5 ${message.role === "user" ? "ml-8 bg-[#01a3ff] text-white" : "mr-8 border border-[#d9e8f3] bg-white text-[#505050]"}`}>
+                {message.text}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="relative z-10 min-h-[120px] flex-1" />
+        )}
+
+        {!quickAskHasMessages ? (
+          <div className="pointer-events-none absolute inset-x-[var(--canvas-right-pad)] top-1/2 z-10 -translate-y-1/2 text-center">
+            <h4 className="text-[22px] font-medium leading-[1.4] tracking-[-0.55px] text-[#181818]">AI 가이드 시작하기</h4>
+            <p className="mt-[10px] text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-[#90a1b9]">
+              글쓰기, 요약, 번역, 코드, 아이디어 등<br />
+              필요한 도움을 요청할 수 있습니다
+            </p>
+          </div>
+        ) : null}
+
+        <div className="relative z-10 mt-auto shrink-0 pt-[24px] text-center">
+          <form onSubmit={quickAskHandlers.onSubmit} className={panelButtonClasses.aiInput}>
+            <input
+              value={quickAskDraft}
+              onChange={(event) => quickAskHandlers.onDraftChange(event.target.value)}
+              onFocus={() => {
+                if (!quickAskOpen) quickAskHandlers.onToggle();
+              }}
+              placeholder="무엇이든 물어보세요"
+              className="min-w-0 flex-1 bg-transparent px-1 text-[14px] font-normal leading-[1.6] text-[#111] outline-none placeholder:text-[#90a1b9]"
+            />
+            <button
+              type="submit"
+              disabled={!quickAskDraft.trim()}
+              aria-label="AI 가이드 질문 보내기"
+              className={panelButtonClasses.aiSend}
+            >
+              <SendIcon className="h-[17.4px] w-[17.4px]" />
+            </button>
+          </form>
+        </div>
+      </section>
     </aside>
   );
 }
@@ -852,6 +1180,9 @@ export type CanvasWorkspacePanelsProps = {
   rightDrawerNoteHandlers: CanvasRightDrawerNoteHandlers;
   quickAskState: CanvasWorkspaceQuickAskState;
   quickAskHandlers: CanvasWorkspaceQuickAskHandlers;
+  onShareMeetingLink: () => Promise<boolean>;
+  onDebugResetWorkspace?: (scope: CanvasDebugResetScope) => Promise<void>;
+  debugResetBusy?: boolean;
 };
 
 export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
@@ -872,10 +1203,13 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
   rightDrawerNoteHandlers,
   quickAskState,
   quickAskHandlers,
+  onShareMeetingLink,
+  onDebugResetWorkspace,
+  debugResetBusy,
 }: CanvasWorkspacePanelsProps) {
   return (
     <div
-      className="grid h-full min-h-0 grid-cols-1 overflow-hidden bg-[#f8f8f8] xl:grid-cols-[var(--canvas-left-panel)_minmax(0,1fr)_var(--canvas-right-panel)]"
+      className="moa-desktop-motion grid h-full min-h-0 grid-cols-1 overflow-hidden bg-[#f8f8f8] xl:grid-cols-[var(--canvas-left-panel)_minmax(0,1fr)_var(--canvas-right-panel)]"
       style={canvasShellStyle}
     >
       <LeftMeetingPanel
@@ -909,6 +1243,9 @@ export const CanvasWorkspacePanels = memo(function CanvasWorkspacePanels({
         problemHandlers={surfaceProblemHandlers}
         quickAskState={quickAskState}
         quickAskHandlers={quickAskHandlers}
+        onShareMeetingLink={onShareMeetingLink}
+        onDebugResetWorkspace={onDebugResetWorkspace}
+        debugResetBusy={debugResetBusy}
       />
     </div>
   );

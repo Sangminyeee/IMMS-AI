@@ -10,6 +10,7 @@ interface AuthContextType {
   loading: boolean
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: unknown }>
   signIn: (email: string, password: string) => Promise<{ error: unknown }>
+  signInGuest: () => Promise<{ error: unknown }>
   signOut: () => Promise<void>
 }
 
@@ -19,6 +20,7 @@ function resolveProfileName(user: User, fullName?: string) {
   const metadataName = typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name.trim() : ''
   const providedName = fullName?.trim() || metadataName
   if (providedName) return providedName
+  if ((user as { is_anonymous?: boolean }).is_anonymous) return '게스트'
   if (user.email) return user.email.split('@')[0]
   return '사용자'
 }
@@ -175,6 +177,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const signInGuest = async () => {
+    try {
+      const { data, error } = await supabase.auth.signInAnonymously()
+
+      if (error) {
+        logSupabaseFailure('guest sign in', error)
+      }
+
+      if (!error && data.user) {
+        await ensureUserProfile(data.user, '게스트')
+      }
+
+      return { error }
+    } catch (error) {
+      logSupabaseFailure('guest sign in', error)
+      return { error }
+    }
+  }
+
   const signOut = async () => {
     try {
       const { error } = await supabase.auth.signOut({ scope: 'local' })
@@ -191,7 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, signUp, signIn, signInGuest, signOut }}>
       {children}
     </AuthContext.Provider>
   )

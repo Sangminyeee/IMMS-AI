@@ -3,11 +3,13 @@
 import { useCallback, useMemo, useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
 import type { CanvasEditPresencePayload } from "@/lib/types";
 import {
+  buildProblemStructureNodesFromGroups,
   makeProblemStructureGroup,
   makeProblemStructurePairGroupTitle,
   type ProblemStructureDragState,
   type ProblemStructureGroupViewModel,
   type ProblemStructureNodeViewModel,
+  type ProblemStructureSourceGroup,
   type ProblemStructureStatus,
 } from "@/components/canvas/problemStructureModel";
 
@@ -20,12 +22,13 @@ type ProblemStructureEditPresenceTarget = {
 };
 
 function problemStructureStatusLabel(status: ProblemStructureStatus) {
-  if (status === "review") return "검토중";
+  if (status === "review") return "검토";
   if (status === "final") return "확정";
-  return "초안";
+  return "보류중";
 }
 
 type UseProblemStructureEditorOptions = {
+  fallbackProblemGroups: ProblemStructureSourceGroup[];
   problemStructureGroups: ProblemStructureGroupViewModel[];
   problemStructureNodes: ProblemStructureNodeViewModel[];
   setActivityMessage: (message: string) => void;
@@ -35,6 +38,7 @@ type UseProblemStructureEditorOptions = {
 };
 
 export function useProblemStructureEditor({
+  fallbackProblemGroups,
   problemStructureGroups,
   problemStructureNodes,
   setActivityMessage,
@@ -52,6 +56,14 @@ export function useProblemStructureEditor({
   const problemStructureNodeById = useMemo(
     () => new Map(problemStructureNodes.map((node) => [node.id, node])),
     [problemStructureNodes],
+  );
+  const fallbackProblemStructureNodes = useMemo(
+    () => buildProblemStructureNodesFromGroups(fallbackProblemGroups),
+    [fallbackProblemGroups],
+  );
+  const fallbackProblemStructureNodeById = useMemo(
+    () => new Map(fallbackProblemStructureNodes.map((node) => [node.id, node])),
+    [fallbackProblemStructureNodes],
   );
 
   const clearProblemStructureGroupEdit = useCallback(() => {
@@ -354,6 +366,27 @@ export function useProblemStructureEditor({
     [setActivityMessage, setProblemStructureGroups],
   );
 
+  const handleUpdateProblemStructureNodeStatus = useCallback(
+    (nodeId: string, status: ProblemStructureStatus) => {
+      setProblemStructureNodes((prev) => {
+        if (prev.length === 0 && fallbackProblemStructureNodes.length > 0) {
+          return fallbackProblemStructureNodes.map((node) => (node.id === nodeId ? { ...node, status } : node));
+        }
+        let updated = false;
+        const nextNodes = prev.map((node) => {
+          if (node.id !== nodeId) return node;
+          updated = true;
+          return { ...node, status };
+        });
+        if (updated) return nextNodes;
+        const fallbackNode = fallbackProblemStructureNodeById.get(nodeId);
+        return fallbackNode ? [...nextNodes, { ...fallbackNode, status }] : nextNodes;
+      });
+      setActivityMessage(`구조화 노드 상태를 ${problemStructureStatusLabel(status)}로 변경했습니다.`);
+    },
+    [fallbackProblemStructureNodeById, fallbackProblemStructureNodes, setActivityMessage, setProblemStructureNodes],
+  );
+
   return {
     editingProblemStructureGroupId,
     editingProblemStructureNodeId,
@@ -373,6 +406,7 @@ export function useProblemStructureEditor({
     handleStartProblemStructureGroupEdit,
     handleStartProblemStructureNodeEdit,
     handleUpdateProblemStructureGroupStatus,
+    handleUpdateProblemStructureNodeStatus,
     problemStructureDrag,
     problemStructureGroupDraftRationale,
     problemStructureGroupDraftTitle,

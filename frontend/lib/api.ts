@@ -1,6 +1,11 @@
 ﻿import type {
+  CanvasArtifactGenerationKey,
+  CanvasArtifactGenerationState,
   CanvasLocalState,
+  CanvasFinalSolutionSummary,
+  CanvasFinalReportShareResponse,
   CanvasIdeaAssimilationUtterance,
+  CanvasIdeationBubbleGraphUpdateResponse,
   CanvasIdeationKeywordResponse,
   CanvasPersonalNotesStateResponse,
   CanvasWorkspacePatchRequest,
@@ -10,6 +15,7 @@
   CanvasQuickAskResponse,
   CanvasSummaryDocumentResponse,
   CanvasWorkspaceStateResponse,
+  PublicFinalReportResponse,
 } from "./types";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -162,6 +168,56 @@ export async function generateCanvasSummaryDocument(payload: {
   });
 }
 
+export async function generateCanvasSummaryConclusion(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  refresh_chunk_summaries?: boolean;
+  regenerate_nonce?: string;
+  current_summary?: CanvasFinalSolutionSummary;
+  groups: Array<{
+    id: string;
+    title: string;
+    node_ids: string[];
+    rationale?: string;
+    status?: string;
+    created_by?: string;
+  }>;
+  nodes: Array<{
+    id: string;
+    source_group_id?: string;
+    title: string;
+    body?: string;
+    status?: string;
+    depth?: number;
+  }>;
+}): Promise<CanvasSummaryDocumentResponse> {
+  return requestJson<CanvasSummaryDocumentResponse>("/api/canvas/summary-conclusion", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createCanvasFinalReportShare(payload: {
+  meeting_id: string;
+  regenerate?: boolean;
+}): Promise<CanvasFinalReportShareResponse> {
+  return requestJson<CanvasFinalReportShareResponse>("/api/canvas/final-report-share", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getPublicCanvasFinalReport(
+  meetingId: string,
+  token: string,
+): Promise<PublicFinalReportResponse> {
+  return requestJson<PublicFinalReportResponse>(
+    `/api/public/final-report/${encodeURIComponent(meetingId)}/${encodeURIComponent(token)}`,
+  );
+}
+
 export async function askCanvasQuickQuestion(payload: {
   meeting_id: string;
   meeting_topic: string;
@@ -207,6 +263,27 @@ export async function extractCanvasIdeationKeywords(payload: {
   max_keywords?: number;
 }): Promise<CanvasIdeationKeywordResponse> {
   return requestJson<CanvasIdeationKeywordResponse>("/api/canvas/ideation-keywords", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCanvasIdeationBubbleGraph(payload: {
+  meeting_id: string;
+  meeting_topic: string;
+  meeting_goal?: string;
+  meeting_goal_context?: string;
+  utterances: Array<{
+    id: string;
+    speaker: string;
+    text: string;
+    timestamp?: string;
+  }>;
+  context_cache?: string;
+  max_keywords?: number;
+}): Promise<CanvasIdeationBubbleGraphUpdateResponse> {
+  return requestJson<CanvasIdeationBubbleGraphUpdateResponse>("/api/canvas/ideation-bubble-graph/update", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -265,6 +342,45 @@ export async function getCanvasWorkspaceState(meetingId: string): Promise<Canvas
   const params = new URLSearchParams({ meeting_id: meetingId });
   return requestJson<CanvasWorkspaceStateResponse>(`/api/canvas/workspace-state?${params.toString()}`, {
     cache: "no-store",
+  });
+}
+
+export async function startCanvasArtifactGeneration(payload: {
+  meeting_id: string;
+  artifact_key: CanvasArtifactGenerationKey;
+  user_id?: string;
+  force?: boolean;
+}): Promise<{
+  ok: boolean;
+  acquired: boolean;
+  generation: CanvasArtifactGenerationState;
+  workspace?: CanvasWorkspaceStateResponse;
+}> {
+  return requestJson("/api/canvas/artifact-generation/start", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function finishCanvasArtifactGeneration(payload: {
+  meeting_id: string;
+  artifact_key: CanvasArtifactGenerationKey;
+  user_id?: string;
+  generation_id?: string;
+  status: "ready" | "failed";
+  error?: string;
+  problem_structure?: CanvasWorkspacePatchRequest["problem_structure"];
+}): Promise<{
+  ok: boolean;
+  applied: boolean;
+  generation: CanvasArtifactGenerationState;
+  workspace?: CanvasWorkspaceStateResponse;
+}> {
+  return requestJson("/api/canvas/artifact-generation/finish", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
   });
 }
 

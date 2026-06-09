@@ -7,6 +7,10 @@ import { DashboardMeetingsView } from "@/components/dashboard/DashboardMeetingsV
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { formatDashboardDateTime, getMeetingStatusLabel } from "@/components/dashboard/dashboardUtils";
 import type { DashboardMeeting, MeetingStatusFilter } from "@/components/dashboard/types";
+import { buildPrintableSummaryDocumentHtml } from "@/components/canvas/summaryDocumentHelpers";
+import { useRequireAuth } from "@/components/auth/useRequireAuth";
+import { MoaLogo } from "@/components/moa-ui/MoaLogo";
+import { useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCanvasWorkspaceState, saveCanvasWorkspacePatch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -133,9 +137,24 @@ function buildFinalResultSummaryFromSolutionTopics(topics: CanvasSolutionTopicRe
   };
 }
 
+function formatMeetingDuration(startedAt?: string, endedAt?: string) {
+  const startedMs = Date.parse(startedAt || "");
+  const endedMs = Date.parse(endedAt || "");
+  if (!Number.isFinite(startedMs) || !Number.isFinite(endedMs) || endedMs < startedMs) {
+    return "";
+  }
+
+  const totalMinutes = Math.max(0, Math.round((endedMs - startedMs) / 60000));
+  if (totalMinutes < 60) return `${totalMinutes}분`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}시간 ${minutes}분` : `${hours}시간`;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { loading: authLoading, signOut } = useAuth();
+  const { user } = useRequireAuth();
 
   const [meetings, setMeetings] = useState<DashboardMeeting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,13 +170,10 @@ export default function DashboardPage() {
   const [resultRebuildMessages, setResultRebuildMessages] = useState<Record<string, string>>({});
   const [resultLoadingMeetingId, setResultLoadingMeetingId] = useState<string | null>(null);
   const [resultRebuildingMeetingId, setResultRebuildingMeetingId] = useState<string | null>(null);
+  const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
-    if (!authLoading && !user) {
-      console.log("❌ Dashboard - No user, redirecting to /login");
-      router.push("/login");
-    }
   }, [user, authLoading, router]);
 
   useEffect(() => {
@@ -235,6 +251,57 @@ export default function DashboardPage() {
   const handleJoinMeeting = (meetingId: string) => {
     console.log("📊 Dashboard - Joining meeting:", meetingId);
     router.push(`/?meeting_id=${meetingId}`);
+  };
+
+  const handleDeleteMeeting = async (meeting: DashboardMeeting) => {
+    if (deletingMeetingId) return;
+    const confirmed = window.confirm(
+      `"${meeting.title}" 회의를 삭제할까요?\n삭제하면 전사, 캔버스, 최종 문서 데이터도 함께 삭제됩니다.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeletingMeetingId(meeting.id);
+      const { error } = await supabase
+        .from("meetings")
+        .delete()
+        .eq("id", meeting.id);
+
+      if (error) throw error;
+
+      setMeetings((prev) => prev.filter((item) => item.id !== meeting.id));
+      setSelectedResultMeeting((current) => (current?.id === meeting.id ? null : current));
+      setResultSummaries((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultSolutionTopics((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultSavedAt((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultErrors((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+      setResultRebuildMessages((prev) => {
+        const next = { ...prev };
+        delete next[meeting.id];
+        return next;
+      });
+    } catch (error) {
+      console.error("Error deleting meeting:", error);
+      alert("회의 삭제에 실패했습니다: " + getErrorMessage(error, "알 수 없는 오류"));
+    } finally {
+      setDeletingMeetingId((current) => (current === meeting.id ? null : current));
+    }
   };
 
   const handleOpenMeetingResult = async (meeting: DashboardMeeting) => {
@@ -350,6 +417,33 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
+  const selectedResultDialogMeeting = selectedResultPresence.presentValue;
+  const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
+  const selectedResultError = selectedResultDialogMeeting ? resultErrors[selectedResultDialogMeeting.id] : "";
+  const selectedResultRebuildMessage = selectedResultDialogMeeting ? resultRebuildMessages[selectedResultDialogMeeting.id] : "";
+  const selectedResultSavedAt = selectedResultDialogMeeting ? resultSavedAt[selectedResultDialogMeeting.id] : "";
+  const selectedResultLoading = selectedResultDialogMeeting ? resultLoadingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultRebuilding = selectedResultDialogMeeting ? resultRebuildingMeetingId === selectedResultDialogMeeting.id : false;
+  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
+  const selectedResultCount = getFinalResultCount(selectedResultSummary);
+  const selectedResultMarkdown = buildFinalResultMarkdown(selectedResultSummary);
+  const selectedResultHasFinalResult = hasFinalResult(selectedResultSummary);
+  const selectedResultDisplayCount = selectedResultCount || (selectedResultMarkdown ? 1 : 0);
+  const selectedResultDocumentHtml = selectedResultMarkdown
+    ? buildPrintableSummaryDocumentHtml(selectedResultMarkdown, { includeToolbar: false })
+    : "";
+  const selectedResultStatusLabel = selectedResultLoading
+    ? "확인 중"
+    : selectedResultRebuilding
+      ? "재구성 중"
+      : selectedResultHasFinalResult
+        ? "저장됨"
+        : "없음";
+  const selectedResultDuration = selectedResultDialogMeeting
+    ? formatMeetingDuration(selectedResultDialogMeeting.started_at, selectedResultDialogMeeting.ended_at)
+    : "";
+
   if (authLoading) {
     console.log("⏳ Dashboard - Auth loading...");
     return (
@@ -375,22 +469,6 @@ export default function DashboardPage() {
 
   console.log("🎨 Dashboard - Rendering UI with", meetings.length, "meetings");
 
-  const selectedResultSummary = selectedResultMeeting ? resultSummaries[selectedResultMeeting.id] : null;
-  const selectedResultError = selectedResultMeeting ? resultErrors[selectedResultMeeting.id] : "";
-  const selectedResultRebuildMessage = selectedResultMeeting ? resultRebuildMessages[selectedResultMeeting.id] : "";
-  const selectedResultSavedAt = selectedResultMeeting ? resultSavedAt[selectedResultMeeting.id] : "";
-  const selectedResultLoading = selectedResultMeeting ? resultLoadingMeetingId === selectedResultMeeting.id : false;
-  const selectedResultRebuilding = selectedResultMeeting ? resultRebuildingMeetingId === selectedResultMeeting.id : false;
-  const selectedResultTopics = getFinalResultTopics(selectedResultSummary);
-  const selectedResultCount = getFinalResultCount(selectedResultSummary);
-  const selectedResultStatusLabel = selectedResultLoading
-    ? "확인 중"
-    : selectedResultRebuilding
-      ? "재구성 중"
-    : hasFinalResult(selectedResultSummary)
-      ? "저장됨"
-      : "없음";
-
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
       <DashboardMeetingsView
@@ -398,7 +476,9 @@ export default function DashboardPage() {
         meetings={meetings}
         searchQuery={meetingSearchQuery}
         statusFilter={meetingStatusFilter}
+        deletingMeetingId={deletingMeetingId}
         onCreateMeeting={() => setShowCreateModal(true)}
+        onDeleteMeeting={(meeting) => void handleDeleteMeeting(meeting)}
         onJoinMeeting={handleJoinMeeting}
         onOpenMeetingResult={(meeting) => void handleOpenMeetingResult(meeting)}
         onSearchQueryChange={setMeetingSearchQuery}
@@ -416,49 +496,60 @@ export default function DashboardPage() {
         }}
       />
 
-      {selectedResultMeeting ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-[clamp(12px,2vw,28px)]">
-          <div className="flex max-h-[90vh] w-full max-w-[1120px] flex-col overflow-hidden rounded-[20px] bg-[var(--moa-app-bg)] shadow-2xl">
-            <div className="bg-[#111827] px-[clamp(20px,3vw,36px)] py-[clamp(20px,3vh,30px)] text-white">
+      {selectedResultPresence.shouldRender && selectedResultDialogMeeting ? (
+        <div className="moa-popover-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#0f172a]/42 p-[clamp(14px,2vw,28px)] backdrop-blur-[3px]" data-exiting={selectedResultPresence.isExiting}>
+          <div className="moa-popover-panel moa-font-pretendard flex max-h-[92vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-[30px] border border-[#dbe7f5] bg-[#f8f8f8] shadow-[0_30px_90px_rgba(15,23,42,0.18)]" data-exiting={selectedResultPresence.isExiting}>
+            <div className="relative overflow-hidden border-b border-[#e1e7f2] bg-white px-[clamp(22px,3vw,42px)] py-[clamp(20px,3vh,30px)]">
+              <div className="moa-dashboard-primary-button absolute inset-x-0 top-0 h-[5px]" />
               <div className="flex flex-wrap items-start justify-between gap-5">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-semibold tracking-[0.12em] text-white/80">
-                      FINAL REPORT
+                  <div className="flex flex-wrap items-center gap-3">
+                    <MoaLogo showText={false} markClassName="h-[24px] w-[39px]" />
+                    <span className="inline-flex h-[30px] items-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-3">
+                      <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                        최종 정리 문서
+                      </span>
                     </span>
-                    <span className="rounded-full bg-[var(--moa-primary-soft)] px-3 py-1 text-xs font-semibold text-[var(--moa-primary-strong)]">
-                      {getMeetingStatusLabel(selectedResultMeeting.status)}
+                    <span className="inline-flex h-[30px] items-center rounded-full border border-[#e1e7f2] bg-white px-3">
+                      <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
+                        {getMeetingStatusLabel(selectedResultDialogMeeting.status)}
+                      </span>
                     </span>
                   </div>
-                  <h2 className="mt-4 truncate text-[clamp(24px,3vw,36px)] font-semibold leading-tight text-white">
-                    {selectedResultMeeting.title}
+                  <h2 className="mt-5 truncate text-[clamp(24px,2.4vw,32px)] font-bold leading-[1.35] tracking-[-0.8px] text-[#181818]">
+                    {selectedResultDialogMeeting.title}
                   </h2>
-                  <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-white/70">
-                    <span>생성 {formatDashboardDateTime(selectedResultMeeting.created_at)}</span>
-                    <span>종료 {formatDashboardDateTime(selectedResultMeeting.ended_at)}</span>
+                  <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">
+                    <span>생성 {formatDashboardDateTime(selectedResultDialogMeeting.created_at)}</span>
+                    {selectedResultDuration ? <span>진행 {selectedResultDuration}</span> : null}
+                    <span>종료 {formatDashboardDateTime(selectedResultDialogMeeting.ended_at)}</span>
                     <span>결과 저장 {formatDashboardDateTime(selectedResultSavedAt)}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => handleJoinMeeting(selectedResultMeeting.id)}
-                    className="inline-flex h-10 items-center rounded-[12px] bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/16"
+                    onClick={() => handleJoinMeeting(selectedResultDialogMeeting.id)}
+                    className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff]"
                   >
-                    회의 열기
+                    <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
+                      회의 열기
+                    </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleCopyFinalResultMarkdown()}
                     disabled={!hasFinalResult(selectedResultSummary)}
-                    className="inline-flex h-10 items-center rounded-[12px] bg-white px-4 text-sm font-semibold text-[#111827] transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff] disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    마크다운 복사
+                    <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                      마크다운 복사
+                    </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedResultMeeting(null)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-xl font-semibold text-white transition hover:bg-white/16"
+                    className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-full border border-[#e1e7f2] bg-white text-[20px] font-semibold leading-none text-[#505050] transition hover:bg-[#f5f8ff]"
                     aria-label="결과 닫기"
                   >
                     ×
@@ -466,143 +557,185 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-[16px] border border-white/10 bg-white/8 px-4 py-3">
-                  <p className="text-xs font-semibold text-white/55">최종 결과</p>
-                  <p className="mt-2 text-2xl font-semibold text-white">{selectedResultCount}</p>
+                <div className="rounded-[18px] border border-[#e3e8f1] bg-[#fbfdff] px-4 py-4">
+                  <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">최종 결과</p>
+                  <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">{selectedResultDisplayCount}</p>
                 </div>
-                <div className="rounded-[16px] border border-white/10 bg-white/8 px-4 py-3">
-                  <p className="text-xs font-semibold text-white/55">문서 섹션</p>
-                  <p className="mt-2 text-2xl font-semibold text-white">{selectedResultTopics.length}</p>
+                <div className="rounded-[18px] border border-[#e3e8f1] bg-[#fbfdff] px-4 py-4">
+                  <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">문서 섹션</p>
+                  <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">{selectedResultTopics.length}</p>
                 </div>
-                <div className="rounded-[16px] border border-white/10 bg-white/8 px-4 py-3">
-                  <p className="text-xs font-semibold text-white/55">결과 상태</p>
-                  <p className="mt-2 text-2xl font-semibold text-white">{selectedResultStatusLabel}</p>
+                <div className="rounded-[18px] border border-[#e3e8f1] bg-[#fbfdff] px-4 py-4">
+                  <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">결과 상태</p>
+                  <p className="mt-2 text-[24px] font-bold leading-none tracking-[-0.6px] text-[#181818]">{selectedResultStatusLabel}</p>
                 </div>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-[clamp(16px,2.6vw,32px)] py-[clamp(18px,3vh,30px)]">
+            <div className="min-h-0 flex-1 overflow-y-auto px-[clamp(18px,2.6vw,34px)] py-[clamp(20px,3vh,32px)]">
               {selectedResultLoading ? (
-                <div className="rounded-[20px] border border-black/10 bg-white p-8">
+                <div className="rounded-[26px] border border-[#e1e7f2] bg-white p-8 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
                   <div className="flex items-center gap-4">
-                    <div className="h-11 w-11 animate-spin rounded-full border-[3px] border-[var(--moa-primary-soft)] border-t-[var(--moa-primary)]" />
+                    <div className="h-11 w-11 animate-spin rounded-full border-[3px] border-[#d8e7ff] border-t-[#067bf8]" />
                     <div>
-                      <p className="text-base font-semibold text-black">최종 결과를 확인하는 중입니다.</p>
-                      <p className="mt-1 text-sm text-[var(--moa-text-body)]">회의 종료 시 저장된 워크스페이스 결과를 확인하고 있습니다.</p>
+                      <p className="text-[16px] font-bold leading-[1.4] tracking-[-0.4px] text-[#181818]">최종 결과를 확인하는 중입니다.</p>
+                      <p className="mt-1 text-[13px] font-medium leading-[1.6] tracking-[-0.325px] text-[#667085]">회의 종료 시 저장된 워크스페이스 결과를 확인하고 있습니다.</p>
                     </div>
                   </div>
                   <div className="mt-7 grid gap-4 md:grid-cols-2">
-                    <div className="h-28 animate-pulse rounded-[16px] bg-[var(--moa-surface-soft)]" />
-                    <div className="h-28 animate-pulse rounded-[16px] bg-[var(--moa-surface-soft)]" />
+                    <div className="h-28 animate-pulse rounded-[18px] bg-[#f7f9fc]" />
+                    <div className="h-28 animate-pulse rounded-[18px] bg-[#f7f9fc]" />
                   </div>
                 </div>
               ) : selectedResultError ? (
-                <div className="rounded-[20px] border border-[#f0c6c6] bg-white p-7">
-                  <div className="inline-flex rounded-full bg-[#fff5f5] px-3 py-1 text-xs font-semibold text-[#b23b3b]">확인 실패</div>
-                  <h3 className="mt-4 text-xl font-semibold text-black">최종 결과를 확인할 수 없습니다.</h3>
-                  <p className="mt-3 text-sm leading-6 text-[#b23b3b]">{selectedResultError}</p>
+                <div className="rounded-[26px] border border-[#f0c6c6] bg-white p-7 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                  <div className="inline-flex h-[30px] items-center rounded-full bg-[#fff5f5] px-3">
+                    <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#b23b3b]">확인 실패</span>
+                  </div>
+                  <h3 className="mt-4 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">최종 결과를 확인할 수 없습니다.</h3>
+                  <p className="mt-3 text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#b23b3b]">{selectedResultError}</p>
                   <div className="mt-6 flex flex-wrap gap-3">
                     <button
                       type="button"
-                      onClick={() => void handleOpenMeetingResult(selectedResultMeeting)}
-                      className="inline-flex h-10 items-center rounded-[12px] border border-[var(--moa-primary-border)] bg-[var(--moa-primary-soft)] px-4 text-sm font-semibold text-[var(--moa-primary-strong)] transition hover:border-[var(--moa-primary)] hover:bg-[var(--moa-primary-soft)]"
+                      onClick={() => void handleOpenMeetingResult(selectedResultDialogMeeting)}
+                      className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#d8e7ff] bg-[#f3f9ff] px-5 transition hover:border-[#9ecbff] hover:bg-[#eaf5ff]"
                     >
-                      다시 시도
+                      <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">다시 시도</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => void handleRebuildFinalResult(selectedResultMeeting)}
+                      onClick={() => void handleRebuildFinalResult(selectedResultDialogMeeting)}
                       disabled={selectedResultRebuilding}
-                      className="inline-flex h-10 items-center rounded-[12px] border border-black/10 bg-white px-4 text-sm font-semibold text-black transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {selectedResultRebuilding ? "재구성 중" : "결과 재구성"}
+                      <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
+                        {selectedResultRebuilding ? "재구성 중" : "결과 재구성"}
+                      </span>
                     </button>
                   </div>
                 </div>
-              ) : selectedResultTopics.length === 0 ? (
-                <div className="rounded-[20px] border border-dashed border-black/15 bg-white px-6 py-12 text-center">
-                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[var(--moa-primary-soft)] text-2xl font-semibold text-[var(--moa-primary)]">
+              ) : !selectedResultHasFinalResult ? (
+                <div className="rounded-[26px] border border-dashed border-[#cbd7e8] bg-white px-6 py-12 text-center shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#f3f9ff] text-2xl font-semibold text-[#067bf8]">
                     !
                   </div>
-                  <h3 className="mt-5 text-xl font-semibold text-black">저장된 최종 결과가 없습니다.</h3>
-                  <p className="mx-auto mt-3 max-w-[520px] text-sm leading-6 text-[var(--moa-text-body)]">
+                  <h3 className="mt-5 text-[20px] font-bold leading-[1.4] tracking-[-0.5px] text-[#181818]">저장된 최종 결과가 없습니다.</h3>
+                  <p className="mx-auto mt-3 max-w-[520px] text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#667085]">
                     요약 단계에서 최종 정리 문서를 생성하거나 직접 작성한 뒤 회의를 종료하면 이곳에 보고서 형태로 표시됩니다.
                   </p>
                   {selectedResultRebuildMessage ? (
-                    <p className="mx-auto mt-5 max-w-[520px] rounded-[14px] bg-[var(--moa-primary-soft)] px-4 py-3 text-sm font-semibold leading-6 text-[var(--moa-primary)]">
+                    <p className="mx-auto mt-5 max-w-[520px] rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] px-4 py-3 text-[13px] font-semibold leading-[1.7] tracking-[-0.325px] text-[#067bf8]">
                       {selectedResultRebuildMessage}
                     </p>
                   ) : null}
                   <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
                     <button
                       type="button"
-                      onClick={() => void handleRebuildFinalResult(selectedResultMeeting)}
+                      onClick={() => void handleRebuildFinalResult(selectedResultDialogMeeting)}
                       disabled={selectedResultRebuilding}
-                      className="inline-flex h-11 items-center rounded-[14px] border border-black/10 bg-white px-5 text-sm font-semibold text-black transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex h-[40px] items-center justify-center rounded-full border border-[#c9c9c9] bg-white px-5 transition hover:bg-[#f5f8ff] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {selectedResultRebuilding ? "재구성 중" : "결과 재구성"}
+                      <span className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#505050]">
+                        {selectedResultRebuilding ? "재구성 중" : "결과 재구성"}
+                      </span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleJoinMeeting(selectedResultMeeting.id)}
-                      className="inline-flex h-11 items-center rounded-[14px] border border-[var(--moa-primary-border)] bg-[var(--moa-primary-soft)] px-5 text-sm font-semibold text-[var(--moa-primary-strong)] transition hover:border-[var(--moa-primary)] hover:bg-[var(--moa-primary-soft)]"
+                      onClick={() => handleJoinMeeting(selectedResultDialogMeeting.id)}
+                      className="moa-dashboard-primary-button inline-flex h-[40px] items-center justify-center rounded-full px-6 shadow-[0_12px_28px_rgba(5,66,255,0.18)] transition"
                     >
-                      회의 화면으로 이동
+                      <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">회의 화면으로 이동</span>
                     </button>
                   </div>
+                </div>
+              ) : selectedResultTopics.length === 0 ? (
+                <div className="space-y-5">
+                  {selectedResultRebuildMessage ? (
+                    <div className="rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] px-5 py-4 text-[13px] font-semibold leading-[1.7] tracking-[-0.325px] text-[#067bf8]">
+                      {selectedResultRebuildMessage}
+                    </div>
+                  ) : null}
+                  <section className="overflow-hidden rounded-[26px] border border-[#e1e7f2] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#e1e7f2] bg-[#fbfdff] px-6 py-5">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">
+                          Final Document
+                        </p>
+                        <h3 className="mt-2 text-[clamp(18px,1.8vw,24px)] font-bold leading-[1.4] tracking-[-0.6px] text-[#181818]">
+                          최종 정리 문서
+                        </h3>
+                      </div>
+                      <span className="moa-dashboard-primary-button inline-flex h-[30px] items-center rounded-full px-3">
+                        <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">
+                          저장됨
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-[min(68vh,760px)] bg-[#f7f9fc] p-3">
+                      <iframe
+                        title="저장된 최종 정리 문서"
+                        srcDoc={selectedResultDocumentHtml}
+                        className="h-full w-full rounded-[20px] border border-[#edf1f6] bg-white"
+                      />
+                    </div>
+                  </section>
                 </div>
               ) : (
                 <div className="space-y-5">
                   {selectedResultRebuildMessage ? (
-                    <div className="rounded-[16px] border border-[var(--moa-primary-border)] bg-[var(--moa-primary-soft)] px-5 py-4 text-sm font-semibold text-[var(--moa-primary)]">
+                    <div className="rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] px-5 py-4 text-[13px] font-semibold leading-[1.7] tracking-[-0.325px] text-[#067bf8]">
                       {selectedResultRebuildMessage}
                     </div>
                   ) : null}
                   {selectedResultTopics.map((topic) => (
-                    <section key={topic.topic_id} className="overflow-hidden rounded-[20px] border border-black/10 bg-white shadow-[0_8px_26px_rgba(15,23,42,0.05)]">
-                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-black/10 bg-[#fbfcff] px-6 py-5">
+                    <section key={topic.topic_id} className="overflow-hidden rounded-[26px] border border-[#e1e7f2] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#e1e7f2] bg-[#fbfdff] px-6 py-5">
                         <div className="min-w-0">
-                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--moa-primary)]">Solution {topic.topic_no}</p>
-                          <h3 className="mt-2 text-[clamp(18px,2vw,24px)] font-semibold leading-tight text-black">
+                          <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">Section {topic.topic_no}</p>
+                          <h3 className="mt-2 text-[clamp(18px,1.8vw,24px)] font-bold leading-[1.4] tracking-[-0.6px] text-[#181818]">
                             {topic.topic_title || topic.problem_topic || `해결책 ${topic.topic_no}`}
                           </h3>
                         </div>
-                        <span className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
-                          최종 {(topic.final_notes || []).length}개
+                        <span className="moa-dashboard-primary-button inline-flex h-[30px] items-center rounded-full px-3">
+                          <span className="relative z-[1] block whitespace-nowrap text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-white">
+                            최종 {(topic.final_notes || []).length}개
+                          </span>
                         </span>
                       </div>
                       <div className="p-6">
                         {topic.problem_topic || topic.solution_conclusion ? (
                           <div className="grid gap-4 md:grid-cols-2">
                             {topic.problem_topic ? (
-                              <div className="rounded-[16px] border border-black/10 bg-[var(--moa-app-bg)] p-4">
-                                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#777]">문제 정의</p>
-                                <p className="mt-2 text-sm leading-6 text-black">{topic.problem_topic}</p>
+                              <div className="rounded-[18px] border border-[#e1e7f2] bg-[#f7f9fc] p-4">
+                                <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">문제 정의</p>
+                                <p className="mt-2 text-[14px] font-medium leading-[1.75] tracking-[-0.35px] text-[#181818]">{topic.problem_topic}</p>
                               </div>
                             ) : null}
                             {topic.solution_conclusion ? (
-                              <div className="rounded-[16px] border border-[var(--moa-primary-border)] bg-[var(--moa-primary-soft)] p-4">
-                                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--moa-primary)]">해결책 결론</p>
-                                <p className="mt-2 text-sm leading-6 text-black">{topic.solution_conclusion}</p>
+                              <div className="rounded-[18px] border border-[#d8e7ff] bg-[#f3f9ff] p-4">
+                                <p className="text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#067bf8]">해결책 결론</p>
+                                <p className="mt-2 text-[14px] font-medium leading-[1.75] tracking-[-0.35px] text-[#181818]">{topic.solution_conclusion}</p>
                               </div>
                             ) : null}
                           </div>
                         ) : null}
                         <div className="mt-5 space-y-3">
-                          <p className="text-sm font-semibold text-[var(--moa-text-body)]">최종 선택 메모</p>
+                          <p className="text-[13px] font-bold leading-[1.4] tracking-[-0.325px] text-[#4d4d4d]">최종 선택 메모</p>
                           {(topic.final_notes || []).map((note) => (
-                            <article key={note.id} className="border-l-4 border-[var(--moa-primary)] bg-[var(--moa-app-bg)] px-4 py-4">
+                            <article key={note.id} className="rounded-[18px] border border-[#e1e7f2] bg-[#fbfdff] px-4 py-4">
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-[var(--moa-primary)]">
-                                  {note.source === "ai" ? "AI 채택" : "사용자 메모"}
+                                <span className="inline-flex h-[26px] items-center rounded-full border border-[#d8e7ff] bg-white px-2.5">
+                                  <span className="text-[11px] font-semibold leading-[1.4] tracking-[-0.028px] text-[#067bf8]">
+                                    {note.source === "ai" ? "AI 채택" : "사용자 메모"}
+                                  </span>
                                 </span>
                                 {(note.agenda_titles || []).length > 0 ? (
-                                  <span className="text-xs text-[#777]">{(note.agenda_titles || []).join(", ")}</span>
+                                  <span className="text-[12px] font-medium leading-[1.4] tracking-[-0.03px] text-[#90a1b9]">{(note.agenda_titles || []).join(", ")}</span>
                                 ) : null}
                               </div>
-                              <p className="mt-3 text-base font-semibold leading-7 text-black">{note.note_text}</p>
+                              <p className="mt-3 text-[15px] font-bold leading-[1.7] tracking-[-0.375px] text-[#181818]">{note.note_text}</p>
                               {note.final_comment ? (
-                                <p className="mt-2 text-sm leading-6 text-[var(--moa-text-body)]">{note.final_comment}</p>
+                                <p className="mt-2 text-[13px] font-medium leading-[1.7] tracking-[-0.325px] text-[#667085]">{note.final_comment}</p>
                               ) : null}
                             </article>
                           ))}

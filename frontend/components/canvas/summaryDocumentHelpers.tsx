@@ -3,6 +3,8 @@ import type {
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentBlock,
   CanvasSummaryDocumentSection,
+  CanvasSummaryTableColumn,
+  CanvasSummaryTableRow,
   CanvasSummaryStructuredDocument,
 } from "@/lib/types";
 
@@ -49,6 +51,51 @@ function normalizeStringList(value: unknown, limit: number) {
     : [];
 }
 
+const MAX_SUMMARY_BULLET_INDENT = 3;
+
+function getSummaryBulletIndent(item: string) {
+  const match = item.match(/^\t*/);
+  return Math.min(MAX_SUMMARY_BULLET_INDENT, match?.[0].length || 0);
+}
+
+function getSummaryBulletText(item: string) {
+  return item.replace(/^\t+/, "").trim();
+}
+
+function withSummaryBulletIndent(text: string, indent: number) {
+  return `${"\t".repeat(Math.max(0, Math.min(MAX_SUMMARY_BULLET_INDENT, indent)))}${text.trim()}`;
+}
+
+function normalizeBulletStringList(value: unknown, limit: number) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => {
+          if (typeof item !== "string") return "";
+          const indent = getSummaryBulletIndent(item);
+          const text = getSummaryBulletText(item);
+          return text ? withSummaryBulletIndent(text, indent) : "";
+        })
+        .filter(Boolean)
+        .slice(0, limit)
+    : [];
+}
+
+const SUMMARY_PLACEHOLDER_TEXTS = new Set([
+  "...",
+  "…",
+  "-",
+  "실제 회의 흐름에 근거한 항목",
+  "회의에서 실제로 정리된 방향",
+  "회의에서 실제로 남은 질문",
+  "짧은 핵심 논의",
+  "그 논의가 나온 근거",
+]);
+
+function isSummaryPlaceholderText(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return !text || SUMMARY_PLACEHOLDER_TEXTS.has(text);
+}
+
 function stableSummaryBlockId(prefix: string, seed: string) {
   let hash = 0;
   for (let index = 0; index < seed.length; index += 1) {
@@ -57,17 +104,224 @@ function stableSummaryBlockId(prefix: string, seed: string) {
   return `${prefix}-${Math.abs(hash).toString(36) || "0"}`;
 }
 
+function createSummaryTableColumn(title: string, seed: string, type: CanvasSummaryTableColumn["type"] = "text"): CanvasSummaryTableColumn {
+  return {
+    id: stableSummaryBlockId("col", seed),
+    title,
+    type,
+  };
+}
+
+function normalizeSummaryTableTitle(title: string) {
+  return title === "핵심 결정 사항" || title === "핵심결정사항" ? "핵심 논의 사항" : title;
+}
+
+function compactSummaryTableCell(value: string, limit: number) {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+}
+
+function normalizeDiscussionSummaryTable(
+  blockId: string,
+  title: string,
+  columns: CanvasSummaryTableColumn[],
+  rows: CanvasSummaryTableRow[],
+): { columns: CanvasSummaryTableColumn[]; rows: CanvasSummaryTableRow[] } {
+  if (title !== "핵심 논의 사항" && blockId !== "table-discussions") {
+    return { columns, rows };
+  }
+
+  const findColumnId = (...keys: string[]) => {
+    const keySet = new Set(keys);
+    return columns.find((column) => keySet.has(column.id) || keySet.has(column.title))?.id || "";
+  };
+  const topicId = findColumnId("col-topic", "항목");
+  const discussionId = findColumnId("col-discussion", "논의 내용");
+  const evidenceId = findColumnId("col-evidence", "근거", "논의 근거");
+  const statusId = findColumnId("col-status", "상태");
+  const nextColumns: CanvasSummaryTableColumn[] = [
+    { id: "col-discussion", title: "논의 내용", type: "text" },
+    { id: "col-evidence", title: "논의 근거", type: "text" },
+    { id: "col-status", title: "상태", type: "select" },
+  ];
+  const nextRows = rows
+    .map((row, rowIndex): CanvasSummaryTableRow | null => {
+      const oldTopic = topicId ? row.cells[topicId] || "" : "";
+      const oldDiscussion = discussionId ? row.cells[discussionId] || "" : "";
+      const oldEvidence = evidenceId ? row.cells[evidenceId] || "" : "";
+      const discussion = oldTopic || oldDiscussion;
+      const evidence = oldTopic && oldDiscussion && oldDiscussion !== oldTopic ? oldDiscussion : oldEvidence;
+      if (!discussion && !evidence) return null;
+      return {
+        id: row.id || stableSummaryBlockId("row", `${blockId}:${rowIndex}`),
+        cells: {
+          "col-discussion": compactSummaryTableCell(discussion, 34),
+          "col-evidence": compactSummaryTableCell(evidence, 72),
+          "col-status": compactSummaryTableCell((statusId ? row.cells[statusId] : "") || "검토 필요", 12),
+        },
+      };
+    })
+    .filter((row): row is CanvasSummaryTableRow => Boolean(row))
+    .slice(0, 6);
+
+  return { columns: nextColumns, rows: nextRows };
+}
+
+function defaultSummaryTableColumns(seed: string): CanvasSummaryTableColumn[] {
+  return [
+    createSummaryTableColumn("항목", `${seed}:item`),
+    createSummaryTableColumn("내용", `${seed}:content`),
+  ];
+}
+
+function normalizeSummaryTableColumns(rawColumns: unknown, blockId: string): CanvasSummaryTableColumn[] {
+  if (!Array.isArray(rawColumns)) return defaultSummaryTableColumns(blockId);
+  const usedIds = new Set<string>();
+  const columns = rawColumns
+    .map((column, index): CanvasSummaryTableColumn | null => {
+      if (typeof column === "string") {
+        const title = column.trim();
+        if (!title) return null;
+        return createSummaryTableColumn(title, `${blockId}:${index}:${title}`);
+      }
+      if (!column || typeof column !== "object") return null;
+      const source = column as Record<string, unknown>;
+      const titleSource = source.title || source.name || source.header || source.text || source.id;
+      const title = typeof titleSource === "string" ? titleSource.trim() : "";
+      if (!title) return null;
+      const rawId = typeof source.id === "string" && source.id.trim()
+        ? source.id.trim()
+        : stableSummaryBlockId("col", `${blockId}:${index}:${title}`);
+      const id = usedIds.has(rawId) ? `${rawId}-${index}` : rawId;
+      usedIds.add(id);
+      const type = typeof source.type === "string" && source.type.trim() ? source.type.trim() : "text";
+      return { id, title, type };
+    })
+    .filter((column): column is CanvasSummaryTableColumn => Boolean(column))
+    .slice(0, 8);
+  return columns.length > 0 ? columns : defaultSummaryTableColumns(blockId);
+}
+
+function createBlankSummaryTableRow(columns: CanvasSummaryTableColumn[], seed: string): CanvasSummaryTableRow {
+  return {
+    id: stableSummaryBlockId("row", seed),
+    cells: Object.fromEntries(columns.map((column) => [column.id, ""])),
+  };
+}
+
+function normalizeSummaryTableRows(rawRows: unknown, columns: CanvasSummaryTableColumn[], blockId: string): CanvasSummaryTableRow[] {
+  if (!Array.isArray(rawRows)) return [createBlankSummaryTableRow(columns, `${blockId}:blank`)];
+  const rows = rawRows
+    .map((row, rowIndex): CanvasSummaryTableRow | null => {
+      let cells: Record<string, string> = {};
+      let rawId = "";
+      if (Array.isArray(row)) {
+        cells = Object.fromEntries(
+          columns.map((column, cellIndex) => {
+            const value = row[cellIndex];
+            return [column.id, typeof value === "string" ? value.trim() : ""];
+          }),
+        );
+      } else if (row && typeof row === "object") {
+        const source = row as Record<string, unknown>;
+        rawId = typeof source.id === "string" ? source.id.trim() : "";
+        const sourceCells = source.cells && typeof source.cells === "object"
+          ? (source.cells as Record<string, unknown>)
+          : source;
+        cells = Object.fromEntries(
+          columns.map((column) => {
+            const value = sourceCells[column.id] ?? sourceCells[column.title];
+            return [column.id, typeof value === "string" ? value.trim() : ""];
+          }),
+        );
+      } else {
+        return null;
+      }
+
+      if (!Object.values(cells).some(Boolean)) return null;
+      return {
+        id: rawId || stableSummaryBlockId("row", `${blockId}:${rowIndex}:${Object.values(cells).join("|")}`),
+        cells,
+      };
+    })
+    .filter((row): row is CanvasSummaryTableRow => Boolean(row))
+    .slice(0, 40);
+  return rows.length > 0 ? rows : [createBlankSummaryTableRow(columns, `${blockId}:blank`)];
+}
+
+function filterMeaningfulSummaryTableRows(rows: CanvasSummaryTableRow[], columns: CanvasSummaryTableColumn[]) {
+  const statusIds = new Set(columns.filter((column) => column.id === "col-status" || column.title === "상태").map((column) => column.id));
+  return rows.filter((row) =>
+    Object.entries(row.cells).some(([columnId, value]) => !statusIds.has(columnId) && !isSummaryPlaceholderText(value)),
+  );
+}
+
+function summaryBlockHasContent(block: CanvasSummaryDocumentBlock) {
+  if (block.type === "paragraph") return !isSummaryPlaceholderText(block.text);
+  if (block.type === "bullets") return block.items.some((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
+  if (block.type === "table") return filterMeaningfulSummaryTableRows(block.rows, block.columns).length > 0;
+  return !isSummaryPlaceholderText(block.text);
+}
+
+function pruneEmptySummarySections(blocks: CanvasSummaryDocumentBlock[]) {
+  const normalizedBlocks = blocks
+    .map((block): CanvasSummaryDocumentBlock | null => {
+      if (block.type === "paragraph") return isSummaryPlaceholderText(block.text) ? null : block;
+      if (block.type === "bullets") {
+        const items = block.items.filter((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
+        return items.length > 0 ? { ...block, items } : null;
+      }
+      if (block.type === "table") {
+        const rows = filterMeaningfulSummaryTableRows(block.rows, block.columns);
+        return rows.length > 0 ? { ...block, rows } : null;
+      }
+      return block;
+    })
+    .filter((block): block is CanvasSummaryDocumentBlock => Boolean(block));
+
+  const contentPrunedBlocks = normalizedBlocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    for (const nextBlock of normalizedBlocks.slice(index + 1)) {
+      if (nextBlock.type === "heading" && (nextBlock.level || 2) <= (block.level || 2)) {
+        break;
+      }
+      if (nextBlock.type !== "heading" && summaryBlockHasContent(nextBlock)) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  return contentPrunedBlocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    const nextBlock = contentPrunedBlocks.slice(index + 1).find((item) => item.type !== "paragraph");
+    if (nextBlock?.type === "table" && nextBlock.title?.trim() === block.text.trim()) {
+      return false;
+    }
+    const previousBlock = contentPrunedBlocks[index - 1];
+    if (previousBlock?.type === "heading" && previousBlock.text.trim() === block.text.trim()) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export function createSummaryDocumentBlock(type: CanvasSummaryDocumentBlock["type"]): CanvasSummaryDocumentBlock {
   const id = `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   if (type === "heading") return { id, type, text: "새 제목", level: 2 };
   if (type === "paragraph") return { id, type, text: "새 문단을 입력하세요." };
   if (type === "bullets") return { id, type, items: ["새 항목"] };
+  const columns = [
+    createSummaryTableColumn("항목", `${id}:item`),
+    createSummaryTableColumn("내용", `${id}:content`),
+    createSummaryTableColumn("비고", `${id}:memo`),
+  ];
   return {
     id,
     type,
     title: "새 표",
-    columns: ["항목", "내용", "비고"],
-    rows: [["", "", ""]],
+    columns,
+    rows: [createBlankSummaryTableRow(columns, `${id}:row`)],
   };
 }
 
@@ -87,34 +341,28 @@ function normalizeSummaryDocumentBlock(raw: unknown, index: number): CanvasSumma
 
   if (type === "paragraph") {
     const text = typeof source.text === "string" ? source.text.trim() : "";
-    return text ? { id, type, text } : null;
+    return !isSummaryPlaceholderText(text) ? { id, type, text } : null;
   }
 
   if (type === "bullets") {
-    const items = normalizeStringList(source.items, 20);
+    const items = normalizeBulletStringList(source.items, 20).filter((item) => !isSummaryPlaceholderText(getSummaryBulletText(item)));
     return items.length > 0 ? { id, type, items } : null;
   }
 
   if (type === "table") {
-    const columns = normalizeStringList(source.columns, 8);
-    const safeColumns = columns.length > 0 ? columns : ["항목", "내용"];
-    const rawRows = Array.isArray(source.rows) ? source.rows : [];
-    const rows = rawRows
-      .filter(Array.isArray)
-      .map((row) =>
-        safeColumns.map((_, cellIndex) => {
-          const value = row[cellIndex];
-          return typeof value === "string" ? value.trim() : "";
-        }),
-      )
-      .filter((row) => row.some(Boolean))
-      .slice(0, 40);
+    const title = typeof source.title === "string" ? source.title.trim() : "";
+    const normalizedTitle = normalizeSummaryTableTitle(title);
+    const columns = normalizeSummaryTableColumns(source.columns, id);
+    const rows = normalizeSummaryTableRows(source.rows, columns, id);
+    const table = normalizeDiscussionSummaryTable(id, normalizedTitle, columns, rows);
+    const meaningfulRows = filterMeaningfulSummaryTableRows(table.rows, table.columns);
+    if (meaningfulRows.length === 0) return null;
     return {
       id,
       type,
-      title: typeof source.title === "string" ? source.title.trim() : "",
-      columns: safeColumns,
-      rows: rows.length > 0 ? rows : [safeColumns.map(() => "")],
+      title: normalizedTitle,
+      columns: table.columns,
+      rows: meaningfulRows,
     };
   }
 
@@ -213,10 +461,12 @@ function markdownToSummaryDocumentBlocks(markdown: string): CanvasSummaryDocumen
       continue;
     }
 
-    const bulletMatch = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+[.)]\s+(.+)$/);
+    const rawLine = lines[index];
+    const bulletMatch = rawLine.match(/^(\s*)[-*]\s+(.+)$/) || rawLine.match(/^(\s*)\d+[.)]\s+(.+)$/);
     if (bulletMatch) {
       flushParagraph();
-      bulletBuffer.push(bulletMatch[1]);
+      const indentWidth = bulletMatch[1].replace(/\t/g, "  ").length;
+      bulletBuffer.push(withSummaryBulletIndent(bulletMatch[2], Math.floor(indentWidth / 2)));
       index += 1;
       continue;
     }
@@ -243,6 +493,11 @@ function buildSummaryDocumentBlocksFromStructured(structured: CanvasSummaryStruc
     blocks.push({ id: stableSummaryBlockId("paragraph", summary), type: "paragraph", text: summary });
   }
 
+  const conclusionColumns = [
+    createSummaryTableColumn("정리 항목", "conclusion:item"),
+    createSummaryTableColumn("상태", "conclusion:status"),
+    createSummaryTableColumn("핵심 내용", "conclusion:content"),
+  ];
   const conclusionRows = (structured.conclusion.groups || []).map((group) => [
     group.title,
     group.status_label || (group.status === "final" ? "확정" : group.status === "review" ? "검토 중" : "초안"),
@@ -253,19 +508,24 @@ function buildSummaryDocumentBlocksFromStructured(structured: CanvasSummaryStruc
       id: "table-problem-solution",
       type: "table",
       title: "문제정의 & 해결 방향",
-      columns: ["정리 항목", "상태", "핵심 내용"],
-      rows: conclusionRows,
+      columns: conclusionColumns,
+      rows: normalizeSummaryTableRows(conclusionRows, conclusionColumns, "table-problem-solution"),
     });
   }
 
   const actionRows = normalizeStringList(structured.pending_items, 20).map((item) => [item, "추가 확인 필요", ""]);
   if (actionRows.length > 0) {
+    const actionColumns = [
+      createSummaryTableColumn("할 일", "actions:item"),
+      createSummaryTableColumn("담당", "actions:owner"),
+      createSummaryTableColumn("비고", "actions:memo"),
+    ];
     blocks.push({
       id: "table-next-actions",
       type: "table",
       title: "앞으로 할 일",
-      columns: ["할 일", "담당", "비고"],
-      rows: actionRows,
+      columns: actionColumns,
+      rows: normalizeSummaryTableRows(actionRows, actionColumns, "table-next-actions"),
     });
   }
 
@@ -283,12 +543,12 @@ export function normalizeSummaryDocumentBlocks(
         .filter((block): block is CanvasSummaryDocumentBlock => Boolean(block))
         .slice(0, 80)
     : [];
-  if (directBlocks.length > 0) return directBlocks;
+  if (directBlocks.length > 0) return pruneEmptySummarySections(directBlocks);
 
   const structuredBlocks = buildSummaryDocumentBlocksFromStructured(structured);
-  if (structuredBlocks.length > 0) return structuredBlocks;
+  if (structuredBlocks.length > 0) return pruneEmptySummarySections(structuredBlocks);
 
-  return markdownToSummaryDocumentBlocks(markdown);
+  return pruneEmptySummarySections(markdownToSummaryDocumentBlocks(markdown));
 }
 
 function escapeMarkdownTableCell(value: string) {
@@ -308,15 +568,20 @@ export function summaryDocumentBlocksToMarkdown(blocks: CanvasSummaryDocumentBlo
       return;
     }
     if (block.type === "bullets") {
-      chunks.push(block.items.filter(Boolean).map((item) => `- ${item}`).join("\n"));
+      chunks.push(
+        block.items
+          .filter((item) => getSummaryBulletText(item))
+          .map((item) => `${"  ".repeat(getSummaryBulletIndent(item))}- ${getSummaryBulletText(item)}`)
+          .join("\n"),
+      );
       return;
     }
     if (block.type === "table") {
       const title = block.title?.trim();
-      const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
-      const header = `| ${columns.map(escapeMarkdownTableCell).join(" | ")} |`;
+      const columns = block.columns.length > 0 ? block.columns : defaultSummaryTableColumns(block.id);
+      const header = `| ${columns.map((column) => escapeMarkdownTableCell(column.title)).join(" | ")} |`;
       const divider = `| ${columns.map(() => "---").join(" | ")} |`;
-      const rows = block.rows.map((row) => `| ${columns.map((_, index) => escapeMarkdownTableCell(row[index] || "")).join(" | ")} |`);
+      const rows = block.rows.map((row) => `| ${columns.map((column) => escapeMarkdownTableCell(row.cells[column.id] || "")).join(" | ")} |`);
       chunks.push([title ? `### ${title}` : "", header, divider, ...rows].filter(Boolean).join("\n"));
     }
   });
@@ -465,6 +730,12 @@ export function normalizeFinalSolutionSummaryPayload(
     markdown: normalizedMarkdown,
     document_blocks: documentBlocks,
     document_status: raw.document_status || (normalizedMarkdown || documentBlocks.length > 0 ? "ready" : "empty"),
+    revision: Number.isFinite(Number(raw.revision)) ? Math.max(0, Math.trunc(Number(raw.revision))) : 0,
+    source_generation_id: raw.source_generation_id || "",
+    based_on_transcript_revision: Number.isFinite(Number(raw.based_on_transcript_revision))
+      ? Math.max(0, Math.trunc(Number(raw.based_on_transcript_revision)))
+      : 0,
+    updated_at: raw.updated_at || "",
     generated_at: raw.generated_at || "",
     used_llm: Boolean(raw.used_llm),
     warning: raw.warning || "",
@@ -776,12 +1047,31 @@ export function buildPrintableSummaryDocumentHtml(markdown: string, options: { i
   <title>최종 정리 문서</title>
   <style>
     @page { size: A4; margin: 18mm; }
+    @font-face {
+      font-family: "Pretendard";
+      src: url("/fonts/PretendardVariable.woff2") format("woff2");
+      font-weight: 100 900;
+      font-display: swap;
+    }
     * { box-sizing: border-box; }
+    :root {
+      --moa-primary: #067bf8;
+      --moa-primary-deep: #0542ff;
+      --moa-surface: #ffffff;
+      --moa-surface-soft: #f8f8f8;
+      --moa-surface-blue: #f3f9ff;
+      --moa-text: #181818;
+      --moa-text-body: #4d4d4d;
+      --moa-text-muted: #90a1b9;
+      --moa-border: #e1e7f2;
+      --moa-border-blue: #d8e7ff;
+      --moa-gradient: linear-gradient(270deg, #0542ff 0%, #089ef5 100%);
+    }
     body {
       margin: 0;
-      background: #f5f6f8;
-      color: #111;
-      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+      background: var(--moa-surface-soft);
+      color: var(--moa-text);
+      font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
       line-height: 1.65;
     }
     .toolbar {
@@ -792,57 +1082,166 @@ export function buildPrintableSummaryDocumentHtml(markdown: string, options: { i
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      border-bottom: 1px solid rgba(0,0,0,0.1);
+      border-bottom: 1px solid var(--moa-border);
       background: rgba(255,255,255,0.94);
-      padding: 14px 24px;
+      padding: 16px 28px;
       backdrop-filter: blur(12px);
+      box-shadow: 0 8px 30px rgba(15,23,42,0.04);
     }
-    .toolbar p { margin: 0; color: #4d4d4d; font-size: 13px; }
+    .toolbar p {
+      margin: 0;
+      color: var(--moa-text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: -0.03px;
+      line-height: 1.4;
+    }
     .toolbar button {
-      border: 1px solid #bfdbfe;
-      border-radius: 10px;
-      background: #eef8ff;
-      color: #236cf3;
-      padding: 9px 14px;
+      min-height: 40px;
+      border: 1px solid var(--moa-border-blue);
+      border-radius: 999px;
+      background: var(--moa-surface-blue);
+      color: var(--moa-primary);
+      padding: 0 20px;
+      font-family: inherit;
+      font-size: 12px;
       font-weight: 700;
+      letter-spacing: -0.03px;
       cursor: pointer;
     }
     .document {
-      width: min(860px, calc(100% - 40px));
-      margin: 32px auto;
-      border: 1px solid rgba(0,0,0,0.1);
-      background: #fff;
-      padding: 44px 50px;
-      box-shadow: 0 20px 70px rgba(15,23,42,0.09);
+      width: min(920px, calc(100% - 48px));
+      margin: 38px auto;
+      border: 1px solid var(--moa-border);
+      border-radius: 26px;
+      background: var(--moa-surface);
+      padding: 52px 58px 58px;
+      box-shadow: 0 24px 70px rgba(15,23,42,0.08);
     }
     .document-title {
-      margin: 0 0 28px;
-      color: #000;
-      font-size: 32px;
-      font-weight: 750;
-      letter-spacing: 0;
-      line-height: 1.25;
+      margin: 0 0 30px;
+      color: var(--moa-text);
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: -0.75px;
+      line-height: 1.35;
     }
-    h1 { margin: 26px 0 18px; color: #000; font-size: 30px; line-height: 1.25; }
-    h2 { margin: 34px 0 14px; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 22px; color: #000; font-size: 22px; line-height: 1.45; }
-    h3 { margin: 24px 0 10px; color: #1f2937; font-size: 17px; line-height: 1.55; }
-    h4 { margin: 18px 0 8px; color: #1f2937; font-size: 15px; line-height: 1.55; }
-    p { margin: 12px 0; color: #334155; font-size: 15px; line-height: 1.85; }
-    ul { margin: 12px 0; padding-left: 24px; color: #334155; font-size: 15px; line-height: 1.8; }
-    li { margin: 5px 0; }
-    strong { font-weight: 750; color: #111827; }
+    h1 {
+      margin: 28px 0 18px;
+      color: var(--moa-text);
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.7px;
+      line-height: 1.35;
+    }
+    h2 {
+      margin: 36px 0 14px;
+      border-top: 1px solid var(--moa-border);
+      padding-top: 24px;
+      color: var(--moa-text);
+      font-size: 22px;
+      font-weight: 750;
+      letter-spacing: -0.55px;
+      line-height: 1.45;
+    }
+    h3 {
+      margin: 26px 0 10px;
+      color: var(--moa-primary);
+      font-size: 17px;
+      font-weight: 750;
+      letter-spacing: -0.425px;
+      line-height: 1.55;
+    }
+    h4 {
+      margin: 20px 0 8px;
+      color: var(--moa-text);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.375px;
+      line-height: 1.55;
+    }
+    p {
+      margin: 12px 0;
+      color: var(--moa-text-body);
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: -0.25px;
+      line-height: 1.85;
+    }
+    ul {
+      margin: 12px 0;
+      padding-left: 22px;
+      color: var(--moa-text-body);
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: -0.25px;
+      line-height: 1.8;
+    }
+    li { margin: 6px 0; padding-left: 2px; }
+    li::marker { color: var(--moa-primary); }
+    strong { font-weight: 800; color: var(--moa-text); }
     em { font-style: italic; }
-    code { border-radius: 5px; background: #eef8ff; padding: 1px 5px; color: #236cf3; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
-    .table-wrap { margin: 18px 0; overflow-x: auto; border: 1px solid rgba(0,0,0,0.1); }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { border-bottom: 1px solid rgba(0,0,0,0.1); background: #f5f6f8; padding: 10px 12px; text-align: left; color: #000; }
-    td { border-bottom: 1px solid rgba(0,0,0,0.05); padding: 10px 12px; vertical-align: top; color: #334155; }
+    code {
+      border-radius: 7px;
+      background: var(--moa-surface-blue);
+      padding: 2px 6px;
+      color: var(--moa-primary);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .table-wrap {
+      margin: 20px 0 22px;
+      overflow-x: auto;
+      border: 1px solid var(--moa-border);
+      border-radius: 16px;
+      background: var(--moa-surface);
+    }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 14px;
+    }
+    th {
+      border-bottom: 1px solid var(--moa-border);
+      background: var(--moa-surface-blue);
+      padding: 13px 14px;
+      text-align: left;
+      color: var(--moa-primary);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: -0.03px;
+      line-height: 1.45;
+    }
+    td {
+      border-bottom: 1px solid #edf1f6;
+      padding: 13px 14px;
+      vertical-align: top;
+      color: var(--moa-text-body);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.2px;
+      line-height: 1.7;
+    }
     tr:last-child td { border-bottom: 0; }
-    .empty { color: #999; }
+    .empty {
+      color: var(--moa-text-muted);
+      border: 1px solid var(--moa-border-blue);
+      border-radius: 18px;
+      background: var(--moa-surface-blue);
+      padding: 18px 20px;
+    }
+    @media (max-width: 720px) {
+      .toolbar { align-items: flex-start; flex-direction: column; padding: 16px 18px; }
+      .document { width: calc(100% - 24px); margin: 16px auto; border-radius: 20px; padding: 28px 22px 34px; }
+      .document-title { font-size: 24px; }
+      h1 { font-size: 23px; }
+      h2 { font-size: 19px; }
+    }
     @media print {
       body { background: #fff; }
       .toolbar { display: none; }
-      .document { width: auto; margin: 0; border: 0; padding: 0; box-shadow: none; }
+      .document { width: auto; margin: 0; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
       h2 { break-after: avoid; }
       h1, h2, h3, h4, p, li, tr { break-inside: avoid; }
     }

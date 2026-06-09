@@ -1,13 +1,17 @@
 "use client";
 
-import { memo, useMemo, type ReactNode, type RefObject } from "react";
-import {
-  createSummaryDocumentBlock,
-} from "@/components/canvas/summaryDocumentHelpers";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { EditorContent, useEditor } from "@tiptap/react";
+import type { JSONContent } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
+import Placeholder from "@tiptap/extension-placeholder";
 import type {
+  CanvasArtifactGenerationStatus,
   CanvasEditPresencePayload,
   CanvasFinalSolutionSummary,
   CanvasSummaryDocumentBlock,
+  CanvasSummaryTableColumn,
   CanvasSummaryStructuredConclusionGroup,
   CanvasSummaryStructuredDiscussionFlow,
   CanvasSummaryStructuredDocument,
@@ -59,12 +63,15 @@ type SolutionFinalDocumentPanelProps = {
   draftDirty: boolean;
   editMode: boolean;
   pending: boolean;
+  generationStatus: CanvasArtifactGenerationStatus;
+  generationError: string;
   saving: boolean;
   eligibleGroupCount: number;
   presentation: SolutionPresentationModel;
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   onSetEditMode: (editMode: boolean) => void;
   onRegenerate: () => void | Promise<void>;
+  onRefreshCache: () => void | Promise<void>;
   onCopy: () => void | Promise<void>;
   onSave: () => void | Promise<void>;
   onBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -260,22 +267,6 @@ function SparkleIcon({ className = "" }: { className?: string }) {
   );
 }
 
-function PlusIcon() {
-  return (
-    <svg aria-hidden="true" className="h-[13px] w-[13px]" viewBox="0 0 24 24" fill="none">
-      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg aria-hidden="true" className="h-[13px] w-[13px]" viewBox="0 0 24 24" fill="none">
-      <path d="M4 7h16M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0 .7 12.2A2 2 0 0 0 9.7 21h4.6a2 2 0 0 0 2-1.8L17 7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function SummaryCardToolIcons() {
   return (
     <div className="absolute right-[18px] top-[24px] flex items-center gap-[9px] text-[#9a9a9a]" aria-hidden="true">
@@ -284,123 +275,203 @@ function SummaryCardToolIcons() {
   );
 }
 
-function summaryBlockLabel(type: CanvasSummaryDocumentBlock["type"]) {
-  if (type === "heading") return "제목";
-  if (type === "paragraph") return "문단";
-  if (type === "bullets") return "목록";
-  return "표";
+function fallbackDocumentTableColumns(blockId: string): CanvasSummaryTableColumn[] {
+  return [
+    { id: `${blockId}-col-item`, title: "항목", type: "text" },
+    { id: `${blockId}-col-content`, title: "내용", type: "text" },
+  ];
 }
 
-function normalizeTableRow(row: string[], columnCount: number) {
-  return Array.from({ length: columnCount }, (_, index) => row[index] || "");
+const MAX_BULLET_INDENT = 3;
+
+function getBulletIndent(item: string) {
+  const match = item.match(/^\t*/);
+  return Math.min(MAX_BULLET_INDENT, match?.[0].length || 0);
 }
 
-function updateSummaryDocumentBlock(
-  blocks: CanvasSummaryDocumentBlock[],
-  blockId: string,
-  updater: (block: CanvasSummaryDocumentBlock) => CanvasSummaryDocumentBlock,
-) {
-  return blocks.map((block) => (block.id === blockId ? updater(block) : block));
+function getBulletText(item: string) {
+  return item.replace(/^\t+/, "");
 }
 
-function moveSummaryDocumentBlock(blocks: CanvasSummaryDocumentBlock[], blockId: string, direction: -1 | 1) {
-  const index = blocks.findIndex((block) => block.id === blockId);
-  const targetIndex = index + direction;
-  if (index < 0 || targetIndex < 0 || targetIndex >= blocks.length) return blocks;
-  const next = blocks.slice();
-  const [block] = next.splice(index, 1);
-  next.splice(targetIndex, 0, block);
-  return next;
+function withBulletIndent(text: string, indent: number) {
+  return `${"\t".repeat(Math.max(0, Math.min(MAX_BULLET_INDENT, indent)))}${text}`;
 }
 
-function DocumentToolButton({
-  children,
-  disabled,
-  onClick,
-}: {
-  children: ReactNode;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex h-[30px] items-center gap-[5px] rounded-full border border-[#dce7fb] bg-white px-3 text-[11px] font-bold leading-none text-[#236cf3] shadow-[0_1px_3px_rgba(35,108,243,0.08)] transition hover:bg-[#f5f9ff] disabled:cursor-not-allowed disabled:opacity-45"
-    >
-      <PlusIcon />
-      {children}
-    </button>
-  );
+function stableEditorId(prefix: string, seed: string) {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) | 0;
+  }
+  return `${prefix}-${Math.abs(hash).toString(36)}`;
 }
 
-function DocumentMiniButton({
-  children,
-  disabled,
-  onClick,
-}: {
-  children: ReactNode;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex h-[26px] items-center justify-center rounded-full border border-[#dbe3ef] bg-white px-2.5 text-[10px] font-bold text-[#767676] transition hover:border-[#236cf3] hover:text-[#236cf3] disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {children}
-    </button>
-  );
+function createTiptapTextContent(text: string): JSONContent[] {
+  return text ? [{ type: "text", text }] : [];
 }
 
-function DocumentInput({
-  value,
-  disabled,
-  placeholder,
-  onChange,
-}: {
-  value: string;
-  disabled?: boolean;
-  placeholder?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <input
-      value={value}
-      disabled={disabled}
-      placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
-      className="h-[34px] w-full rounded-[8px] border border-[#dbe3ef] bg-white px-3 text-[12px] font-medium leading-none text-[#242424] outline-none transition placeholder:text-[#a8b3c4] focus:border-[#236cf3] focus:ring-2 focus:ring-[#236cf3]/10 disabled:bg-[#f6f7fa]"
-    />
-  );
+function createTiptapParagraph(text = ""): JSONContent {
+  return { type: "paragraph", content: createTiptapTextContent(text) };
 }
 
-function DocumentTextarea({
-  value,
-  disabled,
-  placeholder,
-  minHeight = 96,
-  onChange,
-}: {
-  value: string;
-  disabled?: boolean;
-  placeholder?: string;
-  minHeight?: number;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <textarea
-      value={value}
-      disabled={disabled}
-      placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
-      style={{ minHeight }}
-      className="w-full resize-y rounded-[8px] border border-[#dbe3ef] bg-white px-3 py-2 text-[12px] font-medium leading-[20px] text-[#242424] outline-none transition placeholder:text-[#a8b3c4] focus:border-[#236cf3] focus:ring-2 focus:ring-[#236cf3]/10 disabled:bg-[#f6f7fa]"
-    />
-  );
+function createTiptapTableCell(type: "tableCell" | "tableHeader", text: string): JSONContent {
+  return {
+    type,
+    attrs: { colspan: 1, rowspan: 1, colwidth: null },
+    content: [createTiptapParagraph(text)],
+  };
+}
+
+function summaryBlocksToTiptapContent(blocks: CanvasSummaryDocumentBlock[]): JSONContent {
+  const content: JSONContent[] = [];
+
+  blocks.forEach((block) => {
+    if (block.type === "heading") {
+      content.push({
+        type: "heading",
+        attrs: { level: block.level || 2 },
+        content: createTiptapTextContent(block.text),
+      });
+      return;
+    }
+
+    if (block.type === "paragraph") {
+      content.push(createTiptapParagraph(block.text));
+      return;
+    }
+
+    if (block.type === "bullets") {
+      content.push({
+        type: "bulletList",
+        content: block.items.map((item) => ({
+          type: "listItem",
+          content: [createTiptapParagraph(getBulletText(item))],
+        })),
+      });
+      return;
+    }
+
+    if (block.type === "table") {
+      if (block.title?.trim()) {
+        content.push({
+          type: "heading",
+          attrs: { level: 3 },
+          content: createTiptapTextContent(block.title.trim()),
+        });
+      }
+
+      const columns = block.columns.length > 0 ? block.columns : fallbackDocumentTableColumns(block.id);
+      const rows = block.rows.length > 0 ? block.rows : [];
+      content.push({
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: columns.map((column) => createTiptapTableCell("tableHeader", column.title)),
+          },
+          ...rows.map((row) => ({
+            type: "tableRow",
+            content: columns.map((column) => createTiptapTableCell("tableCell", row.cells?.[column.id] || "")),
+          })),
+        ],
+      });
+    }
+  });
+
+  return { type: "doc", content: content.length > 0 ? content : [createTiptapParagraph()] };
+}
+
+function tiptapNodeText(node: JSONContent | undefined): string {
+  if (!node) return "";
+  if (typeof node.text === "string") return node.text;
+  return (node.content || []).map((child) => tiptapNodeText(child)).join("");
+}
+
+function extractTiptapBulletItems(node: JSONContent, depth = 0): string[] {
+  if (node.type === "listItem") {
+    const paragraphText = (node.content || [])
+      .filter((child) => child.type === "paragraph")
+      .map((child) => tiptapNodeText(child).trim())
+      .filter(Boolean);
+    const nested = (node.content || [])
+      .filter((child) => child.type === "bulletList")
+      .flatMap((child) => extractTiptapBulletItems(child, depth + 1));
+    return [
+      ...paragraphText.map((text) => withBulletIndent(text, depth)),
+      ...nested,
+    ];
+  }
+
+  return (node.content || []).flatMap((child) => extractTiptapBulletItems(child, depth));
+}
+
+function tiptapTableToSummaryBlock(node: JSONContent, index: number, title = ""): CanvasSummaryDocumentBlock | null {
+  const rows = (node.content || []).filter((child) => child.type === "tableRow");
+  if (rows.length === 0) return null;
+
+  const firstRowCells = rows[0].content || [];
+  const columns = firstRowCells.map((cell, cellIndex) => ({
+    id: stableEditorId("col", `${index}:${cellIndex}:${tiptapNodeText(cell) || cellIndex}`),
+    title: tiptapNodeText(cell).trim() || `열 ${cellIndex + 1}`,
+    type: "text",
+  }));
+  const nextColumns = columns.length > 0 ? columns : fallbackDocumentTableColumns(`tiptap-table-${index}`);
+  const bodyRows = rows.slice(1).map((row, rowIndex) => ({
+    id: stableEditorId("row", `${index}:${rowIndex}:${tiptapNodeText(row)}`),
+    cells: Object.fromEntries(
+      nextColumns.map((column, cellIndex) => [column.id, tiptapNodeText(row.content?.[cellIndex]).trim()]),
+    ),
+  }));
+
+  return {
+    id: stableEditorId("table", `${index}:${title}:${tiptapNodeText(node)}`),
+    type: "table",
+    title,
+    columns: nextColumns,
+    rows: bodyRows,
+  };
+}
+
+function tiptapContentToSummaryBlocks(content: JSONContent): CanvasSummaryDocumentBlock[] {
+  const blocks: CanvasSummaryDocumentBlock[] = [];
+  const nodes = content.content || [];
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (node.type === "heading") {
+      const text = tiptapNodeText(node).trim();
+      const nextNode = nodes[index + 1];
+      if (text && nextNode?.type === "table" && (node.attrs?.level || 2) >= 3) {
+        const tableBlock = tiptapTableToSummaryBlock(nextNode, index + 1, text);
+        if (tableBlock) blocks.push(tableBlock);
+        index += 1;
+        continue;
+      }
+      if (text) {
+        const level = node.attrs?.level === 1 || node.attrs?.level === 2 || node.attrs?.level === 3 ? node.attrs.level : 2;
+        blocks.push({ id: stableEditorId("heading", `${index}:${text}`), type: "heading", text, level });
+      }
+      continue;
+    }
+
+    if (node.type === "paragraph") {
+      const text = tiptapNodeText(node).trim();
+      if (text) blocks.push({ id: stableEditorId("paragraph", `${index}:${text}`), type: "paragraph", text });
+      continue;
+    }
+
+    if (node.type === "bulletList") {
+      const items = extractTiptapBulletItems(node).filter((item) => getBulletText(item).trim());
+      if (items.length > 0) blocks.push({ id: stableEditorId("bullets", `${index}:${items.join("|")}`), type: "bullets", items });
+      continue;
+    }
+
+    if (node.type === "table") {
+      const tableBlock = tiptapTableToSummaryBlock(node, index);
+      if (tableBlock) blocks.push(tableBlock);
+    }
+  }
+
+  return blocks.slice(0, 80);
 }
 
 function SolutionDocumentBlocksView({
@@ -412,22 +483,36 @@ function SolutionDocumentBlocksView({
   fallbackTitle: string;
   fallbackSummary: string;
 }) {
+  const visibleBlocks = useMemo(() => blocks.filter((block, index) => {
+    if (block.type !== "heading" || (block.level || 2) === 1) return true;
+    const nextBlock = blocks.slice(index + 1).find((item) => item.type !== "paragraph");
+    if (nextBlock?.type === "table" && nextBlock.title?.trim() === block.text.trim()) {
+      return false;
+    }
+    const previousBlock = blocks[index - 1];
+    if (previousBlock?.type === "heading" && previousBlock.text.trim() === block.text.trim()) {
+      return false;
+    }
+    return true;
+  }), [blocks]);
+
   const sectionNumberByBlockId = useMemo(() => {
     const nextMap = new Map<string, number>();
     let nextNumber = 0;
-    blocks.forEach((block) => {
+    visibleBlocks.forEach((block) => {
       if (block.type === "heading") {
         const level = block.level || 2;
         if (level === 1) return;
+      } else if (block.type !== "table" || !block.title) {
+        return;
       }
-      if (block.type === "paragraph") return;
       nextNumber += 1;
       nextMap.set(block.id, nextNumber);
     });
     return nextMap;
-  }, [blocks]);
+  }, [visibleBlocks]);
 
-  if (blocks.length === 0) {
+  if (visibleBlocks.length === 0) {
     return (
       <div className="mt-[7px]">
         <h2 className="max-w-[560px] text-[24px] font-bold leading-[1.42] tracking-[-0.6px] text-[#181818]">{fallbackTitle}</h2>
@@ -442,7 +527,7 @@ function SolutionDocumentBlocksView({
 
   return (
     <div className="mt-[7px] space-y-[30px]">
-      {blocks.map((block, index) => {
+      {visibleBlocks.map((block, index) => {
         if (block.type === "heading") {
           const level = block.level || (index === 0 ? 1 : 2);
           if (level === 1) {
@@ -480,25 +565,18 @@ function SolutionDocumentBlocksView({
         }
 
         if (block.type === "bullets") {
-          const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
           return (
-            <section key={block.id} className="space-y-[12px]">
-              <h3 className="flex items-center gap-[10px] text-[16px] font-bold leading-[1.4] tracking-[-0.04px] text-[#181818]">
-                <span className="grid h-[17px] min-w-[17px] place-items-center rounded-[3px] bg-[#8f8f8f] px-[4px] text-[11px] font-bold leading-none text-white">
-                  {sectionNumber}
-                </span>
-                추가 논의 / 열린 메모
-              </h3>
-              <ul className="space-y-[5px] pl-[27px] text-[12px] font-medium leading-[1.65] tracking-[-0.03px] text-[#767676]">
-                {block.items.map((item, itemIndex) => (
-                  <li key={`${block.id}-item-${itemIndex}`} className="list-disc">{item}</li>
-                ))}
-              </ul>
-            </section>
+            <ul key={block.id} className="space-y-[5px] pl-[27px] text-[12px] font-medium leading-[1.65] tracking-[-0.03px] text-[#767676]">
+              {block.items.map((item, itemIndex) => (
+                <li key={`${block.id}-item-${itemIndex}`} className="list-disc" style={{ marginLeft: getBulletIndent(item) * 18 }}>
+                  {getBulletText(item)}
+                </li>
+              ))}
+            </ul>
           );
         }
 
-        const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
+        const columns = block.columns.length > 0 ? block.columns : fallbackDocumentTableColumns(block.id);
         const rows = block.rows.length > 0 ? block.rows : [];
         const sectionNumber = sectionNumberByBlockId.get(block.id) || 1;
         return (
@@ -512,22 +590,32 @@ function SolutionDocumentBlocksView({
               </h3>
             ) : null}
             <div className="overflow-x-auto rounded-[4px] border border-[#bfc3ca] bg-white">
-              <table className="min-w-full border-collapse text-center text-[11px] leading-[1.5] tracking-[-0.03px]">
+              <table className="w-full table-fixed border-collapse text-left text-[11px] leading-[1.5] tracking-[-0.03px]">
                 <thead>
                   <tr className="bg-[#f3f4f7] text-[#181818]">
-                    {columns.map((column, columnIndex) => (
-                      <th key={`${block.id}-head-${columnIndex}`} className="border-b border-r border-[#bfc3ca] px-3 py-[9px] font-semibold last:border-r-0">
-                        {column}
+                    {columns.map((column) => (
+                      <th
+                        key={`${block.id}-head-${column.id}`}
+                        className={`break-words border-b border-r border-[#bfc3ca] px-[10px] py-[9px] font-semibold last:border-r-0 ${
+                          column.title === "상태" ? "w-[72px] text-center" : ""
+                        }`}
+                      >
+                        {column.title}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="text-[#4d4d4d]">
                   {rows.map((row, rowIndex) => (
-                    <tr key={`${block.id}-row-${rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
-                      {normalizeTableRow(row, columns.length).map((cell, cellIndex) => (
-                        <td key={`${block.id}-cell-${rowIndex}-${cellIndex}`} className="whitespace-pre-line border-r border-[#cdd0d5] px-3 py-[9px] align-top font-medium last:border-r-0">
-                          {cell}
+                    <tr key={`${block.id}-row-${row.id || rowIndex}`} className="border-t border-[#cdd0d5] first:border-t-0">
+                      {columns.map((column) => (
+                        <td
+                          key={`${block.id}-cell-${row.id || rowIndex}-${column.id}`}
+                          className={`whitespace-pre-line break-words border-r border-[#cdd0d5] px-[10px] py-[9px] align-top font-medium last:border-r-0 ${
+                            column.title === "상태" ? "text-center" : ""
+                          }`}
+                        >
+                          {row.cells?.[column.id] || ""}
                         </td>
                       ))}
                     </tr>
@@ -551,274 +639,188 @@ function SolutionDocumentBlockEditor({
   disabled?: boolean;
   onChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
 }) {
-  const addBlock = (type: CanvasSummaryDocumentBlock["type"]) => {
-    onChange([...blocks, createSummaryDocumentBlock(type)]);
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
+  const onChangeRef = useRef(onChange);
+  const [initialContent] = useState(() => summaryBlocksToTiptapContent(blocks));
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  const [slashMenuIndex, setSlashMenuIndex] = useState(0);
+  const [slashMenuPosition, setSlashMenuPosition] = useState({ left: 0, top: 0 });
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  const extensions = useMemo(() => [
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3] },
+    }),
+    Table.configure({
+      resizable: true,
+    }),
+    TableRow,
+    TableHeader,
+    TableCell,
+    Placeholder.configure({
+      placeholder: ({ node }) => {
+        if (node.type.name === "heading") return "제목";
+        return "내용을 입력하거나 / 를 눌러 블록을 선택하세요";
+      },
+    }),
+  ], []);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions,
+    editable: !disabled,
+    content: initialContent,
+    onUpdate: ({ editor: currentEditor }) => {
+      onChangeRef.current(tiptapContentToSummaryBlocks(currentEditor.getJSON()));
+    },
+  });
+
+  useEffect(() => {
+    editor?.setEditable(!disabled);
+  }, [disabled, editor]);
+
+  const openSlashMenu = () => {
+    if (!editor || !editorRootRef.current) return;
+    const rootBounds = editorRootRef.current.getBoundingClientRect();
+    const selectionCoords = editor.view.coordsAtPos(editor.state.selection.from);
+    const left = Math.max(0, Math.min(selectionCoords.left - rootBounds.left, rootBounds.width - 160));
+    const top = Math.max(0, selectionCoords.bottom - rootBounds.top + 6);
+    setSlashMenuPosition({ left, top });
+    setSlashMenuIndex(0);
+    setSlashMenuOpen(true);
   };
 
-  const removeBlock = (blockId: string) => {
-    onChange(blocks.filter((block) => block.id !== blockId));
+  const closeSlashMenu = () => {
+    setSlashMenuOpen(false);
+    setSlashMenuIndex(0);
+  };
+
+  const slashCommands = useMemo(() => [
+    {
+      label: "문단",
+      description: "기본 텍스트",
+      run: () => {
+        editor?.chain().focus().setParagraph().run();
+        closeSlashMenu();
+      },
+    },
+    {
+      label: "제목",
+      description: "섹션 제목",
+      run: () => {
+        editor?.chain().focus().setHeading({ level: 2 }).run();
+        closeSlashMenu();
+      },
+    },
+    {
+      label: "목록",
+      description: "불릿 리스트",
+      run: () => {
+        editor?.chain().focus().toggleBulletList().run();
+        closeSlashMenu();
+      },
+    },
+    {
+      label: "표",
+      description: "3 x 3 표",
+      run: () => {
+        editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+        closeSlashMenu();
+      },
+    },
+  ], [editor]);
+
+  const handleEditorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (disabled || !editor) return;
+
+    if (slashMenuOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSlashMenu();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSlashMenuIndex((current) => (current + 1) % slashCommands.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashMenuIndex((current) => (current - 1 + slashCommands.length) % slashCommands.length);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        slashCommands[slashMenuIndex]?.run();
+      }
+      return;
+    }
+
+    if (event.key === "/") {
+      event.preventDefault();
+      openSlashMenu();
+    }
   };
 
   return (
-    <div className="mt-[22px] space-y-[14px]">
-      <div className="flex flex-wrap gap-2">
-        {(["heading", "paragraph", "bullets", "table"] as const).map((type) => (
-          <DocumentToolButton key={type} disabled={disabled} onClick={() => addBlock(type)}>
-            {summaryBlockLabel(type)}
-          </DocumentToolButton>
-        ))}
-      </div>
-
-      {blocks.length === 0 ? (
-        <div className="rounded-[12px] border border-dashed border-[#dbe3ef] bg-white/70 px-4 py-8 text-center text-[12px] font-medium text-[#90a1b9]">
-          문서 블록이 없습니다.
-        </div>
-      ) : (
-        <div className="space-y-[12px]">
-          {blocks.map((block, index) => (
-            <section key={block.id} className="rounded-[12px] border border-[#dbe3ef] bg-white/90 p-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.03)]">
-              <div className="mb-[10px] flex items-center justify-between gap-3">
-                <span className="rounded-full bg-[#f4f8ff] px-2.5 py-1 text-[10px] font-bold text-[#236cf3]">
-                  {summaryBlockLabel(block.type)}
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <DocumentMiniButton disabled={disabled || index === 0} onClick={() => onChange(moveSummaryDocumentBlock(blocks, block.id, -1))}>
-                    위로
-                  </DocumentMiniButton>
-                  <DocumentMiniButton disabled={disabled || index === blocks.length - 1} onClick={() => onChange(moveSummaryDocumentBlock(blocks, block.id, 1))}>
-                    아래로
-                  </DocumentMiniButton>
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => removeBlock(block.id)}
-                    className="grid h-[26px] w-[26px] place-items-center rounded-full border border-[#f0d8d8] bg-white text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-45"
-                    aria-label="블록 삭제"
-                  >
-                    <TrashIcon />
-                  </button>
-                </div>
-              </div>
-
-              {block.type === "heading" ? (
-                <div className="grid grid-cols-[86px_minmax(0,1fr)] gap-2">
-                  <select
-                    value={block.level || 2}
-                    disabled={disabled}
-                    onChange={(event) => {
-                      const level = Number(event.target.value) as 1 | 2 | 3;
-                      onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "heading" ? { ...current, level } : current)));
-                    }}
-                    className="h-[34px] rounded-[8px] border border-[#dbe3ef] bg-white px-2 text-[12px] font-bold text-[#4d4d4d] outline-none focus:border-[#236cf3] disabled:bg-[#f6f7fa]"
-                  >
-                    <option value={1}>H1</option>
-                    <option value={2}>H2</option>
-                    <option value={3}>H3</option>
-                  </select>
-                  <DocumentInput
-                    value={block.text}
-                    disabled={disabled}
-                    placeholder="제목"
-                    onChange={(text) =>
-                      onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "heading" ? { ...current, text } : current)))
-                    }
-                  />
-                </div>
-              ) : null}
-
-              {block.type === "paragraph" ? (
-                <DocumentTextarea
-                  value={block.text}
-                  disabled={disabled}
-                  placeholder="문단"
-                  onChange={(text) =>
-                    onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "paragraph" ? { ...current, text } : current)))
-                  }
-                />
-              ) : null}
-
-              {block.type === "bullets" ? (
-                <div className="space-y-2">
-                  {(block.items.length > 0 ? block.items : [""]).map((item, itemIndex) => (
-                    <div key={`${block.id}-edit-item-${itemIndex}`} className="grid grid-cols-[minmax(0,1fr)_26px] gap-2">
-                      <DocumentInput
-                        value={item}
-                        disabled={disabled}
-                        placeholder="항목"
-                        onChange={(text) =>
-                          onChange(
-                            updateSummaryDocumentBlock(blocks, block.id, (current) => {
-                              if (current.type !== "bullets") return current;
-                              const items = current.items.length > 0 ? current.items.slice() : [""];
-                              items[itemIndex] = text;
-                              return { ...current, items };
-                            }),
-                          )
-                        }
-                      />
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        onClick={() =>
-                          onChange(
-                            updateSummaryDocumentBlock(blocks, block.id, (current) => {
-                              if (current.type !== "bullets") return current;
-                              const items = current.items.filter((_, index) => index !== itemIndex);
-                              return { ...current, items: items.length > 0 ? items : [""] };
-                            }),
-                          )
-                        }
-                        className="grid h-[34px] w-[26px] place-items-center rounded-full text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-40"
-                        aria-label="항목 삭제"
-                      >
-                        <TrashIcon />
-                      </button>
-                    </div>
-                  ))}
-                  <DocumentMiniButton
-                    disabled={disabled}
-                    onClick={() =>
-                      onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "bullets" ? { ...current, items: [...current.items, ""] } : current)))
-                    }
-                  >
-                    항목 추가
-                  </DocumentMiniButton>
-                </div>
-              ) : null}
-
-              {block.type === "table" ? (
-                <TableBlockEditor block={block} blocks={blocks} disabled={disabled} onChange={onChange} />
-              ) : null}
-            </section>
+    <div
+      ref={editorRootRef}
+      className="summary-tiptap-editor relative mt-[22px] min-h-[560px] text-[#181818] [&_.ProseMirror]:min-h-[560px] [&_.ProseMirror]:outline-none [&_.ProseMirror>*+*]:mt-[14px] [&_.ProseMirror_h1]:text-[24px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:leading-[1.42] [&_.ProseMirror_h1]:tracking-[-0.6px] [&_.ProseMirror_h2]:text-[16px] [&_.ProseMirror_h2]:font-bold [&_.ProseMirror_h2]:leading-[1.4] [&_.ProseMirror_h2]:tracking-[-0.04px] [&_.ProseMirror_h3]:text-[14px] [&_.ProseMirror_h3]:font-bold [&_.ProseMirror_h3]:leading-[1.4] [&_.ProseMirror_p]:text-[12px] [&_.ProseMirror_p]:font-medium [&_.ProseMirror_p]:leading-[1.7] [&_.ProseMirror_p]:tracking-[-0.03px] [&_.ProseMirror_p]:text-[#767676] [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:space-y-[5px] [&_.ProseMirror_ul]:pl-[27px] [&_.ProseMirror_li_p]:m-0 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:table-fixed [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_table]:text-left [&_.ProseMirror_table]:text-[11px] [&_.ProseMirror_table]:leading-[1.5] [&_.ProseMirror_table]:tracking-[-0.03px] [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-[#bfc3ca] [&_.ProseMirror_th]:bg-[#f3f4f7] [&_.ProseMirror_th]:px-[10px] [&_.ProseMirror_th]:py-[9px] [&_.ProseMirror_th]:font-semibold [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-[#cdd0d5] [&_.ProseMirror_td]:px-[10px] [&_.ProseMirror_td]:py-[9px] [&_.ProseMirror_td]:align-top [&_.is-empty:first-child::before]:pointer-events-none [&_.is-empty:first-child::before]:float-left [&_.is-empty:first-child::before]:h-0 [&_.is-empty:first-child::before]:text-[#b5bfcd] [&_.is-empty:first-child::before]:content-[attr(data-placeholder)]"
+      onKeyDown={handleEditorKeyDown}
+    >
+      <EditorContent editor={editor} />
+      {slashMenuOpen ? (
+        <div
+          className="absolute z-30 w-[172px] overflow-hidden rounded-[10px] border border-[#dbe3ef] bg-white py-[5px] shadow-[0_12px_30px_rgba(23,23,23,0.14)]"
+          style={{ left: slashMenuPosition.left, top: slashMenuPosition.top }}
+        >
+          {slashCommands.map((command, index) => (
+            <button
+              key={command.label}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                command.run();
+              }}
+              className={`flex w-full flex-col px-[12px] py-[8px] text-left transition ${
+                index === slashMenuIndex ? "bg-[#f6f9ff]" : "hover:bg-[#f6f9ff]"
+              }`}
+            >
+              <span className="text-[12px] font-semibold leading-none tracking-[-0.03px] text-[#181818]">{command.label}</span>
+              <span className="mt-[4px] text-[10px] font-medium leading-none tracking-[-0.025px] text-[#90a1b9]">{command.description}</span>
+            </button>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function TableBlockEditor({
-  block,
-  blocks,
+function DocumentHeaderActionButton({
+  children,
   disabled,
-  onChange,
+  variant = "secondary",
+  onClick,
 }: {
-  block: Extract<CanvasSummaryDocumentBlock, { type: "table" }>;
-  blocks: CanvasSummaryDocumentBlock[];
+  children: ReactNode;
   disabled?: boolean;
-  onChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
+  variant?: "primary" | "secondary";
+  onClick: () => void | Promise<void>;
 }) {
-  const columns = block.columns.length > 0 ? block.columns : ["항목", "내용"];
-  const rows = block.rows.length > 0 ? block.rows.map((row) => normalizeTableRow(row, columns.length)) : [columns.map(() => "")];
-
-  const updateTable = (updater: (table: Extract<CanvasSummaryDocumentBlock, { type: "table" }>) => Extract<CanvasSummaryDocumentBlock, { type: "table" }>) => {
-    onChange(updateSummaryDocumentBlock(blocks, block.id, (current) => (current.type === "table" ? updater(current) : current)));
-  };
+  const className =
+    variant === "primary"
+      ? "inline-flex h-[28px] min-w-[58px] items-center justify-center rounded-full border border-[#01a3ff] bg-[linear-gradient(90deg,#54c1ff_32.705%,#2f70e9_157.88%)] px-[14px] text-white shadow-[0_-3px_2px_rgba(255,255,255,0.24),0_2px_6px_rgba(130,158,161,0.22)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#d8d8d8] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none"
+      : "inline-flex h-[28px] min-w-[58px] items-center justify-center rounded-full border border-[#dbe3ef] bg-white px-[14px] text-[#505050] shadow-[0_1px_3px_rgba(23,23,23,0.04)] transition hover:bg-[#f6f9ff] disabled:cursor-not-allowed disabled:opacity-45";
 
   return (
-    <div className="space-y-[10px]">
-      <DocumentInput value={block.title || ""} disabled={disabled} placeholder="표 제목" onChange={(title) => updateTable((current) => ({ ...current, title }))} />
-
-      <div className="overflow-x-auto rounded-[10px] border border-[#dbe3ef] bg-white">
-        <table className="min-w-full border-collapse text-left">
-          <thead>
-            <tr className="bg-[#f4f8ff]">
-              {columns.map((column, columnIndex) => (
-                <th key={`${block.id}-edit-column-${columnIndex}`} className="min-w-[118px] border-b border-[#dbe3ef] px-2 py-2 align-top">
-                  <div className="flex items-center gap-1.5">
-                    <DocumentInput
-                      value={column}
-                      disabled={disabled}
-                      placeholder="열"
-                      onChange={(text) =>
-                        updateTable((current) => {
-                          const nextColumns = columns.slice();
-                          nextColumns[columnIndex] = text;
-                          return { ...current, columns: nextColumns, rows };
-                        })
-                      }
-                    />
-                    <button
-                      type="button"
-                      disabled={disabled || columns.length <= 1}
-                      onClick={() =>
-                        updateTable((current) => ({
-                          ...current,
-                          columns: columns.filter((_, index) => index !== columnIndex),
-                          rows: rows.map((row) => row.filter((_, index) => index !== columnIndex)),
-                        }))
-                      }
-                      className="grid h-[28px] w-[24px] shrink-0 place-items-center rounded-full text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-35"
-                      aria-label="열 삭제"
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                </th>
-              ))}
-              <th className="w-[60px] border-b border-[#dbe3ef] px-2 py-2">
-                <DocumentMiniButton
-                  disabled={disabled}
-                  onClick={() =>
-                    updateTable((current) => ({
-                      ...current,
-                      columns: [...columns, "새 열"],
-                      rows: rows.map((row) => [...row, ""]),
-                    }))
-                  }
-                >
-                  열
-                </DocumentMiniButton>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={`${block.id}-edit-row-${rowIndex}`} className="border-t border-[#edf1f6] first:border-t-0">
-                {row.map((cell, cellIndex) => (
-                  <td key={`${block.id}-edit-cell-${rowIndex}-${cellIndex}`} className="min-w-[118px] px-2 py-2 align-top">
-                    <DocumentTextarea
-                      value={cell}
-                      disabled={disabled}
-                      minHeight={58}
-                      placeholder="내용"
-                      onChange={(text) =>
-                        updateTable((current) => {
-                          const nextRows = rows.map((currentRow, currentRowIndex) =>
-                            currentRowIndex === rowIndex ? currentRow.map((currentCell, currentCellIndex) => (currentCellIndex === cellIndex ? text : currentCell)) : currentRow,
-                          );
-                          return { ...current, columns, rows: nextRows };
-                        })
-                      }
-                    />
-                  </td>
-                ))}
-                <td className="w-[60px] px-2 py-2 align-top">
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() =>
-                      updateTable((current) => {
-                        const nextRows = rows.filter((_, index) => index !== rowIndex);
-                        return { ...current, columns, rows: nextRows.length > 0 ? nextRows : [columns.map(() => "")] };
-                      })
-                    }
-                    className="grid h-[30px] w-[30px] place-items-center rounded-full text-[#cf3d3d] transition hover:bg-[#fff5f5] disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="행 삭제"
-                  >
-                    <TrashIcon />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <DocumentMiniButton disabled={disabled} onClick={() => updateTable((current) => ({ ...current, columns, rows: [...rows, columns.map(() => "")] }))}>
-        행 추가
-      </DocumentMiniButton>
-    </div>
+    <button type="button" disabled={disabled} onClick={() => void onClick()} className={className}>
+      <span className="moa-font-pretendard text-[11px] font-semibold leading-none tracking-[-0.027px]">
+        {children}
+      </span>
+    </button>
   );
 }
 
@@ -1014,12 +1016,15 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   draftDirty,
   editMode,
   pending,
+  generationStatus,
+  generationError,
   saving,
   eligibleGroupCount,
   presentation,
   remoteEditPresenceByKey,
   onSetEditMode,
   onRegenerate,
+  onRefreshCache,
   onCopy,
   onSave,
   onBlocksChange,
@@ -1035,6 +1040,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   const remoteSummaryEditPresence = remoteEditPresenceByKey[makeEditPresenceKey("summary_document", "final")] || null;
   const remoteSummaryEditor = remoteSummaryEditPresence?.updated_by || "다른 사용자";
   const editDisabled = pending || saving || Boolean(remoteSummaryEditPresence && !editMode);
+  const generationFailed = generationStatus === "failed";
 
   return (
     <section ref={paneRef} className="min-h-0 overflow-y-auto bg-white px-[30px] pb-[38px] pt-[42px]">
@@ -1054,15 +1060,40 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
 
       <article className="relative h-[calc(100vh-166px)] min-h-[760px] overflow-y-auto rounded-[12px] border border-[#cecccc] bg-white px-[34px] pb-[48px] pt-[30px] shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
         <div className="absolute right-[18px] top-[15px] flex items-center gap-1">
-          <IconButton label="요약 문서 다시 생성" disabled={pending || saving || eligibleGroupCount === 0} onClick={onRegenerate}>
-            <RefreshIcon />
-          </IconButton>
-          <IconButton label="결론 카드 수정" disabled={editDisabled} onClick={() => onSetEditMode(!editMode)}>
-            <EditIcon />
-          </IconButton>
-          <IconButton label="결론 카드 복사" disabled={!hasDocumentContent} onClick={onCopy}>
-            <CopyIcon />
-          </IconButton>
+          {editMode ? (
+            <>
+              <DocumentHeaderActionButton disabled={saving} onClick={() => onSetEditMode(false)}>
+                취소
+              </DocumentHeaderActionButton>
+              <DocumentHeaderActionButton
+                variant="primary"
+                disabled={pending || saving || !draftDirty}
+                onClick={onSave}
+              >
+                {saving ? "저장 중" : "저장"}
+              </DocumentHeaderActionButton>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={pending || saving || eligibleGroupCount === 0}
+                onClick={() => void onRefreshCache()}
+                className="mr-1 inline-flex h-[28px] items-center rounded-full border border-[#d5e5ff] bg-white px-3 text-[#236cf3] transition hover:bg-[#eef6ff] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <span className="moa-font-pretendard text-[11px] font-semibold leading-none tracking-[-0.027px]">캐시 재생성</span>
+              </button>
+              <IconButton label="요약 문서 다시 생성" disabled={pending || saving || eligibleGroupCount === 0} onClick={onRegenerate}>
+                <RefreshIcon />
+              </IconButton>
+              <IconButton label="결론 카드 수정" disabled={editDisabled} onClick={() => onSetEditMode(true)}>
+                <EditIcon />
+              </IconButton>
+              <IconButton label="결론 카드 복사" disabled={!hasDocumentContent} onClick={onCopy}>
+                <CopyIcon />
+              </IconButton>
+            </>
+          )}
         </div>
 
         <div className="inline-flex rounded-full border border-[#d5e5ff] bg-[linear-gradient(90deg,#2e77ff_0%,#4d6ff2_100%)] px-[9px] py-[5px] text-[10px] font-bold leading-none text-white shadow-[inset_0_3px_3px_rgba(255,255,255,0.15)]">
@@ -1076,6 +1107,13 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
         {remoteSummaryEditPresence && !editMode ? (
           <p className="mt-4 rounded-[8px] bg-[#eef6ff] px-3 py-2 text-[11px] font-medium leading-5 text-[#236cf3]">
             {remoteSummaryEditor}님이 결론을 수정 중입니다.
+          </p>
+        ) : null}
+
+        {generationFailed ? (
+          <p className="mt-4 rounded-[8px] border border-[#fecaca] bg-[#fff5f5] px-3 py-2 text-[11px] font-semibold leading-5 text-[#dc2626]">
+            요약 문서 생성에 실패했습니다. 다시 생성 버튼을 눌러 재시도할 수 있습니다.
+            {generationError ? ` (${generationError})` : ""}
           </p>
         ) : null}
 
@@ -1094,23 +1132,6 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
               tabIndex={-1}
               className="sr-only"
             />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => onSetEditMode(false)}
-                className="rounded-full bg-[#eff0f6] px-4 py-2 text-[12px] font-semibold text-[#505050]"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={() => void onSave()}
-                disabled={pending || saving || !draftDirty}
-                className="rounded-full bg-[#236cf3] px-5 py-2 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#d8d8d8]"
-              >
-                {saving ? "저장 중" : "저장"}
-              </button>
-            </div>
           </div>
         ) : showLegacyMarkdown ? (
           <div className="mt-[22px] min-h-[560px] overflow-hidden rounded-[12px]">

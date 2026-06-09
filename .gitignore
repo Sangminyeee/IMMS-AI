@@ -11,6 +11,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/lib/
+!frontend/lib/**
 lib64/
 parts/
 sdist/
@@ -89,6 +91,7 @@ yarn-error.log*
 .pm2/
 pids/
 logs/
+output/
 
 # Lock files
 .run_dev.lock
@@ -97,3 +100,5 @@ logs/
 deploy/.env.production
 .codex-temp
 frontend/app/fonts
+!frontend/app/fonts/
+!frontend/app/fonts/**

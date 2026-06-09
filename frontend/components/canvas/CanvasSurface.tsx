@@ -9,8 +9,25 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { memo, type ReactNode, type RefObject } from "react";
-import type { CanvasEditPresencePayload, CanvasFinalSolutionSummary, CanvasSummaryDocumentBlock } from "@/lib/types";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { useMoaPresence, useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
+import { classNames } from "@/lib/classNames";
+import type {
+  CanvasArtifactGenerationStatus,
+  CanvasEditPresencePayload,
+  CanvasFinalSolutionSummary,
+  CanvasSummaryDocumentBlock,
+} from "@/lib/types";
 import {
   CanvasStageEmptyOverlay,
   CanvasStatusToast,
@@ -68,6 +85,8 @@ export type CanvasSurfaceSolutionState = {
   remoteEditPresenceByKey: Record<string, CanvasEditPresencePayload>;
   summaryDocumentEditMode: boolean;
   summaryDocumentPending: boolean;
+  summaryDocumentGenerationStatus: CanvasArtifactGenerationStatus;
+  summaryDocumentGenerationError: string;
   summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
 };
@@ -76,10 +95,14 @@ export type CanvasSurfaceProblemState = {
   problemGroupsCount: number;
   problemStructureNodesCount: number;
   problemDefinitionStagePending: boolean;
+  problemDefinitionGenerationStatus: CanvasArtifactGenerationStatus;
+  problemDefinitionGenerationError: string;
   problemStructureSetupOpen: boolean;
   problemStructureDraftMethod: ProblemStructureMethod;
   problemStructureDraftMode: ProblemDefinitionMode;
   problemStructurePending: boolean;
+  problemStructureGenerationStatus: CanvasArtifactGenerationStatus;
+  problemStructureGenerationError: string;
   problemDefinitionPhase: ProblemDefinitionPhase;
   problemStructureMethod: ProblemStructureMethod;
   problemDefinitionMode: ProblemDefinitionMode;
@@ -103,6 +126,7 @@ export type CanvasSurfaceSolutionHandlers = {
   onToggleSummaryEvidence: (groupId: string) => void;
   onSetSummaryDocumentEditMode: (editMode: boolean) => void;
   onRegenerateSummaryDocument: () => void | Promise<void>;
+  onRefreshSummaryCache: () => void | Promise<void>;
   onCopyFinalSolutionMarkdown: () => void | Promise<void>;
   onSaveSummaryDocument: () => void | Promise<void>;
   onSummaryDocumentBlocksChange: (blocks: CanvasSummaryDocumentBlock[]) => void;
@@ -114,8 +138,11 @@ export type CanvasSurfaceProblemHandlers = {
   onProblemStructureDraftMethodChange: (method: ProblemStructureMethod) => void;
   onProblemStructureDraftModeChange: (mode: ConcreteProblemDefinitionMode) => void;
   onStartProblemStructure: () => void | Promise<void>;
+  onRegenerateProblemStructure: () => void | Promise<void>;
+  onRegenerateProblemDefinition: () => void | Promise<void>;
   onProblemStructureMethodChange: (method: ProblemStructureMethod) => void;
   onProblemDefinitionModeChange: (mode: ConcreteProblemDefinitionMode) => void;
+  onProblemDefinitionPhaseSelect: (phase: ProblemDefinitionPhase) => void;
   onCloseProblemGroupingRationale: () => void;
   getProblemToolbarActionLabel: (action: ProblemCanvasToolbarActionId) => string;
   isProblemToolbarActionActive: (action: ProblemCanvasToolbarActionId) => boolean;
@@ -136,18 +163,34 @@ export type CanvasSurfaceProps = {
 
 const EMPTY_EDGES: Edge[] = [];
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const;
+const CANVAS_STAGE_FADE_OUT_MS = 260;
+const CANVAS_STAGE_FADE_IN_MS = 740;
+
+type CanvasStageTransitionPhase = "idle" | "out" | "in";
+
+type CanvasSurfaceStageSnapshot = {
+  key: string;
+  stage: CanvasStage;
+  problemDefinitionPhase: ProblemDefinitionPhase;
+  nodes: Node[];
+  problemSplitLeftEdges: Edge[];
+  solution: CanvasSurfaceSolutionState;
+  hasFinalProblemStructureGroups: boolean;
+};
 
 function ProblemGroupingRationaleOverlay({
+  exiting = false,
   title,
   rationale,
   onClose,
 }: {
+  exiting?: boolean;
   title: string;
   rationale: ProblemGroupingRationale;
   onClose: () => void;
 }) {
   return (
-    <div className="absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur">
+    <div className="moa-popover-panel absolute right-4 top-4 z-[8] w-[min(26rem,calc(100%-2rem))] rounded-[16px] border border-black/10 bg-white/95 p-4 text-left shadow-[0_18px_46px_rgba(15,23,42,0.14)] backdrop-blur" data-exiting={exiting}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#236cf3]">Grouping Rationale</p>
@@ -221,6 +264,8 @@ export const CanvasSurface = memo(function CanvasSurface({
     remoteEditPresenceByKey,
     summaryDocumentEditMode,
     summaryDocumentPending,
+    summaryDocumentGenerationStatus,
+    summaryDocumentGenerationError,
     summaryDocumentSaving,
     solutionRightPaneRef,
   } = solution;
@@ -228,10 +273,14 @@ export const CanvasSurface = memo(function CanvasSurface({
     problemGroupsCount,
     problemStructureNodesCount,
     problemDefinitionStagePending,
+    problemDefinitionGenerationStatus,
+    problemDefinitionGenerationError,
     problemStructureSetupOpen,
     problemStructureDraftMethod,
     problemStructureDraftMode,
     problemStructurePending,
+    problemStructureGenerationStatus,
+    problemStructureGenerationError,
     problemDefinitionPhase,
     activeProblemGroupingRationale,
     activeProblemGroupingRationaleTitle,
@@ -250,6 +299,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     onToggleSummaryEvidence,
     onSetSummaryDocumentEditMode,
     onRegenerateSummaryDocument,
+    onRefreshSummaryCache,
     onCopyFinalSolutionMarkdown,
     onSaveSummaryDocument,
     onSummaryDocumentBlocksChange,
@@ -265,110 +315,265 @@ export const CanvasSurface = memo(function CanvasSurface({
     isProblemToolbarActionActive,
     onProblemToolbarAction,
   } = problemHandlers;
+  const hasFinalProblemStructureGroups = summaryEligibleStructureGroups.length > 0;
+  const showMissingFinalProblemStructureOverlay = stage === "solution" && !hasFinalProblemStructureGroups;
+  const problemDefinitionFailed = problemDefinitionGenerationStatus === "failed";
+  const problemStructureFailed = problemStructureGenerationStatus === "failed";
+  const summaryDocumentFailed = summaryDocumentGenerationStatus === "failed";
+  const showProblemGenerationOverlay = problemDefinitionStagePending && problemGroupsCount === 0;
+  const showSummaryGenerationOverlay = summaryDocumentPending && hasFinalProblemStructureGroups;
+  const showProblemEmptyOverlay = stage === "problem-definition" && problemGroupsCount === 0;
+  const showSummaryEmptyOverlay =
+    stage === "solution" &&
+    (showMissingFinalProblemStructureOverlay ||
+      (!finalSummaryDocument.markdown.trim() && !(finalSummaryDocument.document_blocks || []).length && !summaryDocumentPending));
+  const showProblemStructureSetup = stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen;
+  const problemRationalePresence = useMoaPresenceValue(
+    stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale
+      ? { rationale: activeProblemGroupingRationale, title: activeProblemGroupingRationaleTitle }
+      : null,
+  );
+  const showProblemToolbar =
+    stage === "problem-definition" && problemDefinitionPhase !== "structure" && problemCanvasToolbarActions.length > 0;
+  const problemEmptyPresence = useMoaPresence(showProblemEmptyOverlay);
+  const summaryEmptyPresence = useMoaPresence(showSummaryEmptyOverlay);
+  const problemGenerationPresence = useMoaPresence(showProblemGenerationOverlay);
+  const summaryGenerationPresence = useMoaPresence(showSummaryGenerationOverlay);
+  const problemStructureSetupPresence = useMoaPresence(showProblemStructureSetup);
+  const problemToolbarPresence = useMoaPresence(showProblemToolbar);
+  const stageSurfaceKey = stage === "problem-definition" ? `${stage}:${problemDefinitionPhase}` : stage;
+  const currentStageSurfaceSnapshot = useMemo<CanvasSurfaceStageSnapshot>(
+    () => ({
+      key: stageSurfaceKey,
+      stage,
+      problemDefinitionPhase,
+      nodes,
+      problemSplitLeftEdges,
+      solution,
+      hasFinalProblemStructureGroups,
+    }),
+    [
+      hasFinalProblemStructureGroups,
+      nodes,
+      problemDefinitionPhase,
+      problemSplitLeftEdges,
+      solution,
+      stage,
+      stageSurfaceKey,
+    ],
+  );
+  const requestedStageSurfaceKeyRef = useRef(stageSurfaceKey);
+  const displayedStageSurfaceSnapshotRef = useRef<CanvasSurfaceStageSnapshot>(currentStageSurfaceSnapshot);
+  const stageTransitionTimersRef = useRef<{
+    switchTimer: ReturnType<typeof setTimeout> | null;
+    idleTimer: ReturnType<typeof setTimeout> | null;
+  }>({ switchTimer: null, idleTimer: null });
+  const [stageTransitionPhase, setStageTransitionPhase] = useState<CanvasStageTransitionPhase>("idle");
+  const [transitionStageSurfaceSnapshot, setTransitionStageSurfaceSnapshot] =
+    useState<CanvasSurfaceStageSnapshot | null>(null);
+  const renderedStageSurfaceSnapshot = transitionStageSurfaceSnapshot || currentStageSurfaceSnapshot;
+
+  useLayoutEffect(() => {
+    if (requestedStageSurfaceKeyRef.current === stageSurfaceKey) return;
+
+    requestedStageSurfaceKeyRef.current = stageSurfaceKey;
+
+    if (stageTransitionTimersRef.current.switchTimer) {
+      clearTimeout(stageTransitionTimersRef.current.switchTimer);
+      stageTransitionTimersRef.current.switchTimer = null;
+    }
+    if (stageTransitionTimersRef.current.idleTimer) {
+      clearTimeout(stageTransitionTimersRef.current.idleTimer);
+      stageTransitionTimersRef.current.idleTimer = null;
+    }
+
+    setTransitionStageSurfaceSnapshot(displayedStageSurfaceSnapshotRef.current);
+    setStageTransitionPhase("out");
+    stageTransitionTimersRef.current.switchTimer = setTimeout(() => {
+      setTransitionStageSurfaceSnapshot(null);
+      setStageTransitionPhase("in");
+      stageTransitionTimersRef.current.switchTimer = null;
+      stageTransitionTimersRef.current.idleTimer = setTimeout(() => {
+        setStageTransitionPhase("idle");
+        stageTransitionTimersRef.current.idleTimer = null;
+      }, CANVAS_STAGE_FADE_IN_MS);
+    }, CANVAS_STAGE_FADE_OUT_MS);
+  }, [currentStageSurfaceSnapshot, stageSurfaceKey]);
+
+  useLayoutEffect(() => {
+    displayedStageSurfaceSnapshotRef.current = renderedStageSurfaceSnapshot;
+  });
+
+  useEffect(() => {
+    return () => {
+      if (stageTransitionTimersRef.current.switchTimer) {
+        clearTimeout(stageTransitionTimersRef.current.switchTimer);
+        stageTransitionTimersRef.current.switchTimer = null;
+      }
+      if (stageTransitionTimersRef.current.idleTimer) {
+        clearTimeout(stageTransitionTimersRef.current.idleTimer);
+        stageTransitionTimersRef.current.idleTimer = null;
+      }
+    };
+  }, []);
+
+  function renderStageSurfaceContent(snapshot: CanvasSurfaceStageSnapshot) {
+    const snapshotSolution = snapshot.solution;
+
+    if (snapshot.stage === "ideation" || snapshot.stage === "problem-definition") {
+      return (
+        <ReactFlow<Node, Edge>
+          nodes={snapshot.nodes}
+          edges={snapshot.stage === "problem-definition" ? snapshot.problemSplitLeftEdges : EMPTY_EDGES}
+          onInit={onFlowInit}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
+          onNodesChange={onNodesChange}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={onNodeDragStop}
+          nodesConnectable={false}
+          panOnDrag
+          autoPanOnNodeDrag={false}
+          noPanClassName="nopan"
+          nodesDraggable={snapshot.stage === "problem-definition"}
+          minZoom={0.45}
+          maxZoom={1.6}
+          proOptions={REACT_FLOW_PRO_OPTIONS}
+        >
+          {snapshot.stage === "ideation" ? (
+            <Background
+              id="ideation-grid"
+              bgColor="#fbfbfb"
+              color="#e9eef5"
+              gap={18}
+              size={1}
+              variant={BackgroundVariant.Lines}
+            />
+          ) : null}
+          {snapshot.stage === "problem-definition" ? (
+            <Background
+              id="problem-definition-grid"
+              bgColor={snapshot.problemDefinitionPhase === "structure" ? "#f8f8f8" : "#f5f6f8"}
+              color={snapshot.problemDefinitionPhase === "structure" ? "#edf1f6" : "#d7dce5"}
+              gap={28}
+              size={1}
+              variant={snapshot.problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+            />
+          ) : null}
+        </ReactFlow>
+      );
+    }
+
+    if (snapshot.hasFinalProblemStructureGroups) {
+      return (
+        <SolutionCanvasView
+          meetingTitle={snapshotSolution.meetingTitle}
+          meetingGoal={snapshotSolution.meetingGoal}
+          participants={snapshotSolution.participants}
+          groups={snapshotSolution.summaryEligibleStructureGroups}
+          sectionByGroupId={snapshotSolution.summaryDocumentSectionByGroupId}
+          nodeById={snapshotSolution.problemStructureNodeById}
+          evidenceOpenGroupIds={snapshotSolution.summaryEvidenceOpenGroupIds}
+          remoteEditPresenceByKey={snapshotSolution.remoteEditPresenceByKey}
+          paneRef={snapshotSolution.solutionRightPaneRef}
+          document={snapshotSolution.finalSummaryDocument}
+          draftBlocks={snapshotSolution.summaryDocumentDraftBlocks}
+          draftMarkdown={snapshotSolution.summaryDocumentDraftMarkdown}
+          draftDirty={snapshotSolution.summaryDocumentDraftDirty}
+          editMode={snapshotSolution.summaryDocumentEditMode}
+          pending={snapshotSolution.summaryDocumentPending}
+          generationStatus={snapshotSolution.summaryDocumentGenerationStatus}
+          generationError={snapshotSolution.summaryDocumentGenerationError}
+          saving={snapshotSolution.summaryDocumentSaving}
+          onToggleEvidence={onToggleSummaryEvidence}
+          onSetEditMode={onSetSummaryDocumentEditMode}
+          onRegenerate={onRegenerateSummaryDocument}
+          onRefreshCache={onRefreshSummaryCache}
+          onCopy={onCopyFinalSolutionMarkdown}
+          onSave={onSaveSummaryDocument}
+          onBlocksChange={onSummaryDocumentBlocksChange}
+          onMarkdownChange={onSummaryDocumentMarkdownChange}
+          renderPreview={renderSummaryMarkdownPreview}
+        />
+      );
+    }
+
+    return <div className="h-full min-h-0 bg-[#f8f8f8]" />;
+  }
 
   return (
-    <section ref={canvasSurfaceRef} className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]">
-      <div className="relative min-h-0 w-full flex-1">
-        {stage === "ideation" || stage === "problem-definition" ? (
-          <ReactFlow<Node, Edge>
-            nodes={nodes}
-            edges={stage === "problem-definition" ? problemSplitLeftEdges : EMPTY_EDGES}
-            onInit={onFlowInit}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            onNodesChange={onNodesChange}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDrag={onNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            nodesConnectable={false}
-            panOnDrag
-            autoPanOnNodeDrag={false}
-            noPanClassName="nopan"
-            nodesDraggable={stage === "problem-definition"}
-            minZoom={0.45}
-            maxZoom={1.6}
-            proOptions={REACT_FLOW_PRO_OPTIONS}
-          >
-            {stage === "ideation" ? (
-              <Background
-                id="ideation-grid"
-                bgColor="#fbfbfb"
-                color="#e9eef5"
-                gap={18}
-                size={1}
-                variant={BackgroundVariant.Lines}
-              />
-            ) : null}
-            {stage === "problem-definition" ? (
-              <Background
-                id="problem-definition-grid"
-                bgColor={problemDefinitionPhase === "structure" ? "#f8f8f8" : "#f5f6f8"}
-                color={problemDefinitionPhase === "structure" ? "#edf1f6" : "#d7dce5"}
-                gap={28}
-                size={1}
-                variant={problemDefinitionPhase === "structure" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
-              />
-            ) : null}
-          </ReactFlow>
-        ) : (
-          <SolutionCanvasView
-            meetingTitle={meetingTitle}
-            meetingGoal={meetingGoal}
-            participants={participants}
-            groups={summaryEligibleStructureGroups}
-            sectionByGroupId={summaryDocumentSectionByGroupId}
-            nodeById={problemStructureNodeById}
-            evidenceOpenGroupIds={summaryEvidenceOpenGroupIds}
-            remoteEditPresenceByKey={remoteEditPresenceByKey}
-            paneRef={solutionRightPaneRef}
-            document={finalSummaryDocument}
-            draftBlocks={summaryDocumentDraftBlocks}
-            draftMarkdown={summaryDocumentDraftMarkdown}
-            draftDirty={summaryDocumentDraftDirty}
-            editMode={summaryDocumentEditMode}
-            pending={summaryDocumentPending}
-            saving={summaryDocumentSaving}
-            onToggleEvidence={onToggleSummaryEvidence}
-            onSetEditMode={onSetSummaryDocumentEditMode}
-            onRegenerate={onRegenerateSummaryDocument}
-            onCopy={onCopyFinalSolutionMarkdown}
-            onSave={onSaveSummaryDocument}
-            onBlocksChange={onSummaryDocumentBlocksChange}
-            onMarkdownChange={onSummaryDocumentMarkdownChange}
-            renderPreview={renderSummaryMarkdownPreview}
-          />
+    <section
+      ref={canvasSurfaceRef}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#fbfbfb]"
+      style={
+        {
+          "--moa-canvas-stage-fade-out-ms": `${CANVAS_STAGE_FADE_OUT_MS}ms`,
+          "--moa-canvas-stage-fade-in-ms": `${CANVAS_STAGE_FADE_IN_MS}ms`,
+        } as CSSProperties
+      }
+    >
+      <div
+        className={classNames(
+          "moa-canvas-stage-surface relative min-h-0 w-full flex-1",
+          stageTransitionPhase === "out" && "moa-canvas-stage-surface-out",
+          stageTransitionPhase === "in" && "moa-canvas-stage-surface-in",
+          stageTransitionPhase !== "idle" && "moa-canvas-stage-surface-transitioning",
         )}
+      >
+        {renderStageSurfaceContent(renderedStageSurfaceSnapshot)}
       </div>
 
-      {stage === "problem-definition" && problemGroupsCount === 0 ? (
+      {problemEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay
           eyebrow="Problem Definition"
-          message={busy ? "문제 정의 그룹을 생성하는 중입니다." : "문제 정의 그룹이 아직 없습니다."}
+          exiting={problemEmptyPresence.isExiting}
+          message={
+            problemDefinitionFailed
+              ? `문제정의 1단계 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
+              : busy
+                ? "문제 정의 그룹을 생성하는 중입니다."
+                : "문제 정의 그룹이 아직 없습니다."
+          }
           tone="problem"
         />
       ) : null}
 
-      {stage === "solution" &&
-      !finalSummaryDocument.markdown.trim() &&
-      !(finalSummaryDocument.document_blocks || []).length &&
-      !summaryDocumentPending ? (
+      {summaryEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay
           eyebrow="Summary Stage"
+          exiting={summaryEmptyPresence.isExiting}
           message={
-            summaryEligibleStructureGroups.length > 0
+            summaryDocumentFailed && hasFinalProblemStructureGroups
+              ? `요약 문서 생성에 실패했습니다.${summaryDocumentGenerationError ? ` ${summaryDocumentGenerationError}` : ""}`
+              : !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
-              : "2단계 구조화 그룹이 있어야 요약 문서를 만들 수 있습니다."
+              : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
           }
           tone="summary"
         />
       ) : null}
 
-      {problemDefinitionStagePending ? <ProblemDefinitionPreparingOverlay /> : null}
+      {stage === "problem-definition" &&
+      problemDefinitionPhase === "structure" &&
+      problemStructureFailed &&
+      problemStructureNodesCount === 0 ? (
+        <CanvasStageEmptyOverlay
+          eyebrow="Problem Structure"
+          message={`문제정의 2단계 구조화에 실패했습니다.${problemStructureGenerationError ? ` ${problemStructureGenerationError}` : ""}`}
+          tone="problem"
+        />
+      ) : null}
 
-      {stage === "problem-definition" && !problemDefinitionStagePending && problemStructureSetupOpen ? (
+      {problemGenerationPresence.shouldRender ? (
+        <ProblemDefinitionPreparingOverlay exiting={problemGenerationPresence.isExiting} />
+      ) : null}
+
+      {problemStructureSetupPresence.shouldRender ? (
         <ProblemStructureSetupModal
           draftMethod={problemStructureDraftMethod}
           draftMode={problemStructureDraftMode}
+          exiting={problemStructureSetupPresence.isExiting}
           problemGroupsCount={problemGroupsCount}
           pending={problemStructurePending}
           onClose={onCloseProblemStructureSetup}
@@ -378,21 +583,25 @@ export const CanvasSurface = memo(function CanvasSurface({
         />
       ) : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase !== "structure" && activeProblemGroupingRationale ? (
+      {problemRationalePresence.shouldRender && problemRationalePresence.presentValue ? (
         <ProblemGroupingRationaleOverlay
-          title={activeProblemGroupingRationaleTitle}
-          rationale={activeProblemGroupingRationale}
+          exiting={problemRationalePresence.isExiting}
+          title={problemRationalePresence.presentValue.title}
+          rationale={problemRationalePresence.presentValue.rationale}
           onClose={onCloseProblemGroupingRationale}
         />
       ) : null}
 
-      {summaryDocumentPending ? <SummaryDocumentPendingOverlay /> : null}
+      {summaryGenerationPresence.shouldRender ? (
+        <SummaryDocumentPendingOverlay exiting={summaryGenerationPresence.isExiting} />
+      ) : null}
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}
 
-      {stage === "problem-definition" && problemDefinitionPhase !== "structure" && problemCanvasToolbarActions.length > 0 ? (
+      {problemToolbarPresence.shouldRender ? (
         <ProblemCanvasToolbar
           actions={problemCanvasToolbarActions}
+          exiting={problemToolbarPresence.isExiting}
           getActionLabel={getProblemToolbarActionLabel}
           isActionActive={isProblemToolbarActionActive}
           isActionDisabled={(item) =>

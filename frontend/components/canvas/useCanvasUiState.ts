@@ -24,6 +24,7 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
   const [leftPanelRatio, setLeftPanelRatio] = useState(DEFAULT_LEFT_PANEL_RATIO);
   const [rightPanelRatio, setRightPanelRatio] = useState(DEFAULT_RIGHT_PANEL_RATIO);
   const [isDesktopLayout, setIsDesktopLayout] = useState(false);
+  const [viewportModeReady, setViewportModeReady] = useState(false);
   const [solutionRightPaneWidth, setSolutionRightPaneWidth] = useState(0);
 
   const resizeStateRef = useRef<{ side: "left" | "right"; startX: number; startRatio: number } | null>(null);
@@ -60,6 +61,7 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
   useEffect(() => {
     const syncViewportMode = () => {
       setIsDesktopLayout(window.innerWidth >= 1280);
+      setViewportModeReady(true);
     };
 
     syncViewportMode();
@@ -143,6 +145,7 @@ export function useCanvasUiState({ solutionPaneMeasureKey }: UseCanvasUiStateOpt
     leftPanelRatio,
     rightPanelRatio,
     isDesktopLayout,
+    viewportModeReady,
     startPanelResize,
     solutionRightPaneRef,
     solutionRightPaneWidth,

@@ -4,7 +4,7 @@ interface MoaLogoProps {
   className?: string;
   markClassName?: string;
   showText?: boolean;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "figma";
   variant?: "brand" | "white";
 }
 
@@ -12,12 +12,14 @@ const sizeClasses = {
   sm: "gap-2 text-base",
   md: "gap-2.5 text-xl",
   lg: "gap-3 text-2xl",
+  figma: "gap-[6.148px] text-[19.829px]",
 };
 
 const markSizeClasses = {
   sm: "h-[22px] w-[36px]",
   md: "h-[33px] w-[54px]",
   lg: "h-[40px] w-[65px]",
+  figma: "h-[17px] w-[27.852px]",
 };
 
 export function MoaLogo({ className, markClassName, showText = true, size = "md", variant = "brand" }: MoaLogoProps) {
