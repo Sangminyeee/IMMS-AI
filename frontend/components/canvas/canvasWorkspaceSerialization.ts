@@ -2,9 +2,12 @@ import type { Node } from "@xyflow/react";
 import { createDefaultProblemStructureState } from "@/components/canvas/problemStructureModel";
 import { buildFinalSolutionSummaryPayload } from "@/components/canvas/summaryDocumentHelpers";
 import { normalizeCanvasArtifactGeneration } from "@/components/canvas/canvasArtifactGeneration";
+import { isDemoBalanceConfig, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasLocalState,
@@ -27,6 +30,8 @@ export type AgendaOverride = {
 export type WorkspaceFieldSignatures = {
   meeting_goal: string;
   meeting_goal_context: string;
+  demo_config: string;
+  demo_balance_classification: string;
   stage: string;
   agenda_overrides: string;
   canvas_items: string;
@@ -45,6 +50,8 @@ export type FullWorkspacePatchPayloadInput = {
   meetingId: string;
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig?: CanvasDemoConfig;
+  demoBalanceClassification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -110,6 +117,8 @@ export function createWorkspaceFieldSignatures(): WorkspaceFieldSignatures {
   return {
     meeting_goal: "",
     meeting_goal_context: "",
+    demo_config: "",
+    demo_balance_classification: "",
     stage: "",
     agenda_overrides: "",
     canvas_items: "",
@@ -286,11 +295,108 @@ export function normalizeCanvasNodePositionsForComputedIdeation(
 
 export function createEmptyIdeationBubbleGraph(): CanvasIdeationBubbleGraph {
   return {
-    version: 1,
+    version: 2,
+    layout_mode: "orbit",
     update_cycle: 0,
+    layout_revision: 0,
+    layout_overlap_resolved_count: 0,
+    clusters: [],
     bubbles: [],
     processed_utterance_ids: [],
     updated_at: "",
+  };
+}
+
+const DEMO_BALANCE_ANCHOR_A_ID = "demo-balance-anchor-a";
+const DEMO_BALANCE_ANCHOR_B_ID = "demo-balance-anchor-b";
+
+function normalizeDemoAnchorLabel(value: string, fallback: string) {
+  const label = value.replace(/\s+/g, " ").trim();
+  return label || fallback;
+}
+
+export function createDemoBalanceAnchoredIdeationBubbleGraph(
+  demoConfig: CanvasDemoConfig | null | undefined,
+  options: {
+    updateCycle?: number;
+    layoutRevision?: number;
+    updatedAt?: string;
+  } = {},
+): CanvasIdeationBubbleGraph {
+  const config = normalizeCanvasDemoConfig(demoConfig);
+  const graph = {
+    ...createEmptyIdeationBubbleGraph(),
+    update_cycle: Number(options.updateCycle || 0),
+    layout_revision: Number(options.layoutRevision || 0),
+    updated_at: options.updatedAt || "",
+  };
+
+  if (!isDemoBalanceConfig(config)) {
+    return graph;
+  }
+
+  const now = options.updatedAt || new Date().toISOString();
+  const anchorSpecs = [
+    {
+      id: DEMO_BALANCE_ANCHOR_A_ID,
+      label: normalizeDemoAnchorLabel(config.option_a_keyword || config.option_a || "A", "A"),
+      choice: "a" as const,
+      count: 7,
+      importance: 0.94,
+      activity: 1,
+      opacity: 1,
+      emphasis: "primary" as const,
+      layoutZone: "core",
+      role: "center" as const,
+    },
+    {
+      id: DEMO_BALANCE_ANCHOR_B_ID,
+      label: normalizeDemoAnchorLabel(config.option_b_keyword || config.option_b || "B", "B"),
+      choice: "b" as const,
+      count: 7,
+      importance: 0.94,
+      activity: 1,
+      opacity: 1,
+      emphasis: "primary" as const,
+      layoutZone: "core",
+      role: "center" as const,
+    },
+  ];
+
+  return {
+    ...graph,
+    bubbles: anchorSpecs.map((anchor) => ({
+      id: anchor.id,
+      label: anchor.label,
+      canonical_label: anchor.label,
+      aliases: [],
+      kind: "topic",
+      count: anchor.count,
+      importance: anchor.importance,
+      relevance: 1,
+      activity: anchor.activity,
+      opacity: anchor.opacity,
+      emphasis: anchor.emphasis,
+      display_state: "active",
+      layout_zone: anchor.layoutZone,
+      missing_cycles: 0,
+      anchor_id: "",
+      choice_affinity: anchor.choice,
+      affinity_score: 1,
+      durable: true,
+      related_ids: [],
+      evidence_utterance_ids: [],
+      first_seen_at: now,
+      last_seen_at: now,
+      last_seen_cycle: graph.update_cycle,
+      off_topic: false,
+      off_topic_reason: "",
+      archive_reason: "",
+      lifecycle_state: "active",
+      role: anchor.role,
+      orbit_order_key: 0,
+      orbit_slot_index: 0,
+    })),
   };
 }
 
@@ -300,11 +406,67 @@ export function normalizeIdeationBubbleGraphForWorkspace(
   if (!graph || typeof graph !== "object") {
     return createEmptyIdeationBubbleGraph();
   }
+  const clusters = Array.isArray(graph.clusters)
+    ? graph.clusters
+        .filter((cluster) => cluster && typeof cluster === "object" && typeof cluster.id === "string")
+        .map((cluster) => ({
+          id: cluster.id,
+          center_bubble_id: cluster.center_bubble_id || "",
+          x: Number.isFinite(Number(cluster.x)) ? Number(cluster.x) : undefined,
+          y: Number.isFinite(Number(cluster.y)) ? Number(cluster.y) : undefined,
+          radius: Number.isFinite(Number(cluster.radius)) ? Number(cluster.radius) : undefined,
+          rings: Array.isArray(cluster.rings)
+            ? cluster.rings.map((ring) => Number(ring)).filter((ring) => Number.isFinite(ring) && ring > 0)
+            : [],
+          zone: cluster.zone || "default",
+          overlap_resolved_count: Number.isFinite(Number(cluster.overlap_resolved_count))
+            ? Number(cluster.overlap_resolved_count)
+            : 0,
+          bubble_ids: Array.isArray(cluster.bubble_ids)
+            ? cluster.bubble_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
+            : [],
+        }))
+    : [];
   return {
-    version: Number(graph.version || 1),
+    version: Number(graph.version || 2),
+    layout_mode: graph.layout_mode || "orbit",
     update_cycle: Number(graph.update_cycle || 0),
     layout_revision: Number(graph.layout_revision || 0),
-    bubbles: Array.isArray(graph.bubbles) ? graph.bubbles : [],
+    layout_overlap_resolved_count: Number.isFinite(Number(graph.layout_overlap_resolved_count))
+      ? Number(graph.layout_overlap_resolved_count)
+      : 0,
+    clusters,
+    bubbles: Array.isArray(graph.bubbles)
+      ? graph.bubbles.map((bubble) => ({
+          ...bubble,
+          choice_affinity:
+            bubble.choice_affinity === "a" || bubble.choice_affinity === "b" || bubble.choice_affinity === "neutral"
+              ? bubble.choice_affinity
+              : undefined,
+          affinity_score: Number.isFinite(Number(bubble.affinity_score)) ? Number(bubble.affinity_score) : undefined,
+          durable: Boolean(bubble.durable),
+          role: bubble.role || "satellite",
+          orbit_center_id: bubble.orbit_center_id || "",
+          orbit_ring: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : 0,
+          orbit_angle: Number.isFinite(Number(bubble.orbit_angle)) ? Number(bubble.orbit_angle) : undefined,
+          orbit_radius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
+          orbit_order_key: Number.isFinite(Number(bubble.orbit_order_key)) ? Number(bubble.orbit_order_key) : undefined,
+          orbit_slot_index: Number.isFinite(Number(bubble.orbit_slot_index)) ? Number(bubble.orbit_slot_index) : undefined,
+          motion_reason: bubble.motion_reason || "",
+          motion_direction: bubble.motion_direction || "",
+          motion_plan_id: bubble.motion_plan_id || "",
+          from_slot_index: Number.isFinite(Number(bubble.from_slot_index)) ? Number(bubble.from_slot_index) : undefined,
+          to_slot_index: Number.isFinite(Number(bubble.to_slot_index)) ? Number(bubble.to_slot_index) : undefined,
+          move_cost: Number.isFinite(Number(bubble.move_cost)) ? Number(bubble.move_cost) : undefined,
+          move_angle_delta: Number.isFinite(Number(bubble.move_angle_delta)) ? Number(bubble.move_angle_delta) : undefined,
+          arc_cost: Number.isFinite(Number(bubble.arc_cost)) ? Number(bubble.arc_cost) : undefined,
+          radius_cost: Number.isFinite(Number(bubble.radius_cost)) ? Number(bubble.radius_cost) : undefined,
+          gate_blocked: Boolean(bubble.gate_blocked),
+          enter_sequence: Number.isFinite(Number(bubble.enter_sequence)) ? Number(bubble.enter_sequence) : undefined,
+          enter_delay_ms: Number.isFinite(Number(bubble.enter_delay_ms)) ? Number(bubble.enter_delay_ms) : undefined,
+          gate_angle: Number.isFinite(Number(bubble.gate_angle)) ? Number(bubble.gate_angle) : undefined,
+        }))
+      : [],
     processed_utterance_ids: Array.isArray(graph.processed_utterance_ids)
       ? graph.processed_utterance_ids.filter((id): id is string => typeof id === "string" && id.length > 0)
       : [],
@@ -315,6 +477,8 @@ export function normalizeIdeationBubbleGraphForWorkspace(
 export function buildWorkspaceFieldSignatures(input: {
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig?: CanvasDemoConfig;
+  demoBalanceClassification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -332,6 +496,8 @@ export function buildWorkspaceFieldSignatures(input: {
   return {
     meeting_goal: input.meetingGoal.trim(),
     meeting_goal_context: input.meetingGoalContext.trim(),
+    demo_config: JSON.stringify(input.demoConfig || null),
+    demo_balance_classification: JSON.stringify(input.demoBalanceClassification || null),
     stage: input.stage,
     agenda_overrides: JSON.stringify(serializeAgendaOverrides(input.agendaOverrides)),
     canvas_items: JSON.stringify(buildWorkspaceCanvasItemsPayload(input.canvasItems)),
@@ -352,6 +518,8 @@ export function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadI
     meeting_id: input.meetingId,
     meeting_goal: input.meetingGoal.trim(),
     meeting_goal_context: input.meetingGoalContext.trim(),
+    demo_config: input.demoConfig,
+    demo_balance_classification: input.demoBalanceClassification,
     stage: input.stage,
     agenda_overrides: serializeAgendaOverrides(input.agendaOverrides),
     canvas_items: serializeSharedCanvasItems(input.canvasItems),
@@ -370,6 +538,8 @@ export function buildFullWorkspacePatchPayload(input: FullWorkspacePatchPayloadI
 export function buildSharedCanvasSignature(payload: {
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage: CanvasWorkspaceStage;
   agenda_overrides: Record<string, unknown>;
   canvas_items?: unknown[];
@@ -386,6 +556,8 @@ export function buildSharedCanvasSignature(payload: {
   return JSON.stringify({
     meeting_goal: payload.meeting_goal,
     meeting_goal_context: payload.meeting_goal_context,
+    demo_config: payload.demo_config || null,
+    demo_balance_classification: payload.demo_balance_classification || null,
     agenda_overrides: payload.agenda_overrides,
     canvas_items: payload.canvas_items,
     custom_groups: payload.custom_groups,

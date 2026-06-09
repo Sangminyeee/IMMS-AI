@@ -1,20 +1,88 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DashboardCreateMeetingDialog } from "@/components/dashboard/DashboardCreateMeetingDialog";
+import { DashboardMeetingTemplateDialog } from "@/components/dashboard/DashboardMeetingTemplateDialog";
 import { DashboardMeetingsView } from "@/components/dashboard/DashboardMeetingsView";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { formatDashboardDateTime, getMeetingStatusLabel } from "@/components/dashboard/dashboardUtils";
-import type { DashboardMeeting, MeetingStatusFilter } from "@/components/dashboard/types";
+import type { DashboardMeeting, DashboardMeetingTemplate, MeetingStatusFilter } from "@/components/dashboard/types";
 import { buildPrintableSummaryDocumentHtml } from "@/components/canvas/summaryDocumentHelpers";
 import { useRequireAuth } from "@/components/auth/useRequireAuth";
 import { MoaLogo } from "@/components/moa-ui/MoaLogo";
 import { useMoaPresenceValue } from "@/components/moa-ui/useMoaPresence";
 import { useAuth } from "@/contexts/AuthContext";
 import { getCanvasWorkspaceState, saveCanvasWorkspacePatch } from "@/lib/api";
+import { buildDemoBalanceMeetingContext, buildDemoBalanceMeetingGoal, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import { supabase } from "@/lib/supabase";
 import type { CanvasFinalSolutionSummary, CanvasFinalSolutionSummaryTopic, CanvasSolutionTopicResponse } from "@/lib/types";
+
+const DASHBOARD_TEMPLATE_STORAGE_VERSION = 1;
+
+function getDashboardTemplateStorageKey(userId: string) {
+  return `moa:dashboard:demo-balance-templates:${userId}`;
+}
+
+function makeDashboardTemplateId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `template-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeDashboardTemplate(raw: unknown): DashboardMeetingTemplate | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<DashboardMeetingTemplate>;
+  const title = String(value.title || "").trim();
+  const optionA = String(value.optionA || "").trim();
+  const optionAKeyword = String(value.optionAKeyword || "").trim();
+  const optionB = String(value.optionB || "").trim();
+  const optionBKeyword = String(value.optionBKeyword || "").trim();
+  if (!title || !optionA || !optionAKeyword || !optionB || !optionBKeyword) return null;
+  const now = new Date().toISOString();
+  return {
+    id: String(value.id || makeDashboardTemplateId()),
+    title,
+    optionA,
+    optionAKeyword,
+    optionB,
+    optionBKeyword,
+    createdAt: String(value.createdAt || now),
+    updatedAt: String(value.updatedAt || value.createdAt || now),
+  };
+}
+
+function loadDashboardMeetingTemplates(userId: string): DashboardMeetingTemplate[] {
+  if (!userId || typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(getDashboardTemplateStorageKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { templates?: unknown[] };
+    return (parsed.templates || [])
+      .map(normalizeDashboardTemplate)
+      .filter((template): template is DashboardMeetingTemplate => Boolean(template));
+  } catch (error) {
+    console.warn("[DashboardTemplate] failed to load templates", error);
+    return [];
+  }
+}
+
+function saveDashboardMeetingTemplates(userId: string, templates: DashboardMeetingTemplate[]) {
+  if (!userId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      getDashboardTemplateStorageKey(userId),
+      JSON.stringify({
+        version: DASHBOARD_TEMPLATE_STORAGE_VERSION,
+        templates,
+      }),
+    );
+  } catch (error) {
+    console.warn("[DashboardTemplate] failed to save templates", error);
+    throw error;
+  }
+}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
@@ -155,11 +223,25 @@ export default function DashboardPage() {
   const router = useRouter();
   const { loading: authLoading, signOut } = useAuth();
   const { user } = useRequireAuth();
+  const userId = user?.id || "";
 
   const [meetings, setMeetings] = useState<DashboardMeeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newMeetingTitle, setNewMeetingTitle] = useState("");
+  const [newMeetingDemoMode, setNewMeetingDemoMode] = useState(false);
+  const [newMeetingDemoOptionA, setNewMeetingDemoOptionA] = useState("");
+  const [newMeetingDemoOptionAKeyword, setNewMeetingDemoOptionAKeyword] = useState("");
+  const [newMeetingDemoOptionB, setNewMeetingDemoOptionB] = useState("");
+  const [newMeetingDemoOptionBKeyword, setNewMeetingDemoOptionBKeyword] = useState("");
+  const [meetingTemplates, setMeetingTemplates] = useState<DashboardMeetingTemplate[]>([]);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templateTitle, setTemplateTitle] = useState("");
+  const [templateOptionA, setTemplateOptionA] = useState("");
+  const [templateOptionAKeyword, setTemplateOptionAKeyword] = useState("");
+  const [templateOptionB, setTemplateOptionB] = useState("");
+  const [templateOptionBKeyword, setTemplateOptionBKeyword] = useState("");
+  const [startingTemplateId, setStartingTemplateId] = useState<string | null>(null);
   const [meetingSearchQuery, setMeetingSearchQuery] = useState("");
   const [meetingStatusFilter, setMeetingStatusFilter] = useState<MeetingStatusFilter>("all");
   const [selectedResultMeeting, setSelectedResultMeeting] = useState<DashboardMeeting | null>(null);
@@ -171,21 +253,21 @@ export default function DashboardPage() {
   const [resultLoadingMeetingId, setResultLoadingMeetingId] = useState<string | null>(null);
   const [resultRebuildingMeetingId, setResultRebuildingMeetingId] = useState<string | null>(null);
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
+  const loadingMeetingsRef = useRef(false);
+  const meetingsLoadedRef = useRef(false);
 
   useEffect(() => {
     console.log("📊 Dashboard - Auth check:", { authLoading, userEmail: user?.email });
-  }, [user, authLoading, router]);
+  }, [user?.email, authLoading]);
 
-  useEffect(() => {
-    if (user) {
-      console.log("📊 Dashboard - Loading meetings for user:", user.email);
-      void loadMeetings();
-    }
-  }, [user]);
-
-  const loadMeetings = async () => {
+  const loadMeetings = useCallback(async (options?: { keepCurrentVisible?: boolean }) => {
+    if (loadingMeetingsRef.current) return;
+    loadingMeetingsRef.current = true;
+    const showInitialLoading = !options?.keepCurrentVisible && !meetingsLoadedRef.current;
     try {
-      setLoading(true);
+      if (showInitialLoading) {
+        setLoading(true);
+      }
       console.log("📊 Dashboard - Fetching meetings from Supabase...");
 
       const { data, error } = await supabase
@@ -200,31 +282,90 @@ export default function DashboardPage() {
       }
 
       console.log("✅ Dashboard - Loaded meetings:", data?.length || 0);
-      setMeetings(data || []);
+      setMeetings((data || []) as DashboardMeeting[]);
+      meetingsLoadedRef.current = true;
     } catch (error) {
       console.error("Error loading meetings:", error);
       alert("회의 목록을 불러오는데 실패했습니다.");
     } finally {
       setLoading(false);
+      loadingMeetingsRef.current = false;
     }
-  };
+  }, []);
 
-  const handleCreateMeeting = async () => {
-    if (!user) return;
-    if (!newMeetingTitle.trim()) {
-      alert("회의 제목을 입력해주세요.");
+  useEffect(() => {
+    if (!userId) return;
+    console.log("📊 Dashboard - Loading meetings for user:", user?.email);
+    void loadMeetings();
+  }, [loadMeetings, user?.email, userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      setMeetingTemplates([]);
       return;
     }
+    setMeetingTemplates(loadDashboardMeetingTemplates(userId));
+  }, [userId]);
 
-    try {
-      console.log("📊 Dashboard - Creating new meeting:", newMeetingTitle);
+  const createDashboardMeeting = useCallback(
+    async ({
+      title,
+      demoMode,
+      optionA = "",
+      optionAKeyword = "",
+      optionB = "",
+      optionBKeyword = "",
+    }: {
+      title: string;
+      demoMode: boolean;
+      optionA?: string;
+      optionAKeyword?: string;
+      optionB?: string;
+      optionBKeyword?: string;
+    }) => {
+      if (!user) throw new Error("로그인이 필요합니다.");
+      const cleanTitle = title.trim();
+      if (!cleanTitle) throw new Error("회의 제목을 입력해주세요.");
 
+      const demoConfig = normalizeCanvasDemoConfig(
+        demoMode
+          ? {
+              enabled: true,
+              mode: "demo_balance",
+              option_a: optionA,
+              option_a_keyword: optionAKeyword,
+              option_b: optionB,
+              option_b_keyword: optionBKeyword,
+              instruction: "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요.",
+            }
+          : null,
+      );
+      const demoGoal = demoConfig.enabled
+        ? buildDemoBalanceMeetingGoal(
+            cleanTitle,
+            demoConfig.option_a || "",
+            demoConfig.option_b || "",
+            demoConfig.option_a_keyword || demoConfig.option_a || "",
+            demoConfig.option_b_keyword || demoConfig.option_b || "",
+          )
+        : "";
+      const demoContext = demoConfig.enabled
+        ? buildDemoBalanceMeetingContext(
+            demoConfig.option_a || "",
+            demoConfig.option_b || "",
+            demoConfig.option_a_keyword || demoConfig.option_a || "",
+            demoConfig.option_b_keyword || demoConfig.option_b || "",
+          )
+        : "";
+
+      console.log("📊 Dashboard - Creating new meeting:", cleanTitle);
       const { data, error } = await supabase
         .from("meetings")
         .insert([
           {
-            title: newMeetingTitle,
+            title: cleanTitle,
             host_id: user.id,
+            meeting_mode: demoConfig.enabled ? "demo_balance" : "normal",
             status: "scheduled",
           },
         ])
@@ -237,14 +378,136 @@ export default function DashboardPage() {
       }
 
       console.log("✅ Dashboard - Meeting created:", data.id);
+      if (demoConfig.enabled) {
+        await saveCanvasWorkspacePatch({
+          meeting_id: data.id,
+          demo_config: demoConfig,
+          meeting_goal: demoGoal,
+          meeting_goal_context: demoContext,
+        });
+      }
+
+      await loadMeetings({ keepCurrentVisible: true });
+      router.push(`/?meeting_id=${data.id}`);
+    },
+    [loadMeetings, router, user],
+  );
+
+  const handleCreateMeeting = async () => {
+    if (!user) return;
+    if (!newMeetingTitle.trim()) {
+      alert("회의 제목을 입력해주세요.");
+      return;
+    }
+    if (
+      newMeetingDemoMode &&
+      (!newMeetingDemoOptionA.trim() ||
+        !newMeetingDemoOptionAKeyword.trim() ||
+        !newMeetingDemoOptionB.trim() ||
+        !newMeetingDemoOptionBKeyword.trim())
+    ) {
+      alert("시연용 밸런스 게임은 A/B 선택지와 중심 키워드를 모두 입력해야 만들 수 있습니다.");
+      return;
+    }
+
+    try {
+      await createDashboardMeeting({
+        title: newMeetingTitle,
+        demoMode: newMeetingDemoMode,
+        optionA: newMeetingDemoOptionA,
+        optionAKeyword: newMeetingDemoOptionAKeyword,
+        optionB: newMeetingDemoOptionB,
+        optionBKeyword: newMeetingDemoOptionBKeyword,
+      });
       setShowCreateModal(false);
       setNewMeetingTitle("");
-
-      await loadMeetings();
-      router.push(`/?meeting_id=${data.id}`);
+      setNewMeetingDemoMode(false);
+      setNewMeetingDemoOptionA("");
+      setNewMeetingDemoOptionAKeyword("");
+      setNewMeetingDemoOptionB("");
+      setNewMeetingDemoOptionBKeyword("");
     } catch (error) {
       console.error("Error creating meeting:", error);
       alert("회의 생성에 실패했습니다: " + getErrorMessage(error, "알 수 없는 오류"));
+    }
+  };
+
+  const resetTemplateForm = () => {
+    setTemplateTitle("");
+    setTemplateOptionA("");
+    setTemplateOptionAKeyword("");
+    setTemplateOptionB("");
+    setTemplateOptionBKeyword("");
+  };
+
+  const handleOpenTemplateModal = () => {
+    resetTemplateForm();
+    setShowTemplateModal(true);
+  };
+
+  const handleSaveMeetingTemplate = () => {
+    if (!userId) return;
+    const title = templateTitle.trim();
+    const optionA = templateOptionA.trim();
+    const optionAKeyword = templateOptionAKeyword.trim();
+    const optionB = templateOptionB.trim();
+    const optionBKeyword = templateOptionBKeyword.trim();
+
+    if (!title || !optionA || !optionAKeyword || !optionB || !optionBKeyword) {
+      alert("템플릿 제목과 A/B 선택지, 중심 키워드를 모두 입력해 주세요.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextTemplate: DashboardMeetingTemplate = {
+      id: makeDashboardTemplateId(),
+      title,
+      optionA,
+      optionAKeyword,
+      optionB,
+      optionBKeyword,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      const nextTemplates = [nextTemplate, ...meetingTemplates];
+      saveDashboardMeetingTemplates(userId, nextTemplates);
+      setMeetingTemplates(nextTemplates);
+      resetTemplateForm();
+      setShowTemplateModal(false);
+    } catch (error) {
+      alert("템플릿 저장에 실패했습니다: " + getErrorMessage(error, "브라우저 저장소 오류"));
+    }
+  };
+
+  const handleDeleteMeetingTemplate = (template: DashboardMeetingTemplate) => {
+    if (!userId) return;
+    const confirmed = window.confirm(`"${template.title}" 템플릿을 삭제할까요?`);
+    if (!confirmed) return;
+
+    const nextTemplates = meetingTemplates.filter((item) => item.id !== template.id);
+    saveDashboardMeetingTemplates(userId, nextTemplates);
+    setMeetingTemplates(nextTemplates);
+  };
+
+  const handleStartMeetingTemplate = async (template: DashboardMeetingTemplate) => {
+    if (startingTemplateId) return;
+    try {
+      setStartingTemplateId(template.id);
+      await createDashboardMeeting({
+        title: template.title,
+        demoMode: true,
+        optionA: template.optionA,
+        optionAKeyword: template.optionAKeyword,
+        optionB: template.optionB,
+        optionBKeyword: template.optionBKeyword,
+      });
+    } catch (error) {
+      console.error("Error creating meeting from template:", error);
+      alert("템플릿으로 회의를 생성하지 못했습니다: " + getErrorMessage(error, "알 수 없는 오류"));
+    } finally {
+      setStartingTemplateId(null);
     }
   };
 
@@ -417,6 +680,20 @@ export default function DashboardPage() {
     router.push("/login");
   };
 
+  const handleOpenCreateModal = useCallback(() => {
+    setShowCreateModal(true);
+  }, []);
+
+  const handleCloseCreateModal = useCallback(() => {
+    setShowCreateModal(false);
+    setNewMeetingTitle("");
+    setNewMeetingDemoMode(false);
+    setNewMeetingDemoOptionA("");
+    setNewMeetingDemoOptionAKeyword("");
+    setNewMeetingDemoOptionB("");
+    setNewMeetingDemoOptionBKeyword("");
+  }, []);
+
   const selectedResultPresence = useMoaPresenceValue(selectedResultMeeting);
   const selectedResultDialogMeeting = selectedResultPresence.presentValue;
   const selectedResultSummary = selectedResultDialogMeeting ? resultSummaries[selectedResultDialogMeeting.id] : null;
@@ -467,20 +744,23 @@ export default function DashboardPage() {
     );
   }
 
-  console.log("🎨 Dashboard - Rendering UI with", meetings.length, "meetings");
-
   return (
     <DashboardShell userEmail={user.email} onLogout={() => void handleLogout()}>
       <DashboardMeetingsView
         loading={loading}
         meetings={meetings}
+        meetingTemplates={meetingTemplates}
+        startingTemplateId={startingTemplateId}
         searchQuery={meetingSearchQuery}
         statusFilter={meetingStatusFilter}
         deletingMeetingId={deletingMeetingId}
-        onCreateMeeting={() => setShowCreateModal(true)}
+        onCreateMeeting={handleOpenCreateModal}
+        onCreateMeetingTemplate={handleOpenTemplateModal}
         onDeleteMeeting={(meeting) => void handleDeleteMeeting(meeting)}
+        onDeleteMeetingTemplate={handleDeleteMeetingTemplate}
         onJoinMeeting={handleJoinMeeting}
         onOpenMeetingResult={(meeting) => void handleOpenMeetingResult(meeting)}
+        onStartMeetingTemplate={(template) => void handleStartMeetingTemplate(template)}
         onSearchQueryChange={setMeetingSearchQuery}
         onStatusFilterChange={setMeetingStatusFilter}
       />
@@ -488,12 +768,35 @@ export default function DashboardPage() {
       <DashboardCreateMeetingDialog
         open={showCreateModal}
         meetingTitle={newMeetingTitle}
+        demoMode={newMeetingDemoMode}
+        demoOptionA={newMeetingDemoOptionA}
+        demoOptionAKeyword={newMeetingDemoOptionAKeyword}
+        demoOptionB={newMeetingDemoOptionB}
+        demoOptionBKeyword={newMeetingDemoOptionBKeyword}
         onMeetingTitleChange={setNewMeetingTitle}
+        onDemoModeChange={setNewMeetingDemoMode}
+        onDemoOptionAChange={setNewMeetingDemoOptionA}
+        onDemoOptionAKeywordChange={setNewMeetingDemoOptionAKeyword}
+        onDemoOptionBChange={setNewMeetingDemoOptionB}
+        onDemoOptionBKeywordChange={setNewMeetingDemoOptionBKeyword}
         onCreate={() => void handleCreateMeeting()}
-        onClose={() => {
-          setShowCreateModal(false);
-          setNewMeetingTitle("");
-        }}
+        onClose={handleCloseCreateModal}
+      />
+
+      <DashboardMeetingTemplateDialog
+        open={showTemplateModal}
+        title={templateTitle}
+        optionA={templateOptionA}
+        optionAKeyword={templateOptionAKeyword}
+        optionB={templateOptionB}
+        optionBKeyword={templateOptionBKeyword}
+        onClose={() => setShowTemplateModal(false)}
+        onSave={handleSaveMeetingTemplate}
+        onTitleChange={setTemplateTitle}
+        onOptionAChange={setTemplateOptionA}
+        onOptionAKeywordChange={setTemplateOptionAKeyword}
+        onOptionBChange={setTemplateOptionB}
+        onOptionBKeywordChange={setTemplateOptionBKeyword}
       />
 
       {selectedResultPresence.shouldRender && selectedResultDialogMeeting ? (

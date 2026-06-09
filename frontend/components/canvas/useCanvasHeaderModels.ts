@@ -27,6 +27,9 @@ export function useCanvasHeaderModels({
     problemDefinitionStagePending: incomingView.problemDefinitionStagePending,
     isProblemDefinitionExploreStage: incomingView.isProblemDefinitionExploreStage,
     ideationBubbleDebugEnabled: incomingView.ideationBubbleDebugEnabled,
+    summaryDocumentGenerationDetail: incomingView.summaryDocumentGenerationDetail,
+    summaryDocumentGenerationPhase: incomingView.summaryDocumentGenerationPhase,
+    summaryDocumentGenerationRetryable: incomingView.summaryDocumentGenerationRetryable,
   }), [
     incomingView.busy,
     incomingView.endMeetingSaving,
@@ -39,6 +42,9 @@ export function useCanvasHeaderModels({
     incomingView.problemDefinitionStagePending,
     incomingView.recordingStartedAtMs,
     incomingView.stage,
+    incomingView.summaryDocumentGenerationDetail,
+    incomingView.summaryDocumentGenerationPhase,
+    incomingView.summaryDocumentGenerationRetryable,
   ]);
 
   const meetingGoal = useMemo<CanvasHeaderMeetingGoalState>(() => ({

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { WebSocketClient } from "@/lib/websocket";
 import { AudioRecorder, type RecordedAudioChunk } from "@/lib/audio-recorder";
 import { supabase } from "@/lib/supabase";
-import { getCanvasWorkspaceState } from "@/lib/api";
+import { getCanvasWorkspaceState, logCanvasBubbleDebugEvent } from "@/lib/api";
 import type {
   CanvasEditPresencePayload,
   CanvasNodePreviewPayload,
@@ -84,7 +84,18 @@ interface CanvasStageContext {
   stage: "ideation" | "problem-definition" | "solution";
   targetId?: string;
   selectedNodeId?: string;
+  demoBalanceMode?: boolean;
 }
+
+const NORMAL_STT_RECORDER_OPTIONS = {
+  intervalMs: 7000,
+  minSendDurationMs: 4000,
+};
+
+const DEMO_BALANCE_STT_RECORDER_OPTIONS = {
+  intervalMs: 6000,
+  minSendDurationMs: 3000,
+};
 
 function createCalibrationAccumulator(): CalibrationAccumulator {
   return {
@@ -271,6 +282,7 @@ function HomeContent() {
   const liveSpeechClearTimerRef = useRef<number | null>(null);
   const transcriptPersistenceStatusTimerRef = useRef<number | null>(null);
   const ideationBubbleFinalizationTimerRef = useRef<number | null>(null);
+  const meetingRoomResetStopRequestedRef = useRef(false);
   const lastSttStatusLogAtRef = useRef(0);
   const lastGatewayChunkLogAtRef = useRef(0);
 
@@ -392,6 +404,26 @@ function HomeContent() {
       setMeetingStatus(nextStatus);
     }
   }, []);
+
+  const resetMeetingRoomClientState = useCallback(() => {
+    if (liveSpeechClearTimerRef.current !== null) {
+      window.clearTimeout(liveSpeechClearTimerRef.current);
+      liveSpeechClearTimerRef.current = null;
+    }
+    if (transcriptPersistenceStatusTimerRef.current !== null) {
+      window.clearTimeout(transcriptPersistenceStatusTimerRef.current);
+      transcriptPersistenceStatusTimerRef.current = null;
+    }
+    setTranscripts([]);
+    transcriptsRef.current = [];
+    setAnalysisState(null);
+    setAgendas([]);
+    setLiveSpeechPreview(null);
+    setTranscriptPersistenceStatusText("");
+    setFusionSelectedUserId(null);
+    setFusionSelectedSpeaker("");
+    clearIdeationBubbleFinalization();
+  }, [clearIdeationBubbleFinalization]);
 
   useEffect(() => {
     if (!checkingAuth && user && !meetingId) {
@@ -552,6 +584,70 @@ function HomeContent() {
       showLiveSpeechPreview(speaker, text, nextTimestamp);
     });
 
+    wsClient.on("transcript_refined", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      const transcriptPayload = isRecord(payload.transcript) ? payload.transcript : payload;
+      const transientId = readString(payload.transient_id);
+      const transcriptId = readString(transcriptPayload.id, transientId);
+      const speaker = readString(transcriptPayload.speaker, "알 수 없음");
+      const text = readString(transcriptPayload.text || payload.refined_text);
+      if (!text.trim()) return;
+      const nextTimestamp = readString(
+        transcriptPayload.timestamp || transcriptPayload.created_at,
+        new Date().toISOString(),
+      );
+      const canvasStage = readString(transcriptPayload.canvas_stage || payload.canvas_stage, "ideation");
+      const canvasTargetId = readString(transcriptPayload.canvas_target_id || payload.canvas_target_id);
+
+      console.info("[STT] 전사 보정 수신", {
+        transientId,
+        transcriptId,
+        speaker,
+        preview: text,
+        rawText: payload.raw_text,
+        refineUsedLlm: payload.refine_used_llm,
+        refineElapsedMs: payload.refine_elapsed_ms,
+      });
+
+      setTranscripts((prev) => {
+        let matched = false;
+        const nextRows = prev.map((row) => {
+          const sameId = Boolean(transcriptId && row.id === transcriptId);
+          const sameTransient = Boolean(transientId && row.id === transientId);
+          const sameTurn = Boolean(speaker && row.speaker === speaker && row.timestamp === nextTimestamp);
+          if (!sameId && !sameTransient && !sameTurn) return row;
+          matched = true;
+          const nextId = row.id && row.id !== transientId ? row.id : transcriptId || row.id;
+          return {
+            ...row,
+            id: nextId,
+            speaker,
+            text,
+            timestamp: nextTimestamp,
+            canvas_stage: canvasStage || row.canvas_stage,
+            canvas_target_id: canvasTargetId || row.canvas_target_id,
+            transcript_status: "final",
+          };
+        });
+        if (!matched) {
+          nextRows.push({
+            id: transcriptId || `${nextTimestamp}-${speaker}-${text}`,
+            speaker,
+            text,
+            timestamp: nextTimestamp,
+            canvas_stage: canvasStage,
+            canvas_target_id: canvasTargetId,
+            transcript_status: "final",
+            persisted: false,
+            persistence_status: "saving",
+          });
+        }
+        return dedupeTranscripts(nextRows);
+      });
+    });
+
     wsClient.on("transcript_persistence_updated", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload)) return;
@@ -588,11 +684,12 @@ function HomeContent() {
           const sameContent = Boolean(speaker && text && row.speaker === speaker && row.text === text && row.timestamp === nextTimestamp);
           if (!sameId && !sameTransient && !sameContent) return row;
           matched = true;
+          const nextText = row.text && text && row.text !== text ? row.text : text || row.text;
           return {
             ...row,
             id: transcriptId || row.id,
             speaker: speaker || row.speaker,
-            text: text || row.text,
+            text: nextText,
             timestamp: nextTimestamp || row.timestamp,
             canvas_stage: canvasStage || row.canvas_stage,
             canvas_target_id: canvasTargetId || row.canvas_target_id,
@@ -791,6 +888,121 @@ function HomeContent() {
       }
     });
 
+    wsClient.on("bubble_graph_debug", (message) => {
+      const payload = getMessagePayload(message);
+      if (!isRecord(payload)) return;
+      if (readString(payload.meeting_id) && readString(payload.meeting_id) !== meetingId) return;
+      const debugStage = readString(payload.stage);
+      const debugMode = readString(payload.mode);
+      const debugUpdateMode = readString(payload.update_mode);
+      if (debugMode === "demo_balance" && debugUpdateMode === "consolidate") {
+        const llmRoute = isRecord(payload.llm_route) ? payload.llm_route : {};
+        const llmError = isRecord(payload.llm_error) ? payload.llm_error : {};
+        const llmRequest = isRecord(payload.llm_request) ? payload.llm_request : {};
+        const llmResponse = isRecord(payload.llm_response) ? payload.llm_response : {};
+        const llmIdMap = isRecord(payload.llm_id_map) ? payload.llm_id_map : {};
+        const llmTrace = isRecord(payload.llm_trace) ? payload.llm_trace : {};
+        const timing = isRecord(payload.timing) ? payload.timing : {};
+        const summary = {
+          elapsedMs: payload.elapsed_ms,
+          timing,
+          llmTrace,
+          inputUtterances: payload.input_utterances ?? payload.rows,
+          inputBubbles: payload.input_bubbles,
+          renameCount: payload.rename_count,
+          mergeCount: payload.merge_count,
+          removeCount: payload.remove_count,
+          moveCount: payload.move_count ?? payload.affinity_update_count,
+          refineCount: 0,
+          ignoredRefineCount: payload.ignored_refine_count,
+          model: payload.model ?? llmRoute.model,
+          resultReason: payload.result_reason ?? payload.reason,
+          warning: payload.warning,
+        };
+        if (debugStage === "response") {
+          console.info("[DemoBubbleLLM] REQUEST", llmRequest);
+          console.info("[DemoBubbleLLM] RESPONSE", llmResponse);
+          if (Object.keys(llmIdMap).length > 0) {
+            console.info("[DemoBubbleLLM] ID MAP", llmIdMap);
+          }
+          if (Object.keys(llmTrace).length > 0) {
+            console.info("[DemoBubbleLLM] TRACE", llmTrace);
+          }
+          console.info("[DemoBubbleLLM] TIMING", timing);
+          console.info("[DemoBubbleLLM] consolidate response", summary);
+        } else if (["request_failed", "request_exception", "paused"].includes(debugStage)) {
+          console.warn("[DemoBubbleLLM] REQUEST", llmRequest);
+          if (Object.keys(llmIdMap).length > 0) {
+            console.warn("[DemoBubbleLLM] ID MAP", llmIdMap);
+          }
+          if (Object.keys(llmTrace).length > 0) {
+            console.warn("[DemoBubbleLLM] TRACE", llmTrace);
+          }
+          console.warn("[DemoBubbleLLM] TIMING", timing);
+          console.warn("[DemoBubbleLLM] consolidate failed", {
+            ...summary,
+            statusCode: payload.status_code ?? llmError.http_status,
+            errorType: payload.error_type ?? llmError.error_type,
+            errorPreview: payload.error ?? llmError.error_preview,
+            llmError,
+          });
+        }
+      }
+      console.info("[Bubble] gateway debug event", {
+        stage: debugStage,
+        mode: payload.mode,
+        updateMode: debugUpdateMode,
+        reason: payload.reason,
+        rows: payload.rows,
+        queueSize: payload.queue_size,
+        delayMs: payload.delay_ms,
+        cycle: payload.cycle,
+        currentCycle: payload.current_cycle,
+        bubbles: payload.bubbles,
+        usedLlm: payload.used_llm,
+        usedLocal: payload.used_local,
+        resultReason: payload.result_reason,
+        warning: payload.warning,
+        statusCode: payload.status_code,
+        elapsedMs: payload.elapsed_ms,
+        errorType: payload.error_type,
+        error: payload.error,
+        llmRoute: payload.llm_route,
+        llmError: payload.llm_error,
+        llmRequest: payload.llm_request,
+        llmResponse: payload.llm_response,
+        llmIdMap: payload.llm_id_map,
+        llmTrace: payload.llm_trace,
+        timing: payload.timing,
+        rawDirectives: payload.raw_directives,
+        ignoredRefineCount: payload.ignored_refine_count,
+        extractorRoute: payload.extractor_route,
+        refinedCount: payload.refined_count,
+        keywordCount: payload.keyword_count,
+        renameCount: payload.rename_count,
+        mergeCount: payload.merge_count,
+        removeCount: payload.remove_count,
+        moveCount: payload.move_count,
+        inputUtterances: payload.input_utterances,
+        inputBubbles: payload.input_bubbles,
+        model: payload.model,
+        primaryCount: payload.primary_count,
+        promoteCount: payload.promote_count,
+        demoteCount: payload.demote_count,
+        aliasMergeCount: payload.alias_merge_count,
+        canonicalizedCount: payload.canonicalized_count,
+        localCleanupCount: payload.local_cleanup_count,
+        slowBackoffMs: payload.slow_backoff_ms,
+        overlapResolvedCount: payload.overlap_resolved_count,
+        processedCount: payload.processed_count,
+        activeCount: payload.active_count,
+        dimmedCount: payload.dimmed_count,
+        exitingCount: payload.exiting_count,
+        archivedCount: payload.archived_count,
+        provisionalCount: payload.provisional_count,
+      });
+    });
+
     wsClient.on("analysis_update", (message) => {
       const payload = getMessagePayload(message);
       if (!isRecord(payload)) return;
@@ -803,6 +1015,43 @@ function HomeContent() {
     wsClient.on("canvas_sync", (message) => {
       const payload = (message.data ?? message.workspace ?? message) as CanvasRealtimeSyncPayload | null;
       if (!payload || payload.meeting_id !== meetingId) return;
+      if (payload.sync_scope === "meeting_room_reset") {
+        meetingRoomResetStopRequestedRef.current = true;
+        resetMeetingRoomClientState();
+      }
+      if (payload.sync_scope === "ideation_bubble_graph") {
+        const graph: Record<string, unknown> = isRecord(payload.ideation_bubble_graph) ? payload.ideation_bubble_graph : {};
+        const graphBubbles = graph.bubbles;
+        const bubbles = Array.isArray(graphBubbles) ? graphBubbles.length : 0;
+        console.info("[Bubble] graph sync received", {
+          cycle: graph.update_cycle,
+          updatedAt: graph.updated_at,
+          bubbles,
+        });
+        logCanvasBubbleDebugEvent({
+          meeting_id: meetingId,
+          user_id: user?.id,
+          event: "graph_sync_received",
+          data: {
+            cycle: graph.update_cycle,
+            updated_at: graph.updated_at,
+            bubbles,
+            labels: Array.isArray(graphBubbles)
+              ? graphBubbles
+                  .filter(isRecord)
+                  .slice(0, 24)
+                  .map((bubble) => ({
+                    id: readString(bubble.id),
+                    label: readString(bubble.label),
+                    state: readString(bubble.display_state),
+                    lifecycle: readString(bubble.lifecycle_state),
+                    choice: readString(bubble.choice_affinity),
+                    count: Number(bubble.count || 0),
+                  }))
+              : [],
+          },
+        });
+      }
       setIncomingCanvasSync(payload);
     });
 
@@ -876,6 +1125,7 @@ function HomeContent() {
     applyMeetingStateToUi,
     applyMeetingTimerSnapshot,
     clearIdeationBubbleFinalization,
+    resetMeetingRoomClientState,
   ]);
 
   const finishCalibration = useCallback(() => {
@@ -1070,6 +1320,9 @@ function HomeContent() {
     }
 
     clearIdeationBubbleFinalization();
+    const recorderOptions = canvasStageContextRef.current.demoBalanceMode
+      ? DEMO_BALANCE_STT_RECORDER_OPTIONS
+      : NORMAL_STT_RECORDER_OPTIONS;
     if (!audioRecorderRef.current) {
       const recorder = new AudioRecorder();
       const initialized = await recorder.initialize();
@@ -1077,17 +1330,19 @@ function HomeContent() {
         alert("마이크 접근 권한이 필요합니다.");
         return;
       }
-      recorder.setRecordingInterval(7000);
+      recorder.setRealtimeModeOptions(recorderOptions);
       recorder.setMeterCallback(accumulateCalibrationMetrics);
       audioRecorderRef.current = recorder;
     } else {
-      audioRecorderRef.current.setRecordingInterval(7000);
+      audioRecorderRef.current.setRealtimeModeOptions(recorderOptions);
       audioRecorderRef.current.setMeterCallback(accumulateCalibrationMetrics);
     }
 
     beginCalibration();
     console.info("[STT] 녹음 파이프라인 시작", {
-      intervalMs: 7000,
+      intervalMs: recorderOptions.intervalMs,
+      minSendDurationMs: recorderOptions.minSendDurationMs,
+      demoBalanceMode: canvasStageContextRef.current.demoBalanceMode || false,
       mode: "pcm-wav-chunk",
       wsConnected: wsClientRef.current?.isConnected() || false,
     });
@@ -1177,6 +1432,16 @@ function HomeContent() {
     setRecordingStartedAtMs(Date.now());
     setIsRecording(true);
   };
+
+  useEffect(() => {
+    if (!meetingRoomResetStopRequestedRef.current) return;
+    if (!isRecording) {
+      meetingRoomResetStopRequestedRef.current = false;
+      return;
+    }
+    meetingRoomResetStopRequestedRef.current = false;
+    void toggleRecording();
+  }, [isRecording, toggleRecording]);
 
   const endMeeting = async () => {
     if (!meetingId) return;
@@ -1318,6 +1583,7 @@ function HomeContent() {
         meetingTimerEndedAtMs={meetingTimerEndedAtMs}
         onToggleRecording={toggleRecording}
         onStopRecording={toggleRecording}
+        onMeetingTranscriptReset={resetMeetingRoomClientState}
         onEndMeeting={endMeeting}
         onCanvasStageContextChange={setCanvasStageContext}
         recordingStatusText={

@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
+    "report:evaluation": "node scripts/evaluation-report.mjs",
     "smoke:multiclient-canvas": "npx --yes --package playwright node scripts/multiclient-canvas-smoke.mjs"
   },
   "dependencies": {

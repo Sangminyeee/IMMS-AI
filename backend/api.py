@@ -32,7 +32,30 @@ from security_utils import extract_client_ip, is_ip_allowed, parse_ip_whitelist
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=False)
 load_dotenv(ROOT / "gateway" / ".env", override=False)
-WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo")
+WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo").strip() or "turbo"
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "ko").strip() or "ko"
+GEMINI_DEFAULT_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite"
+GEMINI_FAST_MODEL_NAME = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.1-flash-lite").strip() or GEMINI_DEFAULT_MODEL_NAME
+GEMINI_FAST_STAGE_NAMES = tuple(
+    stage.strip()
+    for stage in os.environ.get(
+        "GEMINI_FAST_STAGES",
+        "stt.transcript_refine,stt.flow_summary,canvas_ideation_keyword_extract,canvas_ideation_bubble_graph_update",
+    ).split(",")
+    if stage.strip()
+)
+GEMINI_FORCE_DEFAULT_STAGE_NAMES = {
+    "canvas_demo_balance_problem_summary",
+    "canvas_demo_balance_summary_document",
+    "canvas_demo_balance_summary_conclusion",
+}
+GEMINI_FAST_STAGE_PREFIXES = tuple(
+    prefix.strip()
+    for prefix in os.environ.get("GEMINI_FAST_STAGE_PREFIXES", "").split(",")
+    if prefix.strip()
+)
+GEMINI_DEFAULT_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "").strip()
+GEMINI_FAST_THINKING_LEVEL = os.environ.get("GEMINI_FAST_THINKING_LEVEL", "low").strip() or "low"
 SUMMARY_INTERVAL = 4
 SUMMARY_POINT_TARGET_LEN = None
 REALTIME_MIN_SHIFT_SPAN = 6
@@ -65,6 +88,10 @@ _SUPABASE_REQUEST_LOCK = threading.Lock()
 _RUNTIME_DB_DISABLED_TABLES: set[str] = set()
 _RUNTIME_DB_LOGGED_ERRORS: dict[str, float] = {}
 _RUNTIME_DB_STATE_LOCK = threading.Lock()
+_LOCAL_KIWI_EXTRACTOR: Any = None
+_LOCAL_KIWI_EXTRACTOR_ATTEMPTED = False
+_LOCAL_KIWI_EXTRACTOR_LOCK = threading.Lock()
+_LOCAL_KIWI_WARNING_LOGGED = False
 
 STOPWORDS = {
     "그냥",
@@ -224,6 +251,166 @@ def _now_ts() -> str:
 def _safe_text(raw: Any, fallback: str = "") -> str:
     s = str(raw or "").strip()
     return s if s else fallback
+
+
+_BUBBLE_DEBUG_LOG_DIR = ROOT / "output" / "bubble-debug"
+_BUBBLE_DEBUG_LOG_LOCK = threading.Lock()
+_BUBBLE_DEBUG_LOG_MAX_BUBBLES = 80
+_DEMO_BUBBLE_LLM_LOG_DIR = ROOT / "output" / "demo-bubble-llm"
+_DEMO_BUBBLE_LLM_LOG_LOCK = threading.Lock()
+DEMO_BALANCE_GATE_ENTER_DELAY_MS = 0
+DEMO_BALANCE_GATE_STEP_DELAY_MS = 340
+
+
+def _bubble_debug_safe_meeting_id(meeting_id: Any) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", _safe_text(meeting_id))
+    return safe[:120] or "unknown"
+
+
+def _bubble_debug_compact_rows(rows: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for row in rows[-limit:]:
+        compact.append(
+            {
+                "id": _safe_text(row.get("id"))[:80],
+                "speaker": _safe_text(row.get("speaker"))[:40],
+                "text": _strip_leading_timestamp(row.get("text"))[:180],
+                "timestamp": _safe_text(row.get("timestamp"))[:60],
+            }
+        )
+    return compact
+
+
+def _bubble_debug_compact_bubbles(graph: dict[str, Any], limit: int = _BUBBLE_DEBUG_LOG_MAX_BUBBLES) -> list[dict[str, Any]]:
+    bubbles = graph.get("bubbles") if isinstance(graph, dict) else []
+    if not isinstance(bubbles, list):
+        return []
+    compact: list[dict[str, Any]] = []
+    for bubble in bubbles[:limit]:
+        if not isinstance(bubble, dict):
+            continue
+        compact.append(
+            {
+                "id": _safe_text(bubble.get("id"))[:80],
+                "label": _safe_text(bubble.get("label"))[:80],
+                "canonical_label": _safe_text(bubble.get("canonical_label"))[:80],
+                "aliases": [_safe_text(value)[:80] for value in (bubble.get("aliases") or [])[:8]],
+                "count": _safe_nonnegative_int(bubble.get("count"), 0),
+                "display_state": _safe_text(bubble.get("display_state")),
+                "lifecycle_state": _safe_text(bubble.get("lifecycle_state")),
+                "choice_affinity": _safe_text(bubble.get("choice_affinity")),
+                "affinity_score": _safe_float(bubble.get("affinity_score"), 0.0),
+                "emphasis": _safe_text(bubble.get("emphasis")),
+                "anchor_id": _safe_text(bubble.get("anchor_id")),
+                "orbit_center_id": _safe_text(bubble.get("orbit_center_id")),
+                "orbit_ring": _safe_nonnegative_int(bubble.get("orbit_ring"), 0),
+                "orbit_slot_index": _safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                "orbit_order_key": _safe_float(bubble.get("orbit_order_key"), 0.0),
+                "orbit_angle": _safe_float(bubble.get("orbit_angle"), 0.0),
+                "orbit_radius": _safe_float(bubble.get("orbit_radius"), 0.0),
+                "motion_reason": _safe_text(bubble.get("motion_reason")),
+                "motion_direction": _safe_text(bubble.get("motion_direction")),
+                "motion_plan_id": _safe_text(bubble.get("motion_plan_id")),
+                "from_slot_index": _safe_nonnegative_int(bubble.get("from_slot_index"), 0),
+                "to_slot_index": _safe_nonnegative_int(bubble.get("to_slot_index"), 0),
+                "move_cost": round(_safe_float(bubble.get("move_cost"), 0.0), 2),
+                "move_angle_delta": round(_safe_float(bubble.get("move_angle_delta"), 0.0), 4),
+                "arc_cost": round(_safe_float(bubble.get("arc_cost"), 0.0), 2),
+                "radius_cost": round(_safe_float(bubble.get("radius_cost"), 0.0), 2),
+                "gate_blocked": bool(bubble.get("gate_blocked")),
+                "enter_sequence": _safe_nonnegative_int(bubble.get("enter_sequence"), 0),
+                "enter_delay_ms": _safe_nonnegative_int(bubble.get("enter_delay_ms"), 0),
+                "gate_angle": _safe_float(bubble.get("gate_angle"), 0.0),
+                "durable": bool(bubble.get("durable")),
+                "x": _safe_float(bubble.get("x"), 0.0),
+                "y": _safe_float(bubble.get("y"), 0.0),
+                "size": _safe_float(bubble.get("size"), 0.0),
+            }
+        )
+    return compact
+
+
+def _write_bubble_debug_event(meeting_id: Any, event: str, payload: dict[str, Any]) -> None:
+    if os.environ.get("BUBBLE_DEBUG_FILE_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    record = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "event": _safe_text(event),
+        "meeting_id": _safe_text(meeting_id),
+        **payload,
+    }
+    path = _BUBBLE_DEBUG_LOG_DIR / f"{_bubble_debug_safe_meeting_id(meeting_id)}.jsonl"
+    try:
+        with _BUBBLE_DEBUG_LOG_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(
+            "[Bubble][debug-log] write failed",
+            {"meeting_id": _safe_text(meeting_id), "event": _safe_text(event), "error": repr(exc)},
+            flush=True,
+        )
+
+
+def _write_demo_bubble_llm_event(meeting_id: Any, event: str, payload: dict[str, Any]) -> None:
+    if os.environ.get("DEMO_BUBBLE_LLM_FILE_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    record = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "event": _safe_text(event),
+        "meeting_id": _safe_text(meeting_id),
+        **payload,
+    }
+    path = _DEMO_BUBBLE_LLM_LOG_DIR / f"{_bubble_debug_safe_meeting_id(meeting_id)}.jsonl"
+    try:
+        with _DEMO_BUBBLE_LLM_LOG_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(
+            "[DemoBubbleLLM][file-log] write failed",
+            {"meeting_id": _safe_text(meeting_id), "event": _safe_text(event), "error": repr(exc)},
+            flush=True,
+        )
+
+
+def _bubble_debug_compact_directives(parsed: Any, *, limit: int = 8) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return {}
+
+    def _compact_list(*keys: str) -> list[Any]:
+        raw: Any = []
+        for key in keys:
+            value = parsed.get(key)
+            if value:
+                raw = value
+                break
+        if not isinstance(raw, list):
+            return []
+        compact: list[Any] = []
+        for item in raw[:limit]:
+            if isinstance(item, dict):
+                compact.append(
+                    {
+                        _safe_text(key)[:40]: _truncate_text(_safe_text(value), 120)
+                        for key, value in item.items()
+                        if _safe_text(key)
+                    }
+                )
+            else:
+                compact.append(_truncate_text(_safe_text(item), 120))
+        return compact
+
+    return {
+        "rename_keywords": _compact_list("rename_keywords", "renames", "rename", "correct_keywords"),
+        "merge_keywords": _compact_list("merge_keywords", "merges", "merge"),
+        "remove_keywords": _compact_list("remove_keywords", "delete_keywords", "archive_keywords"),
+        "affinity_updates": _compact_list("affinity_updates", "affinityUpdates", "move_keywords", "moveKeywords"),
+        "refine": _compact_list("refine", "refined_transcripts", "refinedTranscripts"),
+        "primary_keywords": _compact_list("primary_keywords", "primaryKeywords", "important_keywords", "importantKeywords"),
+    }
 
 
 def _safe_nonnegative_int(raw: Any, fallback: int = 0) -> int:
@@ -403,10 +590,348 @@ def _handle_runtime_db_exception(table_name: str, action: str, exc: Exception) -
     )
 
 
+def _normalize_canvas_demo_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "enabled": False,
+            "mode": "normal",
+            "option_a": "",
+            "option_b": "",
+            "option_a_keyword": "",
+            "option_b_keyword": "",
+            "instruction": "",
+        }
+
+    mode = _safe_text(raw.get("mode"), "normal").lower()
+    option_a = _truncate_text(_safe_text(raw.get("option_a") or raw.get("optionA")), 120)
+    option_b = _truncate_text(_safe_text(raw.get("option_b") or raw.get("optionB")), 120)
+    option_a_keyword = _truncate_text(
+        _safe_text(raw.get("option_a_keyword") or raw.get("optionAKeyword") or option_a),
+        80,
+    )
+    option_b_keyword = _truncate_text(
+        _safe_text(raw.get("option_b_keyword") or raw.get("optionBKeyword") or option_b),
+        80,
+    )
+    enabled = bool(raw.get("enabled")) or mode == "demo_balance"
+    if mode != "demo_balance" or not enabled or not option_a or not option_b:
+        return {
+            "enabled": False,
+            "mode": "normal",
+            "option_a": "",
+            "option_b": "",
+            "option_a_keyword": "",
+            "option_b_keyword": "",
+            "instruction": "",
+        }
+
+    return {
+        "enabled": True,
+        "mode": "demo_balance",
+        "option_a": option_a,
+        "option_b": option_b,
+        "option_a_keyword": option_a_keyword or option_a,
+        "option_b_keyword": option_b_keyword or option_b,
+        "instruction": _truncate_text(
+            _safe_text(raw.get("instruction"), "발화할 때 A 또는 B를 먼저 말하고 이유를 설명해 주세요."),
+            180,
+        ),
+    }
+
+
+def _is_demo_balance_config(raw: Any) -> bool:
+    config = _normalize_canvas_demo_config(raw)
+    return bool(config.get("enabled")) and config.get("mode") == "demo_balance"
+
+
+def _normalize_demo_balance_main_opinions(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    source = raw if isinstance(raw, dict) else {}
+    output: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for choice, aliases in {
+        "a": ("a", "option_a", "optionA", "option_a_opinions", "optionAOpinions"),
+        "b": ("b", "option_b", "optionB", "option_b_opinions", "optionBOpinions"),
+    }.items():
+        raw_items: Any = []
+        for key in aliases:
+            if isinstance(source.get(key), list):
+                raw_items = source.get(key)
+                break
+        normalized_items: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_items or []):
+            if isinstance(item, str):
+                text = _safe_text(item)
+                title = text
+                keywords: list[str] = []
+                evidence_ids: list[str] = []
+            elif isinstance(item, dict):
+                text = _safe_text(item.get("text") or item.get("body") or item.get("summary") or item.get("reason_summary"))
+                title = _safe_text(item.get("title") or item.get("label") or text)
+                keywords = _dedup_preserve(
+                    [_truncate_text(_safe_text(keyword), 40) for keyword in (item.get("keywords") or []) if _safe_text(keyword)],
+                    limit=6,
+                )
+                evidence_ids = _dedup_preserve(
+                    [
+                        _safe_text(utterance_id)
+                        for utterance_id in (
+                            item.get("evidence_utterance_ids")
+                            or item.get("evidenceUtteranceIds")
+                            or item.get("utterance_ids")
+                            or item.get("utteranceIds")
+                            or []
+                        )
+                        if _safe_text(utterance_id)
+                    ],
+                    limit=40,
+                )
+            else:
+                continue
+            if not text and not title:
+                continue
+            normalized_items.append(
+                {
+                    "id": _safe_text(item.get("id")) if isinstance(item, dict) else f"demo-main-{choice}-{index + 1}",
+                    "title": _truncate_text(title or text, 80),
+                    "text": _truncate_text(text or title, 220),
+                    "keywords": keywords,
+                    "evidence_utterance_ids": evidence_ids,
+                }
+            )
+            if len(normalized_items) >= 8:
+                break
+        output[choice] = normalized_items
+    return output
+
+
+DEMO_BALANCE_CARD_FILLER_WORDS = {
+    "아니",
+    "근데",
+    "그냥",
+    "너무",
+    "약간",
+    "진짜",
+    "뭐",
+    "그쵸",
+    "그렇죠",
+    "때문",
+    "때문에",
+    "음",
+    "어",
+    "저는",
+    "제가",
+}
+
+
+def _demo_balance_clean_card_phrase(raw: Any) -> str:
+    text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
+    if not text:
+        return ""
+    text = re.sub(r"[\"'“”‘’`]", "", text)
+    text = re.sub(r"\b([ABab])\s*(선택|고름|고를게|갈게|쪽|번)?\b", "", text).strip()
+    words = [word for word in text.split(" ") if word]
+    compact_words: list[str] = []
+    previous = ""
+    for word in words:
+        normalized = re.sub(r"[^\w가-힣]", "", word).lower()
+        if not normalized or normalized in DEMO_BALANCE_CARD_FILLER_WORDS:
+            continue
+        if normalized == previous:
+            continue
+        compact_words.append(word.strip(" ,.!?;:·"))
+        previous = normalized
+    compact = " ".join(word for word in compact_words if word)
+    compact = re.sub(r"\s+", " ", compact).strip(" ,.!?;:·")
+    return _truncate_text(compact, 96)
+
+
+def _demo_balance_choice_option_label(choice: str, demo_config: dict[str, Any]) -> str:
+    normalized_choice = _safe_text(choice).lower()
+    if normalized_choice == "a":
+        return _safe_text(demo_config.get("option_a"), "A")
+    if normalized_choice == "b":
+        return _safe_text(demo_config.get("option_b"), "B")
+    return ""
+
+
+def _demo_balance_card_summary_text(raw: Any, choice: str = "", demo_config: dict[str, Any] | None = None) -> str:
+    normalized_demo_config = _normalize_canvas_demo_config(demo_config or {})
+    compact = _demo_balance_clean_card_phrase(raw)
+    if not compact:
+        return "선택 근거를 짧게 정리할 추가 발화가 필요합니다."
+    option_label = _demo_balance_choice_option_label(choice, normalized_demo_config)
+    if option_label:
+        return _truncate_text(f"{option_label}을 선택한 근거로 {compact}을 중심으로 의견이 정리되었습니다.", 180)
+    return _truncate_text(f"{compact}을 중심으로 의견이 정리되었습니다.", 180)
+
+
+def _demo_balance_card_summary_title(
+    raw: Any,
+    choice: str = "",
+    demo_config: dict[str, Any] | None = None,
+    index: int = 1,
+) -> str:
+    option_label = _demo_balance_choice_option_label(choice, _normalize_canvas_demo_config(demo_config or {}))
+    if option_label:
+        return _truncate_text(f"{option_label} 선택 근거 {max(1, index)}", 56)
+    compact = _demo_balance_clean_card_phrase(raw)
+    return _truncate_text(compact or f"대표 의견 {max(1, index)}", 56)
+
+
+def _demo_balance_text_needs_card_summarization(raw: Any) -> bool:
+    text = _safe_text(raw)
+    if len(text) > 90:
+        return True
+    normalized = re.sub(r"[^\w가-힣\s]", " ", text).lower()
+    words = [word for word in normalized.split() if word]
+    if any(word in DEMO_BALANCE_CARD_FILLER_WORDS for word in words):
+        return True
+    return any(words[index] == words[index - 1] for index in range(1, len(words)))
+
+
+def _sanitize_demo_balance_main_opinion_cards(
+    main_opinions: dict[str, list[dict[str, Any]]],
+    demo_config: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    sanitized: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for choice in ("a", "b"):
+        for index, item in enumerate(main_opinions.get(choice) or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            raw_text = _safe_text(item.get("text") or item.get("title"))
+            raw_title = _safe_text(item.get("title"))
+            next_text = (
+                _demo_balance_card_summary_text(raw_text, choice, demo_config)
+                if _demo_balance_text_needs_card_summarization(raw_text)
+                else _truncate_text(raw_text, 220)
+            )
+            next_title = raw_title
+            if not next_title or next_title == raw_text or len(next_title) > 42 or _demo_balance_text_needs_card_summarization(next_title):
+                next_title = _demo_balance_card_summary_title(raw_text, choice, demo_config, index)
+            sanitized[choice].append(
+                {
+                    **item,
+                    "title": _truncate_text(next_title, 80),
+                    "text": _truncate_text(next_text, 220),
+                }
+            )
+    return sanitized
+
+
+def _build_demo_balance_main_opinions_from_opinions(
+    opinions: list[dict[str, Any]],
+    *,
+    limit_per_choice: int = 6,
+    demo_config: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    output: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    normalized_demo_config = _normalize_canvas_demo_config(demo_config or {})
+    for choice in ("a", "b"):
+        seen_texts: set[str] = set()
+        for opinion in opinions:
+            if not opinion.get("valid") or opinion.get("choice") != choice:
+                continue
+            text = _safe_text(opinion.get("text") or opinion.get("reason_summary"))
+            if not text:
+                continue
+            summary_text = _demo_balance_card_summary_text(text, choice, normalized_demo_config)
+            text_key = _safe_text(re.sub(r"\s+", " ", summary_text).lower())
+            if text_key in seen_texts:
+                continue
+            seen_texts.add(text_key)
+            output[choice].append(
+                {
+                    "id": f"demo-main-{choice}-{len(output[choice]) + 1}",
+                    "title": _demo_balance_card_summary_title(text, choice, normalized_demo_config, len(output[choice]) + 1),
+                    "text": _truncate_text(summary_text, 220),
+                    "keywords": opinion.get("keywords") if isinstance(opinion.get("keywords"), list) else [],
+                    "evidence_utterance_ids": [_safe_text(opinion.get("utterance_id"))],
+                }
+            )
+            if len(output[choice]) >= limit_per_choice:
+                break
+    return output
+
+
+def _normalize_canvas_demo_balance_classification(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "version": 1,
+            "mode": "demo_balance",
+            "option_a": "",
+            "option_b": "",
+            "classified_at": "",
+            "source_signature": "",
+            "valid_a_count": 0,
+            "valid_b_count": 0,
+            "unclassified_count": 0,
+            "opinions": [],
+            "summary": {},
+            "main_opinions": {"a": [], "b": []},
+        }
+
+    opinions: list[dict[str, Any]] = []
+    for index, item in enumerate(raw.get("opinions") or []):
+        if not isinstance(item, dict):
+            continue
+        choice = _safe_text(item.get("choice")).lower()
+        if choice not in {"a", "b"}:
+            choice = "unclassified"
+        utterance_id = _safe_text(item.get("utterance_id") or item.get("utteranceId") or item.get("id"))
+        valid = choice in {"a", "b"} and item.get("valid") is not False
+        confidence = max(0.0, min(1.0, _safe_float(item.get("confidence"), 0.0)))
+        opinions.append(
+            {
+                "id": _safe_text(item.get("id")) or f"demo-opinion-{index + 1}",
+                "utterance_id": utterance_id,
+                "choice": choice if valid else "unclassified",
+                "valid": valid,
+                "confidence": confidence,
+                "reason_summary": _truncate_text(_safe_text(item.get("reason_summary") or item.get("reasonSummary")), 260),
+                "keywords": _dedup_preserve(
+                    [_truncate_text(_safe_text(keyword), 40) for keyword in (item.get("keywords") or []) if _safe_text(keyword)],
+                    limit=8,
+                ),
+                "text": _truncate_text(_safe_text(item.get("text")), 360),
+            }
+        )
+
+    valid_a_count = sum(1 for item in opinions if item.get("valid") and item.get("choice") == "a")
+    valid_b_count = sum(1 for item in opinions if item.get("valid") and item.get("choice") == "b")
+    unclassified_count = sum(1 for item in opinions if not item.get("valid") or item.get("choice") not in {"a", "b"})
+    summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else {}
+    return {
+        "version": _safe_nonnegative_int(raw.get("version"), 1) or 1,
+        "mode": "demo_balance",
+        "option_a": _truncate_text(_safe_text(raw.get("option_a") or raw.get("optionA")), 120),
+        "option_b": _truncate_text(_safe_text(raw.get("option_b") or raw.get("optionB")), 120),
+        "classified_at": _safe_text(raw.get("classified_at") or raw.get("classifiedAt")),
+        "source_signature": _safe_text(raw.get("source_signature") or raw.get("sourceSignature")),
+        "valid_a_count": valid_a_count,
+        "valid_b_count": valid_b_count,
+        "unclassified_count": unclassified_count,
+        "opinions": opinions,
+        "summary": {
+            "option_a_summary": _truncate_text(_safe_text(summary.get("option_a_summary") or summary.get("optionASummary")), 420),
+            "option_b_summary": _truncate_text(_safe_text(summary.get("option_b_summary") or summary.get("optionBSummary")), 420),
+            "unclassified_summary": _truncate_text(_safe_text(summary.get("unclassified_summary") or summary.get("unclassifiedSummary")), 420),
+        },
+        "main_opinions": _normalize_demo_balance_main_opinions(
+            raw.get("main_opinions") or raw.get("mainOpinions") or {}
+        ),
+    }
+
+
 def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict[str, Any]:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
+    ideation_bubble_graph = _normalize_canvas_ideation_bubble_graph(
+        workspace.get("ideation_bubble_graph")
+    )
+    _ensure_demo_balance_anchor_bubbles(ideation_bubble_graph, demo_config)
     return {
         "meeting_goal": _safe_text(workspace.get("meeting_goal")),
         "meeting_goal_context": _safe_text(workspace.get("meeting_goal_context")),
+        "demo_config": demo_config,
+        "demo_balance_classification": _normalize_canvas_demo_balance_classification(workspace.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(workspace.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(workspace.get("agenda_overrides")),
         "canvas_items": copy.deepcopy(workspace.get("canvas_items") or []),
@@ -421,9 +946,7 @@ def _workspace_payload_from_runtime_workspace(workspace: dict[str, Any]) -> dict
         "artifact_generation": _normalize_canvas_artifact_generation(
             workspace.get("artifact_generation") or {}
         ),
-        "ideation_bubble_graph": _normalize_canvas_ideation_bubble_graph(
-            workspace.get("ideation_bubble_graph")
-        ),
+        "ideation_bubble_graph": ideation_bubble_graph,
         "idea_create_stack": _safe_nonnegative_int(workspace.get("idea_create_stack")),
         "idea_processed_utterance_ids": [
             _safe_text(item)
@@ -456,6 +979,8 @@ def _workspace_from_storage_row(meeting_id: str, row: dict[str, Any]) -> dict[st
         "meeting_id": _safe_text(meeting_id),
         "meeting_goal": _safe_text(shared_state.get("meeting_goal")),
         "meeting_goal_context": _safe_text(shared_state.get("meeting_goal_context")),
+        "demo_config": _normalize_canvas_demo_config(shared_state.get("demo_config")),
+        "demo_balance_classification": _normalize_canvas_demo_balance_classification(shared_state.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(shared_state.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(shared_state.get("agenda_overrides")),
         "canvas_items": copy.deepcopy(shared_state.get("canvas_items") or []),
@@ -1218,6 +1743,8 @@ def _normalize_canvas_local_state(payload: Any) -> dict[str, Any]:
         "shared_sync_enabled": shared_sync_enabled,
         "meeting_goal": _safe_text(payload.get("meeting_goal")),
         "meeting_goal_context": _safe_text(payload.get("meeting_goal_context")),
+        "demo_config": _normalize_canvas_demo_config(payload.get("demo_config")),
+        "demo_balance_classification": _normalize_canvas_demo_balance_classification(payload.get("demo_balance_classification")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(payload.get("agenda_overrides")),
         "canvas_items": copy.deepcopy(payload.get("canvas_items") or []),
         "custom_groups": _normalize_canvas_custom_groups(payload.get("custom_groups") or []),
@@ -1250,6 +1777,8 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
         "meeting_id": _safe_text(meeting_id),
         "meeting_goal": _safe_text(source.get("meeting_goal")),
         "meeting_goal_context": _safe_text(source.get("meeting_goal_context")),
+        "demo_config": _normalize_canvas_demo_config(source.get("demo_config")),
+        "demo_balance_classification": _normalize_canvas_demo_balance_classification(source.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(source.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(source.get("agenda_overrides")),
         "canvas_items": copy.deepcopy(source.get("canvas_items") or []),
@@ -1285,15 +1814,19 @@ def _clone_runtime_workspace_state(meeting_id: str, source: dict[str, Any], save
 
 
 def _canvas_workspace_response(workspace: dict[str, Any]) -> dict[str, Any]:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
     ideation_bubble_graph = _normalize_canvas_ideation_bubble_graph(
         workspace.get("ideation_bubble_graph")
     )
+    _ensure_demo_balance_anchor_bubbles(ideation_bubble_graph, demo_config)
     _ensure_ideation_bubble_graph_server_layout(ideation_bubble_graph)
     return {
         "ok": True,
         "meeting_id": _safe_text(workspace.get("meeting_id")),
         "meeting_goal": _safe_text(workspace.get("meeting_goal")),
         "meeting_goal_context": _safe_text(workspace.get("meeting_goal_context")),
+        "demo_config": demo_config,
+        "demo_balance_classification": _normalize_canvas_demo_balance_classification(workspace.get("demo_balance_classification")),
         "stage": _normalize_canvas_stage(workspace.get("stage")),
         "agenda_overrides": _normalize_canvas_agenda_overrides(workspace.get("agenda_overrides")),
         "canvas_items": copy.deepcopy(workspace.get("canvas_items") or []),
@@ -1527,6 +2060,8 @@ def _ensure_canvas_workspace_entry(rt: "RuntimeStore", meeting_id: str) -> dict[
     workspace.setdefault("meeting_id", normalized_meeting_id)
     workspace.setdefault("meeting_goal", "")
     workspace.setdefault("meeting_goal_context", "")
+    workspace.setdefault("demo_config", _normalize_canvas_demo_config({}))
+    workspace.setdefault("demo_balance_classification", _normalize_canvas_demo_balance_classification({}))
     workspace.setdefault("stage", "ideation")
     workspace.setdefault("agenda_overrides", {})
     workspace.setdefault("canvas_items", [])
@@ -1648,6 +2183,22 @@ def _get_canvas_llm_inflight_entry(
     return entry if isinstance(entry, dict) else None
 
 
+def _get_canvas_llm_request_lock(
+    rt: "RuntimeStore",
+    meeting_id: str,
+    cache_key: str,
+) -> threading.Lock:
+    lock_key = f"{_safe_text(meeting_id)}:{_safe_text(cache_key)}"
+    if not lock_key.strip(":"):
+        lock_key = "global"
+    with rt.lock:
+        request_lock = rt.canvas_llm_request_locks_by_key.get(lock_key)
+        if request_lock is None:
+            request_lock = threading.Lock()
+            rt.canvas_llm_request_locks_by_key[lock_key] = request_lock
+        return request_lock
+
+
 def _run_canvas_llm_cached_request(
     rt: "RuntimeStore",
     meeting_id: str,
@@ -1658,6 +2209,13 @@ def _run_canvas_llm_cached_request(
     normalized_meeting_id = _safe_text(meeting_id)
     normalized_cache_key = _safe_text(cache_key)
     normalized_signature = _safe_text(signature)
+    if normalized_signature:
+        normalized_signature = _canvas_llm_signature(
+            {
+                "source_signature": normalized_signature,
+                "llm_route": _llm_cache_route_salt(),
+            }
+        )
     if not normalized_meeting_id or not normalized_cache_key or not normalized_signature:
         return compute()
 
@@ -1722,8 +2280,9 @@ def _run_canvas_llm_cached_request(
                 raise RuntimeError(wait_error)
             continue
 
+        request_lock = _get_canvas_llm_request_lock(rt, normalized_meeting_id, normalized_cache_key)
         try:
-            with rt.canvas_llm_request_lock:
+            with request_lock:
                 result = compute()
         except Exception as exc:
             with rt.lock:
@@ -1744,6 +2303,7 @@ def _run_canvas_llm_cached_request(
                 isinstance(inflight, dict)
                 and _safe_text(inflight.get("signature")) == normalized_signature
                 and inflight.get("event") is wait_event
+                and not (isinstance(result, dict) and result.get("ok") is False)
             )
             if should_cache_result:
                 meeting_entries.pop(normalized_cache_key, None)
@@ -2179,6 +2739,13 @@ class SttFlowSummaryInput(BaseModel):
     max_chars: int = Field(default=30, ge=8, le=60)
 
 
+class SttTranscriptRefineInput(BaseModel):
+    raw_text: str = ""
+    meeting_goal: str = ""
+    meeting_goal_context: str = ""
+    context_pack: dict[str, Any] = Field(default_factory=dict)
+
+
 class CanvasPlacementConfirmInput(BaseModel):
     tool: str = "note"
     ui_x: float = 0.0
@@ -2232,6 +2799,7 @@ class ProblemTaxonomyExistingGroupInput(BaseModel):
 class ProblemTaxonomyGenerateInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
+    demo_config: dict[str, Any] = Field(default_factory=dict)
     debug_nonce: str = ""
     refresh_chunk_summaries: bool = False
     parent_group_id: str = ""
@@ -2377,6 +2945,8 @@ class SummaryDocumentGenerateInput(BaseModel):
     meeting_id: str = ""
     meeting_topic: str = ""
     refresh_chunk_summaries: bool = False
+    demo_config: dict[str, Any] = Field(default_factory=dict)
+    demo_balance_classification: dict[str, Any] = Field(default_factory=dict)
     groups: list[SummaryDocumentGroupInput] = Field(default_factory=list, max_length=40)
     nodes: list[SummaryDocumentNodeInput] = Field(default_factory=list, max_length=120)
 
@@ -2395,7 +2965,11 @@ class CanvasQuickAskInput(BaseModel):
 
 
 class IdeationExistingKeywordInput(BaseModel):
+    id: str = ""
     text: str = ""
+    canonical_label: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    evidence_utterance_ids: list[str] = Field(default_factory=list)
     count: int = 1
     related: list[str] = Field(default_factory=list)
     kind: str = "topic"
@@ -2403,6 +2977,9 @@ class IdeationExistingKeywordInput(BaseModel):
     relevance: float = 1.0
     off_topic: bool = False
     anchor: str = ""
+    choice_affinity: str = ""
+    affinity_score: float = 0.0
+    needs_affinity_review: bool = False
 
 
 class IdeationKeywordExtractInput(BaseModel):
@@ -2410,6 +2987,7 @@ class IdeationKeywordExtractInput(BaseModel):
     meeting_topic: str = ""
     meeting_goal: str = ""
     meeting_goal_context: str = ""
+    demo_config: dict[str, Any] = Field(default_factory=dict)
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     context_cache: str = Field(default="", max_length=20000)
     context_utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
@@ -2422,9 +3000,11 @@ class IdeationBubbleGraphUpdateInput(BaseModel):
     meeting_topic: str = ""
     meeting_goal: str = ""
     meeting_goal_context: str = ""
+    demo_config: dict[str, Any] = Field(default_factory=dict)
     utterances: list[ProblemTaxonomyUtteranceInput] = Field(default_factory=list, max_length=180)
     context_cache: str = Field(default="", max_length=20000)
-    max_keywords: int = Field(default=3, ge=1, le=3)
+    max_keywords: int = Field(default=3, ge=1, le=8)
+    update_mode: str = Field(default="", max_length=32)
 
 
 class IdeationSuggestionTopicInput(BaseModel):
@@ -2638,6 +3218,9 @@ class CanvasArtifactGenerationEntryInput(BaseModel):
     updated_at: str = ""
     finished_at: str = ""
     error: str = ""
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
     version: int = 0
     input_transcript_revision: int = 0
 
@@ -2646,6 +3229,8 @@ class CanvasWorkspaceStateInput(BaseModel):
     meeting_id: str = ""
     meeting_goal: str = ""
     meeting_goal_context: str = ""
+    demo_config: dict[str, Any] = Field(default_factory=dict)
+    demo_balance_classification: dict[str, Any] = Field(default_factory=dict)
     stage: str = "ideation"
     agenda_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     canvas_items: list[CanvasWorkspaceCanvasItemInput] = Field(default_factory=list)
@@ -2664,6 +3249,8 @@ class CanvasWorkspacePatchInput(BaseModel):
     meeting_id: str = ""
     meeting_goal: str | None = None
     meeting_goal_context: str | None = None
+    demo_config: dict[str, Any] | None = None
+    demo_balance_classification: dict[str, Any] | None = None
     stage: str | None = None
     agenda_overrides: dict[str, dict[str, Any]] | None = None
     canvas_items: list[CanvasWorkspaceCanvasItemInput] | None = None
@@ -2679,11 +3266,26 @@ class CanvasWorkspacePatchInput(BaseModel):
     llm_cache_reset_prefixes: list[str] | None = None
 
 
+class CanvasMeetingRoomResetInput(BaseModel):
+    meeting_id: str = ""
+    user_id: str = ""
+
+
+class CanvasBubbleDebugLogInput(BaseModel):
+    meeting_id: str = ""
+    user_id: str = ""
+    event: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class CanvasArtifactGenerationStartInput(BaseModel):
     meeting_id: str = ""
     artifact_key: str = ""
     user_id: str = ""
     force: bool = False
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
 
 
 class CanvasArtifactGenerationFinishInput(BaseModel):
@@ -2693,6 +3295,9 @@ class CanvasArtifactGenerationFinishInput(BaseModel):
     generation_id: str = ""
     status: str = "ready"
     error: str = ""
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
     problem_structure: CanvasWorkspaceProblemStructureInput | None = None
 
 
@@ -2713,11 +3318,14 @@ class RuntimeStore:
     lock: threading.Lock = field(default_factory=threading.Lock)
     llm_io_lock: threading.Lock = field(default_factory=threading.Lock)
     canvas_llm_request_lock: threading.Lock = field(default_factory=threading.Lock)
+    canvas_llm_request_locks_by_key: dict[str, threading.Lock] = field(default_factory=dict)
     meeting_goal: str = ""
     window_size: int = 12
     transcript: list[dict[str, str]] = field(default_factory=list)
     agenda_outcomes: list[dict[str, Any]] = field(default_factory=list)
     llm_enabled: bool = False
+    llm_connect_retry_after_monotonic: float = 0.0
+    llm_connect_retry_note: str = ""
     last_analyzed_count: int = 0
     agenda_seq: int = 0
     stt_chunk_seq: int = 0
@@ -2761,6 +3369,9 @@ class RuntimeStore:
         self.window_size = 12
         self.transcript = []
         self.agenda_outcomes = []
+        self.llm_enabled = False
+        self.llm_connect_retry_after_monotonic = 0.0
+        self.llm_connect_retry_note = ""
         self.last_analyzed_count = 0
         self.agenda_seq = 0
         self.stt_chunk_seq = 0
@@ -2793,6 +3404,7 @@ class RuntimeStore:
         self.canvas_last_placement = {}
         self.canvas_workspace_by_meeting = {}
         self.canvas_artifact_generation_locks_by_meeting = {}
+        self.canvas_llm_request_locks_by_key = {}
         self.canvas_llm_inflight_by_meeting = {}
         self.canvas_idea_jobs_by_meeting = {}
         self.canvas_problem_jobs_by_meeting = {}
@@ -2848,6 +3460,77 @@ def _append_llm_io_log(rt: RuntimeStore, direction: str, stage: str, payload: An
             rt.llm_io_logs = rt.llm_io_logs[-LLM_IO_LOG_MAX:]
 
 
+def _stage_uses_fast_llm(stage: str) -> bool:
+    normalized_stage = _safe_text(stage)
+    if normalized_stage in GEMINI_FORCE_DEFAULT_STAGE_NAMES:
+        return False
+    return normalized_stage in GEMINI_FAST_STAGE_NAMES or any(
+        normalized_stage.startswith(prefix) for prefix in GEMINI_FAST_STAGE_PREFIXES
+    )
+
+
+def _llm_route_for_stage(stage: str) -> tuple[str, str]:
+    if _stage_uses_fast_llm(stage):
+        return GEMINI_FAST_MODEL_NAME, GEMINI_FAST_THINKING_LEVEL
+    return GEMINI_DEFAULT_MODEL_NAME, GEMINI_DEFAULT_THINKING_LEVEL
+
+
+def _llm_cache_route_salt() -> dict[str, Any]:
+    return {
+        "default_model": GEMINI_DEFAULT_MODEL_NAME,
+        "fast_model": GEMINI_FAST_MODEL_NAME,
+        "fast_stages": list(GEMINI_FAST_STAGE_NAMES),
+        "force_default_stages": sorted(GEMINI_FORCE_DEFAULT_STAGE_NAMES),
+        "fast_stage_prefixes": list(GEMINI_FAST_STAGE_PREFIXES),
+        "default_thinking_level": GEMINI_DEFAULT_THINKING_LEVEL,
+        "fast_thinking_level": GEMINI_FAST_THINKING_LEVEL,
+    }
+
+
+def _is_llm_temporarily_unavailable_error(exc: Exception) -> bool:
+    text = _safe_text(exc).lower()
+    return "503" in text or "unavailable" in text or "high demand" in text
+
+
+def _demo_llm_retryable_warning(action_label: str, exc: Exception | None = None) -> str:
+    if exc is not None and _is_llm_temporarily_unavailable_error(exc):
+        return f"{action_label} 모델 응답이 지연되었습니다. 잠시 후 다시 생성해 주세요."
+    return f"{action_label} 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요."
+
+
+def _build_llm_error_payload(
+    *,
+    stage: str,
+    error_type: str,
+    error_preview: Any,
+    client: Any = None,
+    elapsed_ms: int | None = None,
+) -> dict[str, Any]:
+    route_model, route_thinking_level = _llm_route_for_stage(stage)
+    diagnostics: dict[str, Any] = {}
+    if client is not None and hasattr(client, "status"):
+        try:
+            status_payload = client.status()
+            diagnostics = status_payload if isinstance(status_payload, dict) else {}
+        except Exception:
+            diagnostics = {}
+    preview = _safe_text(error_preview or diagnostics.get("last_error"))
+    status = _safe_nonnegative_int(diagnostics.get("last_http_status"), 0)
+    if status <= 0:
+        match = re.search(r"\bHTTP\s+(\d{3})\b", preview, flags=re.IGNORECASE)
+        if match:
+            status = _safe_nonnegative_int(match.group(1), 0)
+    return {
+        "stage": _safe_text(stage),
+        "model": _safe_text(diagnostics.get("last_model") or route_model),
+        "thinking_level": _safe_text(route_thinking_level),
+        "http_status": status,
+        "error_type": _safe_text(error_type),
+        "error_preview": _truncate_text(preview, 700),
+        "elapsed_ms": elapsed_ms,
+    }
+
+
 def _call_llm_json(
     rt: RuntimeStore,
     client: Any,
@@ -2855,24 +3538,108 @@ def _call_llm_json(
     stage: str,
     temperature: float,
     max_tokens: int,
+    allow_default_model_retry: bool = False,
 ) -> dict[str, Any]:
+    model_name, thinking_level = _llm_route_for_stage(stage)
+    used_model_name = model_name
     _append_llm_io_log(
         rt,
         direction="request",
         stage=stage,
         payload=prompt,
-        meta={"temperature": temperature, "max_tokens": max_tokens, "prompt_chars": len(prompt)},
+        meta={
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "prompt_chars": len(prompt),
+            "model": model_name,
+            "thinking_level": thinking_level,
+        },
     )
     try:
-        parsed = client.generate_json(prompt, temperature=temperature, max_tokens=max_tokens)
+        parsed = client.generate_json(
+            prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_override=model_name,
+            thinking_level=thinking_level,
+        )
     except Exception as exc:
-        _append_llm_io_log(rt, direction="error", stage=stage, payload=str(exc), meta={})
-        raise
+        _append_llm_io_log(rt, direction="error", stage=stage, payload=str(exc), meta={"model": model_name})
+        if (
+            allow_default_model_retry
+            and model_name != GEMINI_DEFAULT_MODEL_NAME
+            and _is_llm_temporarily_unavailable_error(exc)
+        ):
+            retry_started_at = time.perf_counter()
+            print(
+                "[LLM default model retry]",
+                {
+                    "stage": stage,
+                    "reason": _truncate_text(str(exc), 280),
+                    "first_model": model_name,
+                    "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                    "prompt_chars": len(prompt),
+                    "max_tokens": max_tokens,
+                },
+            )
+            _append_llm_io_log(
+                rt,
+                direction="request",
+                stage=f"{stage}.default_retry",
+                payload=prompt,
+                meta={
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "prompt_chars": len(prompt),
+                    "model": GEMINI_DEFAULT_MODEL_NAME,
+                    "thinking_level": GEMINI_DEFAULT_THINKING_LEVEL,
+                    "fallback_from": model_name,
+                },
+            )
+            try:
+                parsed = client.generate_json(
+                    prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    model_override=GEMINI_DEFAULT_MODEL_NAME,
+                    thinking_level=GEMINI_DEFAULT_THINKING_LEVEL,
+                )
+                used_model_name = GEMINI_DEFAULT_MODEL_NAME
+                print(
+                    "[LLM default model retry success]",
+                    {
+                        "stage": stage,
+                        "first_model": model_name,
+                        "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                        "elapsed_ms": int((time.perf_counter() - retry_started_at) * 1000),
+                    },
+                )
+            except Exception as retry_exc:
+                _append_llm_io_log(
+                    rt,
+                    direction="error",
+                    stage=f"{stage}.default_retry",
+                    payload=str(retry_exc),
+                    meta={"model": GEMINI_DEFAULT_MODEL_NAME, "fallback_from": model_name},
+                )
+                print(
+                    "[LLM default model retry failed]",
+                    {
+                        "stage": stage,
+                        "first_model": model_name,
+                        "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                        "elapsed_ms": int((time.perf_counter() - retry_started_at) * 1000),
+                        "error": _truncate_text(str(retry_exc), 420),
+                    },
+                )
+                raise retry_exc
+        else:
+            raise
     try:
         payload = json.dumps(parsed, ensure_ascii=False)
     except Exception:
         payload = str(parsed)
-    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={})
+    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={"model": used_model_name})
     return parsed
 
 
@@ -3534,6 +4301,506 @@ def _build_problem_taxonomy_groups_local(payload: ProblemTaxonomyGenerateInput) 
         _problem_taxonomy_group_from_cluster(payload, index + 1, cluster, used_ids)
         for index, cluster in enumerate(clusters[: payload.max_groups])
     ]
+
+
+def _demo_balance_clean_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", _safe_text(text)).strip()
+
+
+def _demo_balance_has_choice_token(text: str, token: str) -> bool:
+    return re.search(rf"(^|[^A-Za-z0-9가-힣]){re.escape(token)}([^A-Za-z0-9가-힣]|$)", text, re.IGNORECASE) is not None
+
+
+def _demo_balance_has_option_mention(text: str, option: str) -> bool:
+    clean_option = _safe_text(option).strip()
+    return bool(clean_option and re.search(re.escape(clean_option), text, re.IGNORECASE))
+
+
+def _demo_balance_choice_local(text: str, demo_config: dict[str, Any]) -> str:
+    clean = _demo_balance_clean_text(text)
+    has_a = (
+        _demo_balance_has_choice_token(clean, "A")
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_a", ""))
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_a_keyword", ""))
+    )
+    has_b = (
+        _demo_balance_has_choice_token(clean, "B")
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_b", ""))
+        or _demo_balance_has_option_mention(clean, demo_config.get("option_b_keyword", ""))
+    )
+    if has_a and not has_b:
+        return "a"
+    if has_b and not has_a:
+        return "b"
+    return "unclassified"
+
+
+def _build_demo_balance_classification_local(
+    payload: ProblemTaxonomyGenerateInput,
+    rows: list[dict[str, str]],
+) -> dict[str, Any]:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    source_signature = _canvas_llm_signature(
+        {
+            "mode": "demo_balance",
+            "option_a": demo_config.get("option_a"),
+            "option_a_keyword": demo_config.get("option_a_keyword"),
+            "option_b": demo_config.get("option_b"),
+            "option_b_keyword": demo_config.get("option_b_keyword"),
+            "rows": [
+                {
+                    "id": row.get("id"),
+                    "text": row.get("text"),
+                    "timestamp": row.get("timestamp"),
+                }
+                for row in rows
+            ],
+        }
+    )
+    opinions = []
+    for index, row in enumerate(rows):
+        text = _demo_balance_clean_text(row.get("text"))
+        choice = _demo_balance_choice_local(text, demo_config)
+        valid = choice in {"a", "b"}
+        opinions.append(
+            {
+                "id": f"demo-opinion-{index + 1}",
+                "utterance_id": _safe_text(row.get("id")) or f"utterance-{index + 1}",
+                "choice": choice,
+                "valid": valid,
+                "confidence": 0.65 if valid else 0.25,
+                "reason_summary": _demo_balance_card_summary_text(text, choice, demo_config) if valid else _truncate_text(text, 180),
+                "keywords": [],
+                "text": _truncate_text(text, 360),
+            }
+        )
+
+    main_opinions = {"a": [], "b": []}
+    for choice in ("a", "b"):
+        for opinion in [item for item in opinions if item.get("valid") and item.get("choice") == choice][:6]:
+            text = _safe_text(opinion.get("text") or opinion.get("reason_summary"))
+            if not text:
+                continue
+            next_index = len(main_opinions[choice]) + 1
+            main_opinions[choice].append(
+                {
+                    "id": f"demo-main-{choice}-{next_index}",
+                    "title": _demo_balance_card_summary_title(text, choice, demo_config, next_index),
+                    "text": _truncate_text(_demo_balance_card_summary_text(text, choice, demo_config), 220),
+                    "keywords": [],
+                    "evidence_utterance_ids": [_safe_text(opinion.get("utterance_id"))],
+                }
+            )
+
+    return _normalize_canvas_demo_balance_classification(
+        {
+            "version": 1,
+            "mode": "demo_balance",
+            "option_a": demo_config.get("option_a", ""),
+            "option_b": demo_config.get("option_b", ""),
+            "classified_at": _now_ts(),
+            "source_signature": source_signature,
+            "opinions": opinions,
+            "summary": {
+                "option_a_summary": "",
+                "option_b_summary": "",
+                "unclassified_summary": "",
+            },
+            "main_opinions": main_opinions,
+        }
+    )
+
+
+def _build_demo_balance_classification_prompt(
+    payload: ProblemTaxonomyGenerateInput,
+    context: dict[str, Any],
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    rows = context.get("rows") if isinstance(context.get("rows"), list) else _select_problem_taxonomy_rows(payload)
+    input_payload = {
+        "option_a": demo_config.get("option_a", "A"),
+        "option_b": demo_config.get("option_b", "B"),
+        "utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "text": _truncate_text(_safe_text(row.get("text")), 260),
+            }
+            for row in rows[:120]
+            if _safe_text(row.get("id")) and _safe_text(row.get("text"))
+        ],
+    }
+    return (
+        "너는 3분 내외 A/B 밸런스 게임 회의의 문제정의 카드를 만드는 AI 판정 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- 전체 STT를 A 의견과 B 의견 중심으로 빠르게 정리한다.\n"
+        "- 문제정의 화면에는 A/B 카드 2개만 들어간다. 별도 1단계/2단계 구조화는 만들지 않는다.\n"
+        "- 각 utterance는 A/B/미분류 중 하나로 분류하되, A/B 유효 의견은 모두 opinions에 남긴다.\n"
+        "- main_opinions는 화면 카드에 보여줄 대표 의견만 3~6개로 압축한다.\n"
+        "- reason_summary와 main_opinions의 text는 STT 말투를 문장으로 다듬되 새로운 사실을 만들지 않는다.\n"
+        "- main_opinions는 원문 발화를 복사하지 말고, 짧은 요약 카드 문장으로 다시 쓴다.\n"
+        "- 감탄사, 말버릇, 반복어, '저는/제가/그냥/근데/아니' 같은 구어체 시작 표현은 제거한다.\n"
+        "- 인명은 keywords에 넣지 않는다.\n"
+        "- 입력에 없는 투표 결과, 참가자 수, 사실을 만들지 않는다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "opinions": [\n'
+        '    {"utterance_id":"입력 id","choice":"a|b|unclassified","valid":true,"confidence":0.0,"reason_summary":"실제 의견 요약","keywords":["핵심 명사"]}\n'
+        "  ],\n"
+        '  "summary": {"option_a_summary":"A 의견 전체 요약","option_b_summary":"B 의견 전체 요약","unclassified_summary":"미분류 참고 요약"},\n'
+        '  "main_opinions": {\n'
+        '    "a": [{"title":"대표 의견 제목","text":"카드에 표시할 짧은 요약","keywords":["키워드"],"evidence_utterance_ids":["입력 id"]}],\n'
+        '    "b": [{"title":"대표 의견 제목","text":"카드에 표시할 짧은 요약","keywords":["키워드"],"evidence_utterance_ids":["입력 id"]}]\n'
+        "  }\n"
+        "}\n\n"
+        "[규칙]\n"
+        "- opinions는 입력 utterances의 id를 그대로 사용한다.\n"
+        "- choice가 a/b이면 valid=true, unclassified이면 valid=false다.\n"
+        "- confidence는 0~1 숫자다. 선택이 직접 언급되면 0.8 이상, 선택지명만 명확하면 0.6~0.8, 애매하면 unclassified다.\n"
+        "- reason_summary는 12~60자 정도로 짧고 구체적으로 쓴다.\n"
+        "- main_opinions.a/b는 각각 최대 6개다. 비슷한 의견은 하나로 합친다.\n"
+        "- main_opinions.title은 10~24자 논점 제목이다. 원문 첫 문장을 그대로 쓰지 않는다.\n"
+        "- main_opinions.text는 30~80자 요약문이다. 원문을 따옴표처럼 그대로 옮기지 않는다.\n"
+        "- main_opinions의 evidence_utterance_ids에는 근거가 된 입력 id를 1개 이상 넣는다.\n"
+        "- keywords는 명사 중심 0~4개만 쓴다. 사람 이름은 제외한다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _normalize_demo_balance_llm_classification(
+    parsed: Any,
+    payload: ProblemTaxonomyGenerateInput,
+    rows: list[dict[str, str]],
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return fallback
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    fallback_by_id = {
+        _safe_text(opinion.get("utterance_id")): opinion
+        for opinion in fallback.get("opinions", [])
+        if isinstance(opinion, dict) and _safe_text(opinion.get("utterance_id"))
+    }
+    raw_opinions = parsed.get("opinions") if isinstance(parsed.get("opinions"), list) else []
+    llm_by_id: dict[str, dict[str, Any]] = {}
+    for item in raw_opinions:
+        if not isinstance(item, dict):
+            continue
+        utterance_id = _safe_text(item.get("utterance_id") or item.get("utteranceId") or item.get("id"))
+        if utterance_id:
+            llm_by_id[utterance_id] = item
+
+    opinions: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        utterance_id = _safe_text(row.get("id")) or f"utterance-{index + 1}"
+        raw = llm_by_id.get(utterance_id) or fallback_by_id.get(utterance_id) or {}
+        text = _demo_balance_clean_text(row.get("text"))
+        choice = _safe_text(raw.get("choice")).lower()
+        if choice not in {"a", "b"}:
+            choice = "unclassified"
+        valid = choice in {"a", "b"} and raw.get("valid") is not False
+        opinions.append(
+            {
+                "id": _safe_text(raw.get("id")) or f"demo-opinion-{index + 1}",
+                "utterance_id": utterance_id,
+                "choice": choice if valid else "unclassified",
+                "valid": valid,
+                "confidence": _safe_float(raw.get("confidence"), 0.0),
+                "reason_summary": _truncate_text(_safe_text(raw.get("reason_summary") or raw.get("reasonSummary")) or text, 260),
+                "keywords": raw.get("keywords") if isinstance(raw.get("keywords"), list) else [],
+                "text": _truncate_text(text, 360),
+            }
+        )
+
+    main_opinions = _normalize_demo_balance_main_opinions(parsed.get("main_opinions") or parsed.get("mainOpinions") or {})
+    if not main_opinions["a"] and not main_opinions["b"]:
+        main_opinions = _normalize_demo_balance_main_opinions(fallback.get("main_opinions") or {})
+    if not main_opinions["a"] and not main_opinions["b"]:
+        main_opinions = _build_demo_balance_main_opinions_from_opinions(opinions, demo_config=demo_config)
+    main_opinions = _sanitize_demo_balance_main_opinion_cards(main_opinions, demo_config)
+
+    return _normalize_canvas_demo_balance_classification(
+        {
+            "version": 1,
+            "mode": "demo_balance",
+            "option_a": demo_config.get("option_a", ""),
+            "option_b": demo_config.get("option_b", ""),
+            "classified_at": _now_ts(),
+            "source_signature": fallback.get("source_signature", ""),
+            "opinions": opinions,
+            "summary": parsed.get("summary") if isinstance(parsed.get("summary"), dict) else fallback.get("summary", {}),
+            "main_opinions": main_opinions,
+        }
+    )
+
+
+def _demo_balance_opinion_group(
+    classification: dict[str, Any],
+    choice: str,
+    label: str,
+    title: str,
+) -> dict[str, Any]:
+    opinions = [
+        opinion
+        for opinion in classification.get("opinions", [])
+        if isinstance(opinion, dict)
+        and ((choice in {"a", "b"} and opinion.get("valid") and opinion.get("choice") == choice) or (choice == "unclassified" and not opinion.get("valid")))
+    ]
+    group_id = f"demo-balance-{choice}"
+    status = "final" if choice in {"a", "b"} else ("review" if opinions else "draft")
+    main_opinions = _normalize_demo_balance_main_opinions(classification.get("main_opinions")).get(choice, [])
+    if choice in {"a", "b"} and not main_opinions:
+        main_opinions = _build_demo_balance_main_opinions_from_opinions(
+            opinions,
+            demo_config={
+                "enabled": True,
+                "mode": "demo_balance",
+                "option_a": classification.get("option_a"),
+                "option_b": classification.get("option_b"),
+            },
+        ).get(choice, [])
+    source_summary_items = [
+        _truncate_text(_safe_text(item.get("text") or item.get("title")), 160)
+        for item in main_opinions
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
+    ]
+    if not source_summary_items:
+        source_summary_items = [
+            _truncate_text(_safe_text(opinion.get("reason_summary") or opinion.get("text")), 160)
+            for opinion in opinions[:12]
+            if _safe_text(opinion.get("reason_summary") or opinion.get("text"))
+        ]
+    summary = classification.get("summary") if isinstance(classification.get("summary"), dict) else {}
+    choice_summary = _safe_text(
+        summary.get("option_a_summary" if choice == "a" else "option_b_summary" if choice == "b" else "unclassified_summary")
+    )
+    return {
+        "group_id": group_id,
+        "parent_group_id": "",
+        "depth": 0,
+        "topic": title,
+        "insight_lens": label,
+        "keywords": [label, title],
+        "agenda_ids": [],
+        "agenda_titles": [],
+        "ideas": [
+            {
+                "id": _safe_text(item.get("id")) or f"{group_id}-idea-{index + 1}",
+                "kind": "utterance",
+                "title": _safe_text(item.get("title")) or f"{label} {index + 1}",
+                "body": _truncate_text(_safe_text(item.get("text") or item.get("title")), 180),
+            }
+            for index, item in enumerate(main_opinions[:8])
+            if isinstance(item, dict)
+        ],
+        "discussion_items": [],
+        "linked_group_ids": [],
+        "evidence_utterance_ids": [
+            _safe_text(opinion.get("utterance_id"))
+            for opinion in opinions
+            if _safe_text(opinion.get("utterance_id"))
+        ],
+        "source_summary_items": source_summary_items,
+        "conclusion": choice_summary or (
+            f"{title}에 대한 유효 의견 {len(opinions)}개가 정리되었습니다."
+            if choice in {"a", "b"} and opinions
+            else ("A/B 선택이 명확하지 않은 참고 발화입니다." if opinions else f"{title} 의견은 아직 충분하지 않습니다.")
+        ),
+        "conclusion_user_edited": False,
+        "status": status,
+        "source_signature": f"{classification.get('source_signature', '')}:{group_id}",
+        "source_agenda_signatures": {},
+    }
+
+
+def _build_demo_balance_problem_groups(
+    classification: dict[str, Any],
+) -> list[dict[str, Any]]:
+    option_a = _safe_text(classification.get("option_a"), "A")
+    option_b = _safe_text(classification.get("option_b"), "B")
+    groups = [
+        _demo_balance_opinion_group(classification, "a", "A 의견", f"A. {option_a}"),
+        _demo_balance_opinion_group(classification, "b", "B 의견", f"B. {option_b}"),
+    ]
+    return groups
+
+
+def _build_demo_balance_problem_structure(
+    classification: dict[str, Any],
+    groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    structure_groups: list[dict[str, Any]] = []
+    group_by_id = {group.get("group_id"): group for group in groups}
+
+    for group_id, title in (
+        ("demo-balance-a", group_by_id.get("demo-balance-a", {}).get("topic", "A 의견")),
+        ("demo-balance-b", group_by_id.get("demo-balance-b", {}).get("topic", "B 의견")),
+    ):
+        group = group_by_id.get(group_id)
+        if not group:
+            continue
+        group_nodes: list[str] = []
+        for index, idea in enumerate(group.get("ideas") or []):
+            if not isinstance(idea, dict):
+                continue
+            node_id = f"{group_id}-node-{index + 1}"
+            group_nodes.append(node_id)
+            nodes.append(
+                {
+                    "id": node_id,
+                    "source_group_id": group_id,
+                    "title": _safe_text(idea.get("title")) or f"{title} {index + 1}",
+                    "body": _safe_text(idea.get("body")),
+                    "status": group.get("status", "draft"),
+                    "depth": 0,
+                }
+            )
+        structure_groups.append(
+            {
+                "id": f"{group_id}-structure",
+                "title": title,
+                "node_ids": group_nodes,
+                "rationale": "",
+                "status": group.get("status", "draft"),
+                "created_by": "ai",
+            }
+        )
+
+    return _normalize_canvas_problem_structure_state(
+        {
+            "phase": "structure",
+            "method": "affinity",
+            "mode": "ai",
+            "revision": int(time.time() * 1000),
+            "source_generation_id": _safe_text(classification.get("source_signature")),
+            "based_on_transcript_revision": len(classification.get("opinions") or []),
+            "updated_at": _now_ts(),
+            "nodes": nodes,
+            "groups": structure_groups,
+        }
+    )
+
+
+def _build_demo_balance_problem_taxonomy_result(payload: ProblemTaxonomyGenerateInput) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    rows = _select_problem_taxonomy_rows(payload)
+    fallback = _build_demo_balance_classification_local(payload, rows)
+    classification = fallback
+    used_llm = False
+    warning = ""
+    failed = False
+    retryable = False
+    llm_error: dict[str, Any] = {}
+    llm_ms = 0
+    prompt_chars = 0
+
+    client, llm_ready, llm_note = _ensure_llm_ready(RT)
+    if llm_ready and client is not None and rows:
+        try:
+            taxonomy_context = {
+                "rows": rows,
+                "total_utterance_count": len(rows),
+                "included_utterance_count": len(rows),
+            }
+            prompt = _build_demo_balance_classification_prompt(payload, taxonomy_context)
+            prompt_chars = len(prompt)
+            llm_started_at = time.perf_counter()
+            parsed = _call_llm_json(
+                RT,
+                client,
+                prompt=prompt,
+                stage="canvas_demo_balance_problem_summary",
+                temperature=0.12,
+                max_tokens=1800,
+            )
+            llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
+            classification = _normalize_demo_balance_llm_classification(parsed, payload, rows, fallback)
+            used_llm = True
+            RT.last_llm_parsed_json = {
+                "stage": "canvas_demo_balance_problem_summary",
+                "classification": copy.deepcopy(classification),
+            }
+            RT.last_llm_parsed_at = _now_ts()
+        except Exception as exc:
+            llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+            llm_error = _build_llm_error_payload(
+                stage="canvas_demo_balance_problem_summary",
+                error_type=type(exc).__name__,
+                error_preview=repr(exc),
+                client=client,
+                elapsed_ms=llm_ms,
+            )
+            print(
+                "[canvas demo balance problem summary llm failed]",
+                {
+                    "meeting_id": _safe_text(payload.meeting_id),
+                    "prompt_chars": prompt_chars,
+                    "elapsed_ms": llm_ms,
+                    "llm_error": llm_error,
+                },
+                flush=True,
+            )
+            failed = True
+            retryable = True
+            warning = _demo_llm_retryable_warning("문제정의", exc)
+    elif not rows:
+        warning = "A/B 의견을 분류할 STT 발화가 아직 없습니다."
+    else:
+        failed = True
+        retryable = True
+        warning = llm_note or "문제정의 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요."
+        llm_error = _build_llm_error_payload(
+            stage="canvas_demo_balance_problem_summary",
+            error_type="llm_not_ready",
+            error_preview=llm_note or "LLM client is not ready",
+            client=client,
+            elapsed_ms=0,
+        )
+
+    groups = _build_demo_balance_problem_groups(classification)
+    problem_structure = _build_demo_balance_problem_structure(classification, groups)
+    print(
+        "[canvas demo balance problem summary]",
+        {
+            "meeting_id": _safe_text(payload.meeting_id),
+            "rows_count": len(rows),
+            "prompt_chars": prompt_chars,
+            "used_llm": used_llm,
+            "llm_ms": llm_ms,
+            "total_ms": int((time.perf_counter() - started_at) * 1000),
+            "valid_a": _safe_nonnegative_int(classification.get("valid_a_count")),
+            "valid_b": _safe_nonnegative_int(classification.get("valid_b_count")),
+            "unclassified": _safe_nonnegative_int(classification.get("unclassified_count")),
+            "group_count": len(groups),
+            "failed": failed,
+            "retryable": retryable,
+        },
+    )
+    if failed:
+        return {
+            "ok": False,
+            "used_llm": False,
+            "retryable": retryable,
+            "warning": warning,
+            "llm_error": llm_error,
+            "generated_at": _now_ts(),
+            "groups": [],
+            "problem_structure": _normalize_canvas_problem_structure_state({}),
+            "demo_balance_classification": _normalize_canvas_demo_balance_classification({}),
+        }
+    return {
+        "ok": True,
+        "used_llm": used_llm,
+        "retryable": False,
+        "warning": warning,
+        "llm_error": llm_error,
+        "generated_at": _now_ts(),
+        "groups": groups,
+        "problem_structure": problem_structure,
+        "demo_balance_classification": classification,
+    }
 
 
 def _normalize_problem_taxonomy_llm_groups(
@@ -5737,11 +7004,15 @@ _IDEATION_KEYWORD_NON_NOUN_PATTERNS = [
     re.compile(r"(아요|어요|워요|네요|군요|죠|지요|고요|습니다|습니까|면서|지만|거나|니까|어서|아서|려고|다고)$"),
 ]
 
+_IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST = {"돈", "집", "차", "맛", "잠", "힘", "일"}
+
 
 def _normalize_ideation_keyword_text(raw: Any) -> str:
     text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
     text = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", text)
-    if not text or len(text) < 2 or len(text) > 28:
+    if not text or len(text) > 28:
+        return ""
+    if len(text) < 2 and text not in _IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST:
         return ""
     if re.fullmatch(r"\d+", text):
         return ""
@@ -5782,16 +7053,38 @@ def _ideation_existing_keyword_rows(payload: IdeationKeywordExtractInput) -> lis
         text = _normalize_ideation_keyword_text(item.text)
         if not text:
             continue
+        aliases = _dedup_preserve(
+            [
+                _normalize_ideation_keyword_text(value)
+                for value in (item.aliases or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+            limit=8,
+        )
         kind = _safe_text(item.kind, "topic").lower()
         rows.append(
             {
+                "id": _safe_text(item.id),
                 "text": text,
+                "canonical_label": _normalize_ideation_keyword_text(item.canonical_label) or text,
+                "aliases": [value for value in aliases if value != text],
+                "evidence_utterance_ids": _dedup_preserve(
+                    [
+                        _safe_text(value)
+                        for value in (item.evidence_utterance_ids or [])
+                        if _safe_text(value)
+                    ],
+                    limit=10,
+                ),
                 "count": max(1, _safe_nonnegative_int(item.count, 1) or 1),
                 "kind": kind if kind in {"entity", "topic", "relation", "action", "off_topic"} else "topic",
                 "importance": max(0, min(1, _safe_float(item.importance, 0.65))),
                 "relevance": max(0, min(1, _safe_float(item.relevance, 1))),
                 "off_topic": bool(item.off_topic),
                 "anchor": _normalize_ideation_keyword_text(item.anchor),
+                "choice_affinity": _safe_text(item.choice_affinity).lower(),
+                "affinity_score": max(0.0, min(1.0, _safe_float(item.affinity_score, 0.0))),
+                "needs_affinity_review": bool(item.needs_affinity_review),
                 "related": _dedup_preserve(
                     [
                         _normalize_ideation_keyword_text(value)
@@ -5857,7 +7150,305 @@ def _build_local_ideation_keywords(rows: list[dict[str, str]], max_keywords: int
     ]
 
 
-def _build_ideation_keyword_extract_prompt(payload: IdeationKeywordExtractInput, rows: list[dict[str, str]]) -> str:
+def _build_demo_balance_keyword_extract_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> str:
+    input_payload = _demo_balance_consolidate_llm_input_payload(payload, rows)
+    return (
+        "너는 3분 내외 A/B 밸런스 게임 시연에서 최근 STT와 기존 버블만 보고 버블 그래프를 정리하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[시연 목표]\n"
+        "- recent_utterances는 판단 참고용이다. 전사 보정 결과는 출력하지 않는다.\n"
+        "- 새 버블은 절대 만들지 않는다. 새 버블 생성은 local_fast_keywords가 담당한다.\n"
+        "- bubbles에 있는 기존 버블 id만 대상으로 표기 보정, 병합, 삭제, A/B side 이동을 지시한다.\n"
+        "- 예: 버블 label이 '사생활 치매'이고 문맥상 '사생활 침해'라면 rename으로 같은 id의 label만 고친다.\n"
+        "- aliases는 STT 변형이다. aliases에 있는 표현이 올바른 label로 보이면 rename/merge에 적극 사용한다.\n"
+        "- 같은 label이라도 side가 a와 b에 각각 있으면 서로 다른 버블이다. 기본적으로 합치지 않는다.\n"
+        "- merge는 같은 side 안에서만 지시한다. 다른 side로 옮겨야 하면 move를 사용한다.\n"
+        "- A/B 배치가 잘못된 기존 버블은 move로 side를 a 또는 b로 바꾼다.\n"
+        "- bubbles.review가 true인 버블은 서버가 애매하게 임시 배치한 것이므로 side 이동 여부를 우선 검토한다.\n"
+        "- 사람 이름, 잡담성 버블, 단독 숫자, 무의미한 filler 버블은 remove로 정리한다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "rename": [{"id": "b1", "label": "사생활 침해"}],\n'
+        '  "merge": [{"from": "b2", "to": "b1"}],\n'
+        '  "remove": ["b5"],\n'
+        '  "move": [{"id": "b3", "side": "a"}]\n'
+        "}\n\n"
+        "[규칙]\n"
+        "- 모든 id는 입력 JSON의 bubbles.id에 있는 b1, b2 같은 짧은 id만 사용한다.\n"
+        "- rename.label은 올바른 맞춤법/표기의 짧은 명사 또는 명사구다. 의미를 새로 만들지 않는다.\n"
+        "- merge.from과 merge.to는 반드시 같은 side의 버블이어야 한다.\n"
+        "- remove는 bubbles에 있는 기존 버블 id 배열이다.\n"
+        "- move.side는 a 또는 b만 허용한다.\n"
+        "- refine, refined_transcripts, keywords, reason, confidence, count, importance, relevance, valid, choice, ignored_utterance_ids는 반환하지 않는다.\n"
+        "- 할 일이 없으면 모든 배열을 빈 배열로 반환한다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _demo_balance_consolidate_llm_request_parts(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    existing_keywords = _ideation_existing_keyword_rows(payload)
+    id_map: dict[str, str] = {}
+    bubbles: list[dict[str, Any]] = []
+    for item in existing_keywords:
+        real_id = _safe_text(item.get("id"))
+        label = _safe_text(item.get("text"))
+        side = _safe_text(item.get("choice_affinity")).lower()
+        if not real_id or not label or side not in {"a", "b"}:
+            continue
+        short_id = f"b{len(id_map) + 1}"
+        id_map[short_id] = real_id
+        bubbles.append(
+            {
+                "id": short_id,
+                "label": label,
+                "aliases": [
+                    _safe_text(value)
+                    for value in (item.get("aliases") or [])
+                    if _safe_text(value)
+                ][:8],
+                "side": side,
+                "review": bool(item.get("needs_affinity_review") or item.get("needsAffinityReview")),
+            }
+        )
+    input_payload = {
+        "options": {
+            "a": _safe_text(demo_config.get("option_a")),
+            "b": _safe_text(demo_config.get("option_b")),
+            "a_keyword": _safe_text(demo_config.get("option_a_keyword") or demo_config.get("option_a")),
+            "b_keyword": _safe_text(demo_config.get("option_b_keyword") or demo_config.get("option_b")),
+        },
+        "recent_utterances": [
+            {
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 220),
+            }
+            for row in rows[-5:]
+            if _safe_text(row.get("text"))
+        ],
+        "bubbles": bubbles,
+    }
+    return input_payload, id_map
+
+
+def _demo_balance_consolidate_llm_input_payload(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> dict[str, Any]:
+    input_payload, _id_map = _demo_balance_consolidate_llm_request_parts(payload, rows)
+    return input_payload
+
+
+def _demo_balance_consolidate_llm_id_map(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> dict[str, str]:
+    _input_payload, id_map = _demo_balance_consolidate_llm_request_parts(payload, rows)
+    return id_map
+
+
+def _build_demo_balance_realtime_text_batch_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    existing_keywords = _ideation_existing_keyword_rows(payload)
+    context_cache = _ideation_context_cache_text(payload)
+    max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
+    input_payload = {
+        "max_keywords": max_keywords,
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "meeting_goal": _safe_text(payload.meeting_goal),
+        "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+        "demo_config": demo_config,
+        "conversation_context_cache": context_cache,
+        "existing_keywords": existing_keywords,
+        "target_utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "speaker": _safe_text(row.get("speaker"), "참가자"),
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 180),
+                "timestamp": _safe_text(row.get("timestamp")),
+            }
+            for row in rows[-6:]
+        ],
+    }
+    return (
+        "너는 A/B 밸런스 게임 시연에서 짧은 STT 발화들을 4초 단위로 후처리하는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- raw STT를 문맥에 맞게 짧고 자연스러운 한국어 발화로 보정한다.\n"
+        "- 동시에 화면에 즉시 띄울 짧은 명사/명사구 버블 키워드를 고른다.\n"
+        "- 이 단계는 빠른 반응성이 목적이다. 완벽한 병합/삭제/중요도 정리는 20초 consolidate 단계에서 한다.\n"
+        "- 키워드는 중요한 결론만이 아니라 참가자가 방금 말한 선택 이유를 대표하는 명사구까지 허용한다.\n"
+        "- 키워드는 가능하면 1단어, 최대 2단어 이하의 한국어/영어 명사 또는 명사구로 쓴다.\n"
+        "- 인명, 감탄사, filler, 단독 숫자, 단독 알파벳 A/B, 문장, 동사구, 형용사구는 금지한다.\n"
+        "- existing_keywords에 같은 의미가 있으면 새 표현을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- A/B 선택지 자체보다 선택 이유 명사를 우선한다. 단, 선택지명이 핵심 주제라면 허용한다.\n"
+        "- merge_keywords/remove_keywords는 이 단계에서 원칙적으로 비워둔다. 명백히 잘못된 중복만 확신이 높을 때 사용한다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "refined_transcripts": [\n'
+        '    {"id": "utterance-id", "text": "보정된 발화", "choice": "a", "valid": true, "confidence": 0.82, "reason": "A 선택 이유를 설명함"}\n'
+        "  ],\n"
+        '  "ignored_utterance_ids": ["utterance-id"],\n'
+        '  "keywords": [\n'
+        '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.7, "relevance": 0.92, "anchor": "A 선택지", "related": []},\n'
+        '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.66, "relevance": 0.88, "anchor": "B 선택지", "related": []}\n'
+        "  ],\n"
+        '  "merge_keywords": [],\n'
+        '  "remove_keywords": []\n'
+        "}\n\n"
+        "[규칙]\n"
+        "- refined_transcripts는 target_utterances마다 가능하면 1개씩 만든다. 의미를 바꾸지 말고 STT 오류만 보정한다.\n"
+        "- choice는 a, b, unclear 중 하나다. valid는 밸런스 게임 의견이면 true, 잡담/무의미한 발화면 false다.\n"
+        "- ignored_utterance_ids에는 잡담, filler, 인명만 있는 발화, A/B 의견으로 보기 어려운 발화 id를 넣는다.\n"
+        f"- keywords는 0개 이상, 최대 {max_keywords}개다.\n"
+        "- 새 text는 target_utterances에서 실제로 나온 개념만 만든다.\n"
+        "- A/B 선택이 불명확해도 선택 이유로 볼 수 있는 명사구는 relevance를 낮춰 후보로 둘 수 있다.\n"
+        "- count는 target_utterances에서 해당 의미가 나타난 발화 수다.\n"
+        "- support_count는 conversation_context_cache와 target_utterances를 합쳐 해당 의미가 등장한 총 발화 수다.\n"
+        "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
+        "- importance와 relevance는 0~1 숫자다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _normalize_demo_balance_refined_transcripts(
+    parsed: Any,
+    rows: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return []
+    allowed_ids = {_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))}
+    raw_items = (
+        parsed.get("refine")
+        or parsed.get("refined_transcripts")
+        or parsed.get("refinedTranscripts")
+        or []
+    )
+    if not isinstance(raw_items, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = _safe_text(item.get("id") or item.get("utterance_id") or item.get("utteranceId"))
+        if not item_id or item_id not in allowed_ids or item_id in seen:
+            continue
+        text = _safe_text(item.get("text") or item.get("refined_text") or item.get("refinedText"))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        choice = _safe_text(item.get("choice"), "unclear").lower()
+        if choice not in {"a", "b", "unclear"}:
+            choice = "unclear"
+        normalized.append(
+            {
+                "id": item_id,
+                "text": _truncate_text(text, 260),
+                "choice": choice,
+                "valid": bool(item.get("valid", choice in {"a", "b"})),
+                "confidence": max(0.0, min(1.0, _safe_float(item.get("confidence"), 0.0))),
+                "reason": _truncate_text(_safe_text(item.get("reason")), 160),
+            }
+        )
+        seen.add(item_id)
+    return normalized[: len(allowed_ids)]
+
+
+def _normalize_demo_balance_ignored_utterance_ids(parsed: Any, rows: list[dict[str, str]]) -> list[str]:
+    if not isinstance(parsed, dict):
+        return []
+    allowed_ids = {_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))}
+    raw_ids = parsed.get("ignored_utterance_ids") or parsed.get("ignoredUtteranceIds") or []
+    if not isinstance(raw_ids, list):
+        return []
+    return _dedup_preserve(
+        [_safe_text(value) for value in raw_ids if _safe_text(value) in allowed_ids],
+        limit=len(allowed_ids),
+    )
+
+
+def _build_demo_balance_fast_keyword_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    existing_keywords = _ideation_existing_keyword_rows(payload)
+    max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
+    input_payload = {
+        "max_keywords": max_keywords,
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "meeting_goal": _safe_text(payload.meeting_goal),
+        "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+        "demo_config": demo_config,
+        "existing_keywords": existing_keywords,
+        "target_utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "speaker": _safe_text(row.get("speaker"), "참가자"),
+                "text": _truncate_text(_strip_leading_timestamp(row.get("text")), 160),
+                "timestamp": _safe_text(row.get("timestamp")),
+            }
+            for row in rows[-2:]
+        ],
+    }
+    return (
+        "너는 A/B 밸런스 게임 시연에서 발화 직후 화면에 띄울 버블 키워드만 빠르게 고르는 AI다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        "- target_utterances의 raw STT에서 A/B 선택 이유를 나타내는 핵심 명사 키워드를 빠르게 추출한다.\n"
+        "- 전사 보정, 문장 요약, 병합 판단, 삭제 판단은 하지 않는다.\n"
+        "- 참가자가 방금 말한 내용을 5초 안에 화면에서 볼 수 있게 하는 것이 목적이다.\n"
+        "- 키워드는 0~8개만 반환한다. 의미 있는 명사가 없으면 빈 배열을 반환한다.\n"
+        "- 키워드는 가능하면 1단어, 최대 2단어 이하의 한국어/영어 명사 또는 명사구여야 한다.\n"
+        "- 인명, 잡담, filler, 단독 숫자, 단독 알파벳 A/B, 문장, 동사구, 형용사구는 금지한다.\n"
+        "- A/B 선택지명 자체보다 선택 이유 명사를 우선한다. 단, 선택지명이 핵심 주제라면 허용한다.\n"
+        "- existing_keywords에 같은 의미가 있으면 새 표현을 만들지 말고 기존 text를 그대로 반환한다.\n"
+        "- 아주 중요한 키워드만 고르지 말고, 방금 말한 선택 이유를 대표하는 명사구라면 후보로 포함한다.\n"
+        "- 확신이 낮거나 화면을 어지럽히는 단어는 만들지 않는다. 대신 keywords를 []로 둔다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "keywords": [\n'
+        '    {"text": "비용", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.72, "relevance": 0.94, "anchor": "A 선택지", "related": []},\n'
+        '    {"text": "재미", "count": 1, "support_count": 1, "kind": "topic", "importance": 0.68, "relevance": 0.9, "anchor": "B 선택지", "related": []}\n'
+        "  ]\n"
+        "}\n\n"
+        "[규칙]\n"
+        f"- keywords는 최대 {max_keywords}개다.\n"
+        "- text는 반드시 명사/짧은 명사구다. 공백 기준 2단어를 넘기지 않는다.\n"
+        "- count와 support_count는 최소 1이다.\n"
+        "- kind는 entity, topic, relation, action, off_topic 중 하나다.\n"
+        "- importance와 relevance는 0~1 숫자다.\n"
+        "- anchor와 related는 existing_keywords 또는 이번 keywords의 text를 참조할 때만 넣는다.\n"
+        "- merge_keywords, remove_keywords, refined_transcripts는 출력하지 않는다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
+def _build_ideation_keyword_extract_prompt(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+    update_mode: str = "",
+) -> str:
+    if _is_demo_balance_config(payload.demo_config):
+        normalized_update_mode = _safe_text(update_mode)
+        if normalized_update_mode == "realtime_text_batch":
+            return _build_demo_balance_realtime_text_batch_prompt(payload, rows)
+        if normalized_update_mode == "fast_keywords":
+            return _build_demo_balance_fast_keyword_prompt(payload, rows)
+        return _build_demo_balance_keyword_extract_prompt(payload, rows)
+
     existing_keywords = _ideation_existing_keyword_rows(payload)
     context_cache = _ideation_context_cache_text(payload)
     input_payload = {
@@ -6032,6 +7623,7 @@ def _normalize_ideation_keyword_operations(
     if not isinstance(parsed, dict):
         return [], []
 
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
     existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
     keyword_texts = {_safe_text(item.get("text")) for item in keywords if _safe_text(item.get("text"))}
     allowed_target_texts = existing_texts | keyword_texts
@@ -6050,6 +7642,8 @@ def _normalize_ideation_keyword_operations(
             target = _normalize_ideation_keyword_text(
                 item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
             )
+            source = existing_text_lookup.get(source, source)
+            target = existing_text_lookup.get(target, target)
             if (
                 not source
                 or not target
@@ -6094,8 +7688,1137 @@ def _normalize_ideation_keyword_operations(
     return merge_keywords, remove_keywords
 
 
-IDEATION_BUBBLE_GRAPH_VERSION = 1
+def _ideation_existing_keyword_text_lookup(existing_keywords: list[dict[str, Any]]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for item in existing_keywords:
+        text = _normalize_ideation_keyword_text(item.get("text"))
+        if not text:
+            continue
+        variants = [
+            text,
+            _normalize_ideation_keyword_text(item.get("canonical_label")),
+            *[
+                _normalize_ideation_keyword_text(value)
+                for value in (item.get("aliases") or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+        ]
+        for variant in variants:
+            if variant:
+                lookup.setdefault(variant, text)
+    return lookup
+
+
+def _normalize_ideation_keyword_rename_merges(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+    merge_keywords: list[dict[str, str]],
+    remove_keywords: list[str],
+) -> list[dict[str, str]]:
+    if not isinstance(parsed, dict):
+        return []
+
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
+    merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
+    blocked_sources = merge_sources
+    seen_pairs = {
+        (_safe_text(item.get("source")), _safe_text(item.get("target")))
+        for item in merge_keywords
+        if _safe_text(item.get("source")) and _safe_text(item.get("target"))
+    }
+
+    raw_renames = (
+        parsed.get("rename_keywords")
+        or parsed.get("renames")
+        or parsed.get("rename")
+        or parsed.get("correct_keywords")
+        or []
+    )
+    rename_merges: list[dict[str, str]] = []
+    if not isinstance(raw_renames, list):
+        return []
+
+    for item in raw_renames:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_ideation_keyword_text(
+            item.get("source") or item.get("from") or item.get("source_text") or item.get("sourceText")
+        )
+        target = _normalize_ideation_keyword_text(
+            item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
+        )
+        source = existing_text_lookup.get(source, source)
+        target = existing_text_lookup.get(target, target)
+        pair = (source, target)
+        if (
+            not source
+            or not target
+            or source == target
+            or source not in existing_texts
+            or target not in existing_texts
+            or source in blocked_sources
+            or pair in seen_pairs
+        ):
+            continue
+        rename_merges.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": _truncate_text(_safe_text(item.get("reason")) or "rename target already exists", 120),
+            }
+        )
+        seen_pairs.add(pair)
+        if len(rename_merges) >= 8:
+            break
+    return rename_merges
+
+
+def _normalize_ideation_keyword_renames(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+    merge_keywords: list[dict[str, str]],
+    remove_keywords: list[str],
+) -> list[dict[str, str]]:
+    if not isinstance(parsed, dict):
+        return []
+
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    merge_sources = {_safe_text(item.get("source")) for item in merge_keywords if _safe_text(item.get("source"))}
+    merge_targets = {_safe_text(item.get("target")) for item in merge_keywords if _safe_text(item.get("target"))}
+    blocked_sources = merge_sources | merge_targets
+
+    raw_renames = (
+        parsed.get("rename_keywords")
+        or parsed.get("renames")
+        or parsed.get("rename")
+        or parsed.get("correct_keywords")
+        or []
+    )
+    rename_keywords: list[dict[str, str]] = []
+    seen_sources: set[str] = set()
+    seen_targets: set[str] = set()
+    if not isinstance(raw_renames, list):
+        return []
+
+    for item in raw_renames:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_ideation_keyword_text(
+            item.get("source") or item.get("from") or item.get("source_text") or item.get("sourceText")
+        )
+        target = _normalize_ideation_keyword_text(
+            item.get("target") or item.get("to") or item.get("target_text") or item.get("targetText")
+        )
+        source = existing_text_lookup.get(source, source)
+        target = existing_text_lookup.get(target, target)
+        if (
+            not source
+            or not target
+            or source == target
+            or source not in existing_texts
+            or target in existing_texts
+            or source in blocked_sources
+            or source in seen_sources
+            or target in seen_targets
+        ):
+            continue
+        rename_keywords.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": _truncate_text(_safe_text(item.get("reason")), 120),
+            }
+        )
+        seen_sources.add(source)
+        seen_targets.add(target)
+        if len(rename_keywords) >= 10:
+            break
+
+    return rename_keywords
+
+
+def _demo_balance_local_keyword_renames(existing_keywords: list[dict[str, Any]]) -> list[dict[str, str]]:
+    existing_text_lookup = _ideation_existing_keyword_text_lookup(existing_keywords)
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    renames: list[dict[str, str]] = []
+    seen_sources: set[str] = set()
+    for source_text, target_text in DEMO_BALANCE_LOCAL_KEYWORD_RENAMES:
+        source = existing_text_lookup.get(
+            _normalize_ideation_keyword_text(source_text),
+            _normalize_ideation_keyword_text(source_text),
+        )
+        target = _normalize_ideation_keyword_text(target_text)
+        if not source or not target or source == target or source not in existing_texts or source in seen_sources:
+            continue
+        renames.append(
+            {
+                "source": source,
+                "target": target,
+                "reason": "demo local STT correction",
+            }
+        )
+        seen_sources.add(source)
+    return renames
+
+
+def _demo_balance_primary_keywords_present(parsed: Any) -> bool:
+    return isinstance(parsed, dict) and any(
+        key in parsed
+        for key in (
+            "primary_keywords",
+            "primaryKeywords",
+            "important_keywords",
+            "importantKeywords",
+        )
+    )
+
+
+def _normalize_demo_balance_primary_keywords(parsed: Any, *, limit: int = 4) -> list[str]:
+    if not isinstance(parsed, dict):
+        return []
+    raw_items = (
+        parsed.get("primary_keywords")
+        if "primary_keywords" in parsed
+        else parsed.get("primaryKeywords")
+        if "primaryKeywords" in parsed
+        else parsed.get("important_keywords")
+        if "important_keywords" in parsed
+        else parsed.get("importantKeywords")
+        if "importantKeywords" in parsed
+        else []
+    )
+    if not isinstance(raw_items, list):
+        return []
+
+    texts: list[str] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            raw_text = (
+                item.get("text")
+                or item.get("keyword")
+                or item.get("label")
+                or item.get("canonical_label")
+                or item.get("canonicalLabel")
+            )
+        else:
+            raw_text = item
+        text = _normalize_ideation_keyword_text(raw_text)
+        if text:
+            texts.append(text)
+        if len(texts) >= limit:
+            break
+    return _dedup_preserve(texts, limit=limit)
+
+
+def _normalize_demo_balance_affinity_updates(
+    parsed: Any,
+    existing_keywords: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(parsed, dict):
+        return []
+    existing_texts = {_safe_text(item.get("text")) for item in existing_keywords if _safe_text(item.get("text"))}
+    raw_items = (
+        parsed.get("affinity_updates")
+        or parsed.get("affinityUpdates")
+        or parsed.get("move_keywords")
+        or parsed.get("moveKeywords")
+        or []
+    )
+    if not isinstance(raw_items, list):
+        return []
+    updates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        text = _normalize_ideation_keyword_text(
+            item.get("text") or item.get("source") or item.get("keyword") or item.get("label")
+        )
+        affinity = _safe_text(
+            item.get("choice_affinity")
+            or item.get("choiceAffinity")
+            or item.get("affinity")
+            or item.get("target")
+            or item.get("choice")
+        ).lower()
+        if affinity in {"option_a", "a_choice"}:
+            affinity = "a"
+        elif affinity in {"option_b", "b_choice"}:
+            affinity = "b"
+        if not text or text not in existing_texts or text in seen or affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        updates.append(
+            {
+                "text": text,
+                "choice_affinity": affinity,
+                "affinity_score": max(0.0, min(1.0, _safe_float(item.get("affinity_score") or item.get("affinityScore"), 0.86))),
+                "reason": _truncate_text(_safe_text(item.get("reason")), 120),
+            }
+        )
+        seen.add(text)
+        if len(updates) >= 12:
+            break
+    return updates
+
+
+def _apply_demo_balance_affinity_updates(
+    graph: dict[str, Any],
+    updates: list[dict[str, Any]],
+    cycle: int,
+) -> int:
+    if not updates:
+        return 0
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    changed = 0
+    for update in updates:
+        bubble = by_text.get(_ideation_bubble_text_key(update.get("text")))
+        if not bubble or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        affinity = _safe_text(update.get("choice_affinity")).lower()
+        if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        anchor_id = _demo_balance_anchor_id(affinity)
+        previous = (_safe_text(bubble.get("choice_affinity")), _safe_text(bubble.get("anchor_id")))
+        bubble["choice_affinity"] = affinity
+        bubble["anchor_id"] = anchor_id
+        bubble["affinity_score"] = max(0.0, min(1.0, _safe_float(update.get("affinity_score"), 0.86)))
+        bubble["needs_affinity_review"] = False
+        bubble["activity"] = max(_safe_float(bubble.get("activity"), 0.0), 0.58)
+        bubble["display_state"] = "active"
+        bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+        if update.get("reason"):
+            bubble["affinity_reason"] = _safe_text(update.get("reason"))
+        if previous != (_safe_text(bubble.get("choice_affinity")), _safe_text(bubble.get("anchor_id"))):
+            bubble["orbit_order_key"] = None
+            bubble["orbit_slot_index"] = None
+            changed += 1
+    return changed
+
+
+def _current_ideation_primary_keyword_texts(graph: dict[str, Any], *, limit: int = 4) -> list[str]:
+    primary_texts = [
+        _normalize_ideation_keyword_text(bubble.get("label"))
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _safe_text(bubble.get("emphasis")) == "primary"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
+        and not bool(bubble.get("off_topic"))
+    ]
+    return _dedup_preserve([text for text in primary_texts if text], limit=limit)
+
+
+def _resolve_ideation_primary_keyword_ids(
+    graph: dict[str, Any],
+    primary_keywords: list[str],
+    *,
+    limit: int = 4,
+) -> set[str]:
+    if not primary_keywords:
+        return set()
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    primary_ids: list[str] = []
+    for text in primary_keywords:
+        bubble = by_text.get(_ideation_bubble_text_key(text))
+        if (
+            not bubble
+            or bool(bubble.get("off_topic"))
+            or not _is_ideation_bubble_visible_state(bubble.get("display_state"))
+        ):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id:
+            primary_ids.append(bubble_id)
+        if len(primary_ids) >= limit:
+            break
+    return set(_dedup_preserve(primary_ids, limit=limit))
+
+
+DEMO_LOCAL_FAST_FILLER_WORDS = {
+    "아니",
+    "근데",
+    "그쵸",
+    "그렇죠",
+    "맞죠",
+    "음",
+    "어",
+    "아",
+    "뭐",
+    "약간",
+    "완전",
+    "되게",
+    "너무",
+    "그런데",
+    "그냥",
+    "진짜",
+    "때문",
+    "때문에",
+}
+DEMO_LOCAL_FAST_ONE_CHAR_NOUN_ALLOWLIST = _IDEATION_KEYWORD_SINGLE_CHAR_ALLOWLIST
+DEMO_LOCAL_FAST_HONORIFICS = ("씨", "님", "선생님", "교수님", "박사님")
+DEMO_LOCAL_FAST_NOUN_TAG_PREFIXES = ("N", "SL", "SN")
+DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT = 24
+_HANGUL_CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+_HANGUL_JUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+_HANGUL_JONG = ("", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ", "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ", "ㅂ", "ㅄ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ")
+
+
+def _get_local_kiwi_extractor() -> tuple[Any, str]:
+    global _LOCAL_KIWI_EXTRACTOR
+    global _LOCAL_KIWI_EXTRACTOR_ATTEMPTED
+    global _LOCAL_KIWI_WARNING_LOGGED
+    if _LOCAL_KIWI_EXTRACTOR_ATTEMPTED:
+        return _LOCAL_KIWI_EXTRACTOR, "kiwi" if _LOCAL_KIWI_EXTRACTOR is not None else "regex_fallback"
+    with _LOCAL_KIWI_EXTRACTOR_LOCK:
+        if not _LOCAL_KIWI_EXTRACTOR_ATTEMPTED:
+            _LOCAL_KIWI_EXTRACTOR_ATTEMPTED = True
+            try:
+                from kiwipiepy import Kiwi  # type: ignore
+
+                _LOCAL_KIWI_EXTRACTOR = Kiwi()
+            except Exception as exc:
+                _LOCAL_KIWI_EXTRACTOR = None
+                if not _LOCAL_KIWI_WARNING_LOGGED:
+                    _LOCAL_KIWI_WARNING_LOGGED = True
+                    print(
+                        "[local fast keyword extractor] Kiwi unavailable; using regex fallback",
+                        {"error_type": type(exc).__name__, "error": repr(exc)[:240]},
+                        flush=True,
+                    )
+    return _LOCAL_KIWI_EXTRACTOR, "kiwi" if _LOCAL_KIWI_EXTRACTOR is not None else "regex_fallback"
+
+
+def _normalize_demo_local_fast_keyword_text(raw: Any, *, allow_single: bool = False) -> str:
+    text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
+    text = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", text)
+    if not text or len(text) > 28:
+        return ""
+    if len(text) < 2 and not (allow_single and text in DEMO_LOCAL_FAST_ONE_CHAR_NOUN_ALLOWLIST):
+        return ""
+    if re.fullmatch(r"[ABab]", text):
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return ""
+    lowered = text.lower()
+    if lowered in DEMO_LOCAL_FAST_FILLER_WORDS:
+        return ""
+    if any(lowered.endswith(suffix) for suffix in DEMO_LOCAL_FAST_HONORIFICS):
+        return ""
+    if any(pattern.search(lowered) for pattern in _IDEATION_KEYWORD_NON_NOUN_PATTERNS):
+        return ""
+    if re.search(r"[가-힣][a-z0-9+#._-]+", text, flags=re.IGNORECASE):
+        return ""
+    return lowered if re.fullmatch(r"[A-Za-z0-9+#._ -]+", text) else text
+
+
+def _demo_local_fast_clean_token(raw: Any, *, allow_single: bool = False) -> str:
+    return _normalize_demo_local_fast_keyword_text(raw, allow_single=allow_single)
+
+
+def _demo_local_fast_is_noun_token(token: Any) -> bool:
+    form = _safe_text(getattr(token, "form", ""))
+    tag = _safe_text(getattr(token, "tag", "")).upper()
+    if not form or not tag:
+        return False
+    if tag == "SN" and re.fullmatch(r"\d+(?:\.\d+)?", form):
+        return False
+    return tag.startswith(DEMO_LOCAL_FAST_NOUN_TAG_PREFIXES)
+
+
+def _demo_local_fast_safe_int(raw: Any, fallback: int = -1) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _demo_local_fast_make_token(raw: Any, tag: Any = "", start: Any = -1, end: Any = -1) -> dict[str, Any] | None:
+    cleaned = _demo_local_fast_clean_token(raw, allow_single=True)
+    if not cleaned:
+        return None
+    token_start = _demo_local_fast_safe_int(start, -1)
+    token_end = _demo_local_fast_safe_int(end, -1)
+    return {
+        "text": cleaned,
+        "tag": _safe_text(tag),
+        "start": token_start,
+        "end": token_end if token_end >= token_start else -1,
+    }
+
+
+def _demo_local_fast_tokenize_nouns(text: str) -> tuple[list[dict[str, Any]], str]:
+    extractor, route = _get_local_kiwi_extractor()
+    if extractor is not None:
+        try:
+            tokens = extractor.tokenize(text)
+            local_tokens: list[dict[str, Any]] = []
+            for token in tokens:
+                if not _demo_local_fast_is_noun_token(token):
+                    continue
+                token_start = _demo_local_fast_safe_int(getattr(token, "start", -1), -1)
+                token_len = _demo_local_fast_safe_int(getattr(token, "len", getattr(token, "length", 0)), 0)
+                token_end = token_start + token_len if token_start >= 0 and token_len > 0 else -1
+                local_token = _demo_local_fast_make_token(
+                    getattr(token, "form", ""),
+                    getattr(token, "tag", ""),
+                    token_start,
+                    token_end,
+                )
+                if local_token:
+                    local_tokens.append(local_token)
+            return local_tokens, route
+        except Exception as exc:
+            print(
+                "[local fast keyword extractor] Kiwi tokenize failed; using regex fallback",
+                {"error_type": type(exc).__name__, "error": repr(exc)[:240]},
+                flush=True,
+            )
+
+    local_tokens = []
+    for match in re.finditer(r"[가-힣A-Za-z][가-힣A-Za-z0-9+#._-]*", text):
+        local_token = _demo_local_fast_make_token(match.group(0), "REGEX", match.start(), match.end())
+        if local_token:
+            local_tokens.append(local_token)
+    return local_tokens, "regex_fallback"
+
+
+def _demo_local_fast_token_debug(token: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "text": _safe_text(token.get("text")),
+        "tag": _safe_text(token.get("tag")),
+        "start": _demo_local_fast_safe_int(token.get("start"), -1),
+        "end": _demo_local_fast_safe_int(token.get("end"), -1),
+    }
+
+
+def _demo_local_fast_normalize_for_compact_match(raw: str) -> str:
+    return re.sub(r"[\s+/·._-]+", "", raw.lower())
+
+
+def _demo_local_fast_phrase_from_adjacent_tokens(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    raw_text: str,
+) -> tuple[str, str]:
+    left_text = _safe_text(left.get("text"))
+    right_text = _safe_text(right.get("text"))
+    if not left_text or not right_text:
+        return "", "empty"
+    left_key = _ideation_bubble_text_key(left_text)
+    right_key = _ideation_bubble_text_key(right_text)
+    if left_key == right_key:
+        return "", "repeat"
+    if left_key in right_key or right_key in left_key:
+        return "", "contained"
+    left_jamo = _demo_local_fast_jamo_key(left_text)
+    right_jamo = _demo_local_fast_jamo_key(right_text)
+    if left_jamo and right_jamo and _demo_local_fast_edit_similarity(left_jamo, right_jamo) >= 0.9:
+        return "", "same_sound"
+
+    span_verified = False
+    left_end = _demo_local_fast_safe_int(left.get("end"), -1)
+    right_start = _demo_local_fast_safe_int(right.get("start"), -1)
+    if 0 <= left_end <= right_start <= len(raw_text):
+        gap = raw_text[left_end:right_start]
+        span_verified = bool(re.fullmatch(r"[\s+/·._-]*", gap))
+
+    lowered_raw = raw_text.lower()
+    spaced_phrase = f"{left_text} {right_text}".lower()
+    compact_phrase = f"{left_text}{right_text}".lower()
+    text_verified = spaced_phrase in re.sub(r"\s+", " ", lowered_raw)
+    compact_verified = _demo_local_fast_normalize_for_compact_match(compact_phrase) in _demo_local_fast_normalize_for_compact_match(lowered_raw)
+    if not (span_verified or text_verified or compact_verified):
+        return "", "not_in_source"
+
+    phrase = _demo_local_fast_clean_token(f"{left_text} {right_text}")
+    if not phrase:
+        return "", "cleaned_empty"
+    return phrase, ""
+
+
+def _demo_local_fast_count_text_mentions(text: str, rows: list[dict[str, str]]) -> int:
+    normalized = _safe_text(text).lower()
+    if not normalized:
+        return 0
+    mention_count = 0
+    compact_candidate = _demo_local_fast_normalize_for_compact_match(normalized)
+    for row in rows:
+        row_text = _strip_leading_timestamp(row.get("text")).lower()
+        if not row_text:
+            continue
+        row_mentions = row_text.count(normalized)
+        if " " in normalized and compact_candidate:
+            compact_row = _demo_local_fast_normalize_for_compact_match(row_text)
+            row_mentions = max(row_mentions, compact_row.count(compact_candidate))
+        mention_count += row_mentions
+    return mention_count
+
+
+def _demo_local_fast_jamo_key(raw: Any) -> str:
+    text = _normalize_demo_local_fast_keyword_text(raw, allow_single=True)
+    parts: list[str] = []
+    for char in text:
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            value = code - 0xAC00
+            cho = value // 588
+            jung = (value % 588) // 28
+            jong = value % 28
+            parts.append(_HANGUL_CHO[cho])
+            parts.append(_HANGUL_JUNG[jung])
+            if _HANGUL_JONG[jong]:
+                parts.append(_HANGUL_JONG[jong])
+        elif char.isalnum():
+            parts.append(char.lower())
+    return "".join(parts)
+
+
+def _demo_local_fast_edit_similarity(left: str, right: str) -> float:
+    if left == right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            replace_cost = 0 if left_char == right_char else 1
+            current.append(
+                min(
+                    previous[right_index] + 1,
+                    current[right_index - 1] + 1,
+                    previous[right_index - 1] + replace_cost,
+                )
+            )
+        previous = current
+    distance = previous[-1]
+    return max(0.0, 1.0 - distance / max(len(left), len(right)))
+
+
+def _demo_local_fast_context_text(payload: IdeationKeywordExtractInput) -> str:
+    return " ".join(
+        [
+            _safe_text(payload.meeting_topic),
+            _safe_text(payload.meeting_goal),
+            _safe_text(payload.meeting_goal_context),
+            _safe_text((payload.demo_config or {}).get("option_a")),
+            _safe_text((payload.demo_config or {}).get("option_a_keyword")),
+            _safe_text((payload.demo_config or {}).get("option_b")),
+            _safe_text((payload.demo_config or {}).get("option_b_keyword")),
+            _safe_text(payload.context_cache),
+        ]
+    ).lower()
+
+
+def _demo_local_fast_existing_text_lookup(
+    existing_rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    canonical_texts: set[str] = set()
+    for item in existing_rows:
+        label = _normalize_demo_local_fast_keyword_text(item.get("text"), allow_single=True)
+        canonical = _normalize_demo_local_fast_keyword_text(item.get("canonical_label"), allow_single=True) or label
+        if not label:
+            continue
+        canonical_texts.add(canonical or label)
+        for value in [label, canonical, *(item.get("aliases") or [])]:
+            normalized = _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+            if normalized:
+                lookup.setdefault(_ideation_bubble_text_key(normalized), item)
+    return lookup, canonical_texts
+
+
+def _demo_local_fast_canonicalize_candidate(
+    text: str,
+    existing_rows: list[dict[str, Any]],
+    existing_lookup: dict[str, dict[str, Any]],
+    context_text: str,
+) -> tuple[str, str, str, float]:
+    normalized = _normalize_demo_local_fast_keyword_text(text, allow_single=True)
+    if not normalized:
+        return "", "", "", 0.0
+
+    exact = existing_lookup.get(_ideation_bubble_text_key(normalized))
+    if exact:
+        canonical = _normalize_demo_local_fast_keyword_text(exact.get("canonical_label"), allow_single=True) or _normalize_demo_local_fast_keyword_text(exact.get("text"), allow_single=True)
+        return canonical or normalized, normalized if normalized != canonical else "", "exact_or_alias", 1.0
+
+    if not re.fullmatch(r"[가-힣 ]{2,12}", normalized):
+        return normalized, "", "", 0.0
+
+    normalized_jamo = _demo_local_fast_jamo_key(normalized)
+    if len(normalized_jamo) < 4:
+        return normalized, "", "", 0.0
+
+    best_target = ""
+    best_similarity = 0.0
+    for item in existing_rows:
+        if bool(item.get("off_topic")):
+            continue
+        label = _normalize_demo_local_fast_keyword_text(item.get("text"), allow_single=True)
+        canonical = _normalize_demo_local_fast_keyword_text(item.get("canonical_label"), allow_single=True) or label
+        if not canonical or canonical == normalized:
+            continue
+        if not re.fullmatch(r"[가-힣 ]{2,12}", canonical):
+            continue
+        canonical_jamo = _demo_local_fast_jamo_key(canonical)
+        if not canonical_jamo:
+            continue
+        similarity = _demo_local_fast_edit_similarity(normalized_jamo, canonical_jamo)
+        short_variant = (
+            len(normalized.replace(" ", "")) <= 3
+            and len(canonical.replace(" ", "")) <= 3
+            and _safe_nonnegative_int(item.get("count"), 0) >= 1
+        )
+        if similarity >= 0.94 or (short_variant and similarity >= 0.9):
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_target = canonical
+
+    if best_target:
+        return best_target, normalized, "jamo_similarity", best_similarity
+    return normalized, "", "", 0.0
+
+
+def _demo_local_fast_keyword_score(
+    text: str,
+    rows: list[dict[str, str]],
+    payload: IdeationKeywordExtractInput,
+    existing_texts: set[str],
+    *,
+    is_phrase: bool = False,
+) -> tuple[float, float, dict[str, Any]]:
+    topic_context = _demo_local_fast_context_text(payload)
+    lower_text = text.lower()
+    row_mentions = _demo_local_fast_count_text_mentions(text, rows)
+    context_bonus = 0.16 if lower_text in topic_context else 0.0
+    existing_bonus = 0.1 if text in existing_texts else 0.0
+    length_adjustment = -0.04 if is_phrase else 0.03
+    importance = min(0.92, 0.54 + row_mentions * 0.08 + context_bonus + existing_bonus + length_adjustment)
+    relevance = min(1.0, 0.64 + context_bonus * 1.4 + existing_bonus + min(0.18, row_mentions * 0.04))
+    return importance, relevance, {
+        "row_mentions": row_mentions,
+        "context_match": context_bonus > 0,
+        "existing_match": existing_bonus > 0,
+        "is_phrase": is_phrase,
+    }
+
+
+def _demo_balance_choice_flags(text: str, demo_config: dict[str, Any]) -> dict[str, bool]:
+    clean = _demo_balance_clean_text(text)
+    return {
+        "a": (
+            _demo_balance_has_choice_token(clean, "A")
+            or _demo_balance_has_option_mention(clean, demo_config.get("option_a", ""))
+            or _demo_balance_has_option_mention(clean, demo_config.get("option_a_keyword", ""))
+        ),
+        "b": (
+            _demo_balance_has_choice_token(clean, "B")
+            or _demo_balance_has_option_mention(clean, demo_config.get("option_b", ""))
+            or _demo_balance_has_option_mention(clean, demo_config.get("option_b_keyword", ""))
+        ),
+    }
+
+
+def _demo_balance_existing_side_counts(existing_rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"a": 0, "b": 0}
+    for item in existing_rows or []:
+        bubble_id = _safe_text(item.get("id"))
+        side = _safe_text(item.get("choice_affinity")).lower()
+        if side in counts and bubble_id not in _demo_balance_anchor_ids() and _safe_text(item.get("kind")).lower() != "off_topic":
+            counts[side] += 1
+    return counts
+
+
+def _demo_balance_existing_side_match_scores(text: str, existing_rows: list[dict[str, Any]]) -> dict[str, float]:
+    normalized = _normalize_demo_local_fast_keyword_text(text, allow_single=True)
+    compact = _demo_local_fast_normalize_for_compact_match(normalized)
+    scores = {"a": 0.0, "b": 0.0}
+    if not normalized:
+        return scores
+    for item in existing_rows or []:
+        side = _safe_text(item.get("choice_affinity")).lower()
+        if side not in scores or _safe_text(item.get("id")) in _demo_balance_anchor_ids():
+            continue
+        matched = False
+        for raw_value in [_safe_text(item.get("text")), _safe_text(item.get("canonical_label")), *[_safe_text(alias) for alias in (item.get("aliases") or [])]]:
+            value = _normalize_demo_local_fast_keyword_text(raw_value, allow_single=True)
+            if not value:
+                continue
+            value_compact = _demo_local_fast_normalize_for_compact_match(value)
+            if value == normalized or (compact and value_compact == compact):
+                scores[side] += 0.22
+                matched = True
+                break
+            if normalized in value or value in normalized:
+                scores[side] += 0.1
+                matched = True
+                break
+        if matched:
+            continue
+    return scores
+
+
+def _demo_balance_keyword_affinity(
+    text: str,
+    rows: list[dict[str, str]],
+    demo_config: dict[str, Any],
+    existing_rows: list[dict[str, Any]] | None = None,
+) -> tuple[str, float, bool, dict[str, Any]]:
+    candidate = _normalize_demo_local_fast_keyword_text(text, allow_single=True).lower()
+    combined_rows = " ".join(_safe_text(row.get("text")) for row in rows).lower()
+    choice_flags = _demo_balance_choice_flags(combined_rows, demo_config)
+    explicit_choice = "a" if choice_flags["a"] and not choice_flags["b"] else "b" if choice_flags["b"] and not choice_flags["a"] else ""
+    existing_rows = existing_rows or []
+    side_counts = _demo_balance_existing_side_counts(existing_rows)
+    scores = {"a": 0.0, "b": 0.0}
+    reason_parts: list[str] = []
+
+    if explicit_choice in scores:
+        scores[explicit_choice] += 0.55
+        reason_parts.append("explicit_choice")
+    elif choice_flags["a"] and choice_flags["b"]:
+        reason_parts.append("explicit_both_sides")
+
+    for choice, option_key, keyword_key in (
+        ("a", "option_a", "option_a_keyword"),
+        ("b", "option_b", "option_b_keyword"),
+    ):
+        option = _normalize_demo_local_fast_keyword_text(demo_config.get(option_key), allow_single=True).lower()
+        keyword = _normalize_demo_local_fast_keyword_text(demo_config.get(keyword_key) or demo_config.get(option_key), allow_single=True).lower()
+        for value, direct_weight, row_weight, label in (
+            (keyword, 0.52, 0.22, "center_keyword"),
+            (option, 0.34, 0.14, "option_label"),
+        ):
+            value = value.strip()
+            if not value:
+                continue
+            if value in candidate or candidate in value:
+                scores[choice] += direct_weight
+                reason_parts.append(f"{label}_{choice}")
+            if value in combined_rows:
+                scores[choice] += row_weight
+
+    existing_scores = _demo_balance_existing_side_match_scores(candidate, existing_rows)
+    for choice, value in existing_scores.items():
+        if value > 0:
+            scores[choice] += value
+            reason_parts.append(f"existing_match_{choice}")
+
+    winner = "a" if scores["a"] > scores["b"] else "b" if scores["b"] > scores["a"] else ""
+    if winner:
+        loser = "b" if winner == "a" else "a"
+        margin = scores[winner] - scores[loser]
+    else:
+        loser = ""
+        margin = 0.0
+
+    confident = bool(winner and scores[winner] >= 0.42 and margin >= 0.16)
+    fallback_side = ""
+    fallback_reason = ""
+    if confident:
+        selected = winner
+        needs_review = False
+        affinity_score = max(0.0, min(1.0, scores[selected]))
+        affinity_reason = "score_confident"
+    else:
+        if explicit_choice in scores:
+            fallback_side = explicit_choice
+            fallback_reason = "recent_explicit_choice"
+        elif side_counts["a"] < side_counts["b"]:
+            fallback_side = "a"
+            fallback_reason = "fewer_side_bubbles"
+        elif side_counts["b"] < side_counts["a"]:
+            fallback_side = "b"
+            fallback_reason = "fewer_side_bubbles"
+        elif winner:
+            fallback_side = winner
+            fallback_reason = "weak_score_winner"
+        else:
+            fallback_side = "a" if sum(ord(ch) for ch in candidate) % 2 == 0 else "b"
+            fallback_reason = "balanced_hash"
+        selected = fallback_side
+        needs_review = True
+        affinity_score = max(0.12, min(0.32, scores.get(selected, 0.0)))
+        affinity_reason = fallback_reason
+
+    debug = {
+        "a_score": round(scores["a"], 4),
+        "b_score": round(scores["b"], 4),
+        "explicit_choice": explicit_choice,
+        "choice_flags": choice_flags,
+        "side_counts": side_counts,
+        "winner": winner,
+        "loser": loser,
+        "margin": round(margin, 4),
+        "fallback_side": fallback_side,
+        "affinity_reason": affinity_reason,
+        "reason_parts": _dedup_preserve(reason_parts, limit=8),
+    }
+    return selected, max(0.0, min(1.0, affinity_score)), needs_review, debug
+
+
+def _extract_demo_local_fast_keywords(
+    payload: IdeationKeywordExtractInput,
+    rows: list[dict[str, str]],
+    *,
+    max_keywords: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    existing_rows = _ideation_existing_keyword_rows(payload)
+    existing_lookup, canonical_texts = _demo_local_fast_existing_text_lookup(existing_rows)
+    existing_texts = {
+        _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+        for item in existing_rows
+        for value in [_safe_text(item.get("text")), _safe_text(item.get("canonical_label")), *[_safe_text(alias) for alias in (item.get("aliases") or [])]]
+        if _normalize_demo_local_fast_keyword_text(value, allow_single=True)
+    }
+    context_text = _demo_local_fast_context_text(payload)
+    counts: Counter[str] = Counter()
+    evidence_by_text: dict[str, set[str]] = {}
+    aliases_by_text: dict[str, set[str]] = {}
+    candidate_meta_by_text: dict[str, dict[str, bool]] = {}
+    raw_noun_count = 0
+    local_candidate_count = 0
+    single_candidate_texts: list[str] = []
+    phrase_candidate_texts: list[str] = []
+    raw_token_debug: list[dict[str, Any]] = []
+    rejected_phrase_count = 0
+    rejected_repeat_count = 0
+    dropped_low_support_count = 0
+    canonicalized_count = 0
+    alias_merge_count = 0
+    routes: Counter[str] = Counter()
+
+    for row in rows:
+        row_id = _safe_text(row.get("id"))
+        text = _strip_leading_timestamp(row.get("text"))
+        noun_tokens, route = _demo_local_fast_tokenize_nouns(text)
+        routes[route] += 1
+        raw_noun_count += len(noun_tokens)
+        raw_token_debug.extend(_demo_local_fast_token_debug(token) for token in noun_tokens)
+        local_candidates: list[tuple[str, bool]] = []
+        for token in noun_tokens:
+            noun = _safe_text(token.get("text"))
+            if noun:
+                local_candidates.append((noun, False))
+                single_candidate_texts.append(noun)
+        for left, right in zip(noun_tokens, noun_tokens[1:]):
+            phrase, rejection_reason = _demo_local_fast_phrase_from_adjacent_tokens(left, right, text)
+            if phrase:
+                local_candidates.append((phrase, True))
+                phrase_candidate_texts.append(phrase)
+            else:
+                rejected_phrase_count += 1
+                if rejection_reason in {"repeat", "contained", "same_sound"}:
+                    rejected_repeat_count += 1
+        local_candidate_count += len(local_candidates)
+        seen_row_candidate_keys: set[str] = set()
+        for value, is_phrase in local_candidates[:24]:
+            candidate_key = _ideation_bubble_text_key(value)
+            if not candidate_key:
+                continue
+            if candidate_key in seen_row_candidate_keys and is_phrase:
+                continue
+            if candidate_key not in seen_row_candidate_keys:
+                seen_row_candidate_keys.add(candidate_key)
+            canonical, alias_source, canonical_reason, similarity = _demo_local_fast_canonicalize_candidate(
+                value,
+                existing_rows,
+                existing_lookup,
+                context_text,
+            )
+            if not canonical:
+                continue
+            counts[canonical] += 1
+            if row_id:
+                evidence_by_text.setdefault(canonical, set()).add(row_id)
+            if alias_source and alias_source != canonical:
+                aliases_by_text.setdefault(canonical, set()).add(alias_source)
+                alias_merge_count += 1
+                if canonical_reason == "jamo_similarity" and similarity > 0:
+                    canonicalized_count += 1
+            meta = candidate_meta_by_text.setdefault(
+                canonical,
+                {"single": False, "phrase": False, "verified_phrase": False},
+            )
+            if is_phrase:
+                meta["phrase"] = True
+                meta["verified_phrase"] = True
+            else:
+                meta["single"] = True
+
+    candidates: list[dict[str, Any]] = []
+    for text, count in counts.items():
+        if not text:
+            continue
+        meta = candidate_meta_by_text.get(text) or {}
+        word_count = len(text.split())
+        is_phrase = bool(meta.get("phrase")) or word_count > 1
+        verified_phrase = bool(meta.get("verified_phrase")) and is_phrase
+        importance, relevance, score_features = _demo_local_fast_keyword_score(
+            text,
+            rows,
+            payload,
+            existing_texts,
+            is_phrase=is_phrase,
+        )
+        word_count = len(text.split())
+        support_count = len(evidence_by_text.get(text) or [])
+        row_mentions = _safe_nonnegative_int(score_features.get("row_mentions"), 0)
+        context_match = bool(score_features.get("context_match"))
+        existing_match = text in canonical_texts or bool(score_features.get("existing_match"))
+        alias_match = bool(aliases_by_text.get(text))
+        single_candidate = word_count == 1 and not is_phrase
+        concise_phrase = 1 <= word_count <= 2
+        phrase_compact_length = len(text.replace(" ", ""))
+        one_off_single_allowed = single_candidate
+        one_off_phrase_allowed = (
+            verified_phrase
+            and concise_phrase
+            and phrase_compact_length >= 4
+        )
+        if not (
+            existing_match
+            or alias_match
+            or (context_match and (single_candidate or verified_phrase))
+            or one_off_single_allowed
+            or one_off_phrase_allowed
+        ):
+            dropped_low_support_count += 1
+            continue
+        score = (
+            support_count * 1.18
+            + count * 0.64
+            + row_mentions * 0.32
+            + importance * 0.72
+            + relevance * 0.5
+            + (1.2 if existing_match else 0.0)
+            + (0.95 if alias_match else 0.0)
+            + (0.78 if context_match else 0.0)
+            + (1.6 if one_off_phrase_allowed else 0.0)
+            + (-0.28 if is_phrase else 0.16)
+        )
+        candidates.append(
+            {
+                "text": text,
+                "count": max(1, count),
+                "support_count": support_count,
+                "kind": "topic",
+                "importance": importance,
+                "relevance": relevance,
+                "off_topic": False,
+                "off_topic_reason": "",
+                "anchor": "",
+                "related": [],
+                "alias_sources": sorted(aliases_by_text.get(text) or []),
+                "canonicalized": alias_match,
+                "source_kind": "phrase" if is_phrase else "single",
+                "_score": score,
+            }
+        )
+
+        choice_affinity, affinity_score, needs_affinity_review, affinity_debug = _demo_balance_keyword_affinity(
+            text,
+            rows,
+            payload.demo_config or {},
+            existing_rows,
+        )
+        candidates[-1]["choice_affinity"] = choice_affinity
+        candidates[-1]["affinity_score"] = affinity_score
+        candidates[-1]["needs_affinity_review"] = needs_affinity_review
+        candidates[-1]["anchor_id"] = _demo_balance_anchor_id(choice_affinity)
+        candidates[-1]["affinity_reason"] = _safe_text(affinity_debug.get("affinity_reason"))
+        candidates[-1]["affinity_debug"] = affinity_debug
+
+    candidates.sort(key=lambda item: (-_safe_float(item.get("_score"), 0.0), _safe_text(item.get("text"))))
+    top_candidate_debug = [
+        {
+            "text": _safe_text(item.get("text")),
+            "score": round(_safe_float(item.get("_score"), 0.0), 4),
+            "count": _safe_nonnegative_int(item.get("count"), 0),
+            "support_count": _safe_nonnegative_int(item.get("support_count"), 0),
+            "source_kind": _safe_text(item.get("source_kind")),
+            "choice_affinity": _safe_text(item.get("choice_affinity")),
+            "affinity_score": round(_safe_float(item.get("affinity_score"), 0.0), 4),
+            "needs_affinity_review": bool(item.get("needs_affinity_review")),
+            "affinity_reason": _safe_text(item.get("affinity_reason")),
+            "a_score": round(_safe_float((item.get("affinity_debug") or {}).get("a_score"), 0.0), 4),
+            "b_score": round(_safe_float((item.get("affinity_debug") or {}).get("b_score"), 0.0), 4),
+            "fallback_side": _safe_text((item.get("affinity_debug") or {}).get("fallback_side")),
+            "alias_sources": [_safe_text(value) for value in (item.get("alias_sources") or [])[:5]],
+            "canonicalized": bool(item.get("canonicalized")),
+        }
+        for item in candidates[:16]
+    ]
+    selected: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    seen_jamo_keys: list[str] = []
+    for candidate in candidates:
+        text = _safe_text(candidate.get("text"))
+        text_key = _ideation_bubble_text_key(text)
+        if not text_key or text_key in seen_keys:
+            continue
+        # Prefer concise phrases; if a selected longer phrase already contains the token, skip the weaker duplicate.
+        if any(text_key in _ideation_bubble_text_key(item.get("text")) or _ideation_bubble_text_key(item.get("text")) in text_key for item in selected):
+            if text not in existing_texts:
+                continue
+        text_jamo = _demo_local_fast_jamo_key(text)
+        if text_jamo and any(_demo_local_fast_edit_similarity(text_jamo, seen_jamo) >= 0.92 for seen_jamo in seen_jamo_keys):
+            if text not in existing_texts:
+                continue
+        candidate.pop("_score", None)
+        selected.append(candidate)
+        seen_keys.add(text_key)
+        if text_jamo:
+            seen_jamo_keys.append(text_jamo)
+        if len(selected) >= max_keywords:
+            break
+
+    route_name = "kiwi" if routes.get("kiwi") else "regex_fallback"
+    diagnostics = {
+        "stage": "canvas_ideation_bubble_graph_local_fast",
+        "extractor": route_name,
+        "input_rows": len(rows),
+        "raw_tokens": raw_token_debug[:DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT],
+        "single_candidates": _dedup_preserve(single_candidate_texts, limit=DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT),
+        "phrase_candidates": _dedup_preserve(phrase_candidate_texts, limit=DEMO_LOCAL_FAST_DEBUG_LIST_LIMIT),
+        "raw_noun_count": raw_noun_count,
+        "local_candidate_count": local_candidate_count,
+        "counted_candidate_count": len(counts),
+        "candidate_count": len(candidates),
+        "selected_count": len(selected),
+        "accepted_count": len(selected),
+        "top_candidates": top_candidate_debug,
+        "selected_keywords": [
+            {
+                "text": _safe_text(item.get("text")),
+                "count": _safe_nonnegative_int(item.get("count"), 0),
+                "support_count": _safe_nonnegative_int(item.get("support_count"), 0),
+                "source_kind": _safe_text(item.get("source_kind")),
+                "choice_affinity": _safe_text(item.get("choice_affinity")),
+                "affinity_score": round(_safe_float(item.get("affinity_score"), 0.0), 4),
+                "needs_affinity_review": bool(item.get("needs_affinity_review")),
+                "alias_sources": [_safe_text(value) for value in (item.get("alias_sources") or [])[:5]],
+                "canonicalized": bool(item.get("canonicalized")),
+            }
+            for item in selected
+        ],
+        "rejected_phrase_count": rejected_phrase_count,
+        "rejected_repeat_count": rejected_repeat_count,
+        "dropped_low_support_count": dropped_low_support_count,
+        "kiwi_available": route_name == "kiwi",
+        "alias_merge_count": alias_merge_count,
+        "canonicalized_count": canonicalized_count,
+    }
+    return selected, diagnostics
+
+
+IDEATION_BUBBLE_GRAPH_VERSION = 2
+IDEATION_BUBBLE_GRAPH_LAYOUT_MODE = "orbit"
 IDEATION_BUBBLE_GRAPH_MAX_BUBBLES = 80
+DEMO_BALANCE_BUBBLE_GRAPH_VISIBLE_CAP = 24
 IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT = 2000
 IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES = 5
 IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES = 3
@@ -6112,13 +8835,32 @@ IDEATION_BUBBLE_GRAPH_LAYOUT_CLUSTER_GAP = 118
 IDEATION_BUBBLE_GRAPH_CORE_CLUSTER_MOVE_LIMIT = 68
 IDEATION_BUBBLE_GRAPH_DEFAULT_CLUSTER_MOVE_LIMIT = 118
 IDEATION_BUBBLE_GRAPH_PERIPHERAL_CLUSTER_MOVE_LIMIT = 152
+IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS = 3
+DEMO_BALANCE_ANCHOR_A_ID = "demo-balance-anchor-a"
+DEMO_BALANCE_ANCHOR_B_ID = "demo-balance-anchor-b"
+DEMO_BALANCE_ANCHOR_NEUTRAL_ID = "demo-balance-anchor-neutral"
+DEMO_BALANCE_NEUTRAL_LABEL = "미분류"
+DEMO_BALANCE_AFFINITIES = {"a", "b", "neutral"}
+DEMO_BALANCE_DISPLAY_AFFINITIES = {"a", "b"}
+DEMO_BALANCE_MIN_VISIBLE_PER_SIDE = 4
+DEMO_BALANCE_CENTER_BUBBLE_SIZE = 112
+DEMO_BALANCE_SATELLITE_BUBBLE_SIZE = 84
+DEMO_BALANCE_REVIEW_BUBBLE_SIZE = 90
+DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE = 76
+DEMO_BALANCE_LOCAL_KEYWORD_RENAMES = (
+    ("사생활 치매", "사생활 침해"),
+    ("사생활치매", "사생활 침해"),
+)
 
 
 def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": 0,
         "layout_revision": 0,
+        "layout_overlap_resolved_count": 0,
+        "clusters": [],
         "bubbles": [],
         "processed_utterance_ids": [],
         "updated_at": "",
@@ -6127,12 +8869,21 @@ def _empty_canvas_ideation_bubble_graph() -> dict[str, Any]:
 
 def _normalize_ideation_bubble_state(raw: Any) -> str:
     state = _safe_text(raw, "active").lower()
-    return state if state in {"active", "dimmed", "archived"} else "active"
+    return state if state in {"active", "dimmed", "exiting", "archived"} else "active"
 
 
 def _normalize_ideation_bubble_layout_zone(raw: Any) -> str:
     zone = _safe_text(raw, "default").lower()
     return zone if zone in {"core", "default", "peripheral", "archived"} else "default"
+
+
+def _is_ideation_bubble_visible_state(raw: Any) -> bool:
+    return _normalize_ideation_bubble_state(raw) in {"active", "dimmed"}
+
+
+def _normalize_ideation_bubble_role(raw: Any) -> str:
+    role = _safe_text(raw, "satellite").lower()
+    return role if role in {"center", "satellite", "dot"} else "satellite"
 
 
 def _ideation_bubble_text_key(raw: Any) -> str:
@@ -6195,6 +8946,11 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
         display_state = _normalize_ideation_bubble_state(
             item.get("display_state") or item.get("displayState") or item.get("state")
         )
+        choice_affinity = _safe_text(item.get("choice_affinity") or item.get("choiceAffinity")).lower()
+        if choice_affinity not in DEMO_BALANCE_AFFINITIES:
+            choice_affinity = ""
+        affinity_score = max(0.0, min(1.0, _safe_float(item.get("affinity_score") or item.get("affinityScore"), 0.0)))
+        needs_affinity_review = bool(item.get("needs_affinity_review") or item.get("needsAffinityReview"))
         missing_cycles = _safe_nonnegative_int(
             item.get("missing_cycles") or item.get("missingCycles"),
             0,
@@ -6203,10 +8959,74 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
             item.get("last_seen_cycle") or item.get("lastSeenCycle"),
             0,
         )
+        orbit_center_id = _safe_text(item.get("orbit_center_id") or item.get("orbitCenterId"))
+        raw_orbit_ring = item.get("orbit_ring") if item.get("orbit_ring") is not None else item.get("orbitRing")
+        raw_orbit_angle = item.get("orbit_angle") if item.get("orbit_angle") is not None else item.get("orbitAngle")
+        raw_orbit_radius = item.get("orbit_radius") if item.get("orbit_radius") is not None else item.get("orbitRadius")
+        raw_orbit_order_key = (
+            item.get("orbit_order_key")
+            if item.get("orbit_order_key") is not None
+            else item.get("orbitOrderKey")
+        )
+        raw_orbit_slot_index = (
+            item.get("orbit_slot_index")
+            if item.get("orbit_slot_index") is not None
+            else item.get("orbitSlotIndex")
+        )
+        motion_reason = _safe_text(item.get("motion_reason") or item.get("motionReason"))
+        if motion_reason not in {
+            "gate_enter",
+            "insert_push",
+            "gap_fill",
+            "ring_overflow",
+            "affinity_transfer",
+            "relayout",
+            "relayout_transfer",
+            "content_update",
+            "exit",
+            "",
+        }:
+            motion_reason = ""
+        motion_direction = _safe_text(item.get("motion_direction") or item.get("motionDirection"))
+        if motion_direction not in {"counterclockwise", "clockwise", "nearest", "nearest_arc", "orbit_radial_arc", "direct", ""}:
+            motion_direction = ""
+        raw_enter_sequence = (
+            item.get("enter_sequence")
+            if item.get("enter_sequence") is not None
+            else item.get("enterSequence")
+        )
+        raw_enter_delay_ms = (
+            item.get("enter_delay_ms")
+            if item.get("enter_delay_ms") is not None
+            else item.get("enterDelayMs")
+        )
+        raw_gate_angle = item.get("gate_angle") if item.get("gate_angle") is not None else item.get("gateAngle")
+        raw_from_slot_index = (
+            item.get("from_slot_index")
+            if item.get("from_slot_index") is not None
+            else item.get("fromSlotIndex")
+        )
+        raw_to_slot_index = (
+            item.get("to_slot_index")
+            if item.get("to_slot_index") is not None
+            else item.get("toSlotIndex")
+        )
+        raw_move_cost = item.get("move_cost") if item.get("move_cost") is not None else item.get("moveCost")
+        raw_move_angle_delta = (
+            item.get("move_angle_delta")
+            if item.get("move_angle_delta") is not None
+            else item.get("moveAngleDelta")
+        )
+        raw_arc_cost = item.get("arc_cost") if item.get("arc_cost") is not None else item.get("arcCost")
+        raw_radius_cost = item.get("radius_cost") if item.get("radius_cost") is not None else item.get("radiusCost")
         bubbles.append(
             {
                 "id": bubble_id,
                 "label": label,
+                "canonical_label": _normalize_ideation_keyword_text(
+                    item.get("canonical_label") or item.get("canonicalLabel")
+                )
+                or label,
                 "aliases": aliases,
                 "kind": kind,
                 "count": count,
@@ -6223,12 +9043,36 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "cluster_y": _safe_float(cluster_y, 0.0) if cluster_y is not None else None,
                 "local_x": _safe_float(local_x, 0.0) if local_x is not None else None,
                 "local_y": _safe_float(local_y, 0.0) if local_y is not None else None,
+                "role": _normalize_ideation_bubble_role(item.get("role")),
+                "orbit_center_id": orbit_center_id,
+                "orbit_ring": _safe_nonnegative_int(raw_orbit_ring, 0) if raw_orbit_ring is not None else 0,
+                "orbit_angle": _safe_float(raw_orbit_angle, 0.0) if raw_orbit_angle is not None else None,
+                "orbit_radius": _safe_float(raw_orbit_radius, 0.0) if raw_orbit_radius is not None else None,
+                "orbit_order_key": _safe_float(raw_orbit_order_key, 0.0) if raw_orbit_order_key is not None else None,
+                "orbit_slot_index": _safe_nonnegative_int(raw_orbit_slot_index, 0) if raw_orbit_slot_index is not None else None,
+                "motion_reason": motion_reason,
+                "motion_direction": motion_direction,
+                "motion_plan_id": _safe_text(item.get("motion_plan_id") or item.get("motionPlanId")),
+                "from_slot_index": _safe_nonnegative_int(raw_from_slot_index, 0) if raw_from_slot_index is not None else 0,
+                "to_slot_index": _safe_nonnegative_int(raw_to_slot_index, 0) if raw_to_slot_index is not None else 0,
+                "move_cost": max(0.0, _safe_float(raw_move_cost, 0.0)) if raw_move_cost is not None else 0.0,
+                "move_angle_delta": _safe_float(raw_move_angle_delta, 0.0) if raw_move_angle_delta is not None else 0.0,
+                "arc_cost": max(0.0, _safe_float(raw_arc_cost, 0.0)) if raw_arc_cost is not None else 0.0,
+                "radius_cost": max(0.0, _safe_float(raw_radius_cost, 0.0)) if raw_radius_cost is not None else 0.0,
+                "gate_blocked": bool(item.get("gate_blocked") or item.get("gateBlocked")),
+                "enter_sequence": _safe_nonnegative_int(raw_enter_sequence, 0) if raw_enter_sequence is not None else 0,
+                "enter_delay_ms": _safe_nonnegative_int(raw_enter_delay_ms, 0) if raw_enter_delay_ms is not None else 0,
+                "gate_angle": _safe_float(raw_gate_angle, 0.0) if raw_gate_angle is not None else None,
                 "display_state": display_state,
                 "layout_zone": _normalize_ideation_bubble_layout_zone(
                     item.get("layout_zone") or item.get("layoutZone")
                 ),
                 "missing_cycles": missing_cycles,
                 "anchor_id": _safe_text(item.get("anchor_id") or item.get("anchorId")),
+                "choice_affinity": choice_affinity,
+                "affinity_score": affinity_score,
+                "needs_affinity_review": needs_affinity_review,
+                "durable": bool(item.get("durable")),
                 "related_ids": _dedup_preserve(
                     [
                         _safe_text(value)
@@ -6251,6 +9095,7 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "off_topic": off_topic,
                 "off_topic_reason": _safe_text(item.get("off_topic_reason") or item.get("offTopicReason")),
                 "archive_reason": _safe_text(item.get("archive_reason") or item.get("archiveReason")),
+                "lifecycle_state": _safe_text(item.get("lifecycle_state") or item.get("lifecycleState") or "active"),
             }
         )
         if len(bubbles) >= IDEATION_BUBBLE_GRAPH_MAX_BUBBLES:
@@ -6260,11 +9105,71 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
     for item in bubbles:
         if item.get("anchor_id") not in bubble_ids:
             item["anchor_id"] = ""
+        if item.get("orbit_center_id") not in bubble_ids:
+            item["orbit_center_id"] = ""
         item["related_ids"] = [
             related_id
             for related_id in item.get("related_ids", [])
             if related_id in bubble_ids and related_id != item["id"]
         ][:12]
+
+    clusters: list[dict[str, Any]] = []
+    used_cluster_ids: set[str] = set()
+    for index, item in enumerate(raw.get("clusters") or []):
+        if not isinstance(item, dict):
+            continue
+        center_id = _safe_text(
+            item.get("center_bubble_id")
+            or item.get("centerBubbleId")
+            or item.get("center_id")
+            or item.get("centerId")
+        )
+        if center_id and center_id not in bubble_ids:
+            center_id = ""
+        cluster_id = _safe_text(item.get("id") or item.get("cluster_id") or item.get("clusterId"))
+        if not cluster_id:
+            cluster_id = f"bubble-cluster-{_stable_short_id(center_id or str(index))}"
+        cluster_id_base = cluster_id
+        suffix = 2
+        while cluster_id in used_cluster_ids:
+            cluster_id = f"{cluster_id_base}-{suffix}"
+            suffix += 1
+        used_cluster_ids.add(cluster_id)
+        raw_x = item.get("x")
+        raw_y = item.get("y")
+        raw_radius = item.get("radius")
+        raw_rings = item.get("rings")
+        rings: list[float] = []
+        if isinstance(raw_rings, list):
+            for ring in raw_rings[:4]:
+                radius_value = ring.get("radius") if isinstance(ring, dict) else ring
+                radius = _safe_float(radius_value, 0.0)
+                if radius > 0:
+                    rings.append(round(radius, 2))
+        cluster_bubble_ids = _dedup_preserve(
+            [
+                _safe_text(value)
+                for value in (item.get("bubble_ids") or item.get("bubbleIds") or [])
+                if _safe_text(value) in bubble_ids
+            ],
+            limit=IDEATION_BUBBLE_GRAPH_MAX_BUBBLES,
+        )
+        clusters.append(
+            {
+                "id": cluster_id,
+                "center_bubble_id": center_id,
+                "x": _safe_float(raw_x, 0.0) if raw_x is not None else None,
+                "y": _safe_float(raw_y, 0.0) if raw_y is not None else None,
+                "radius": _safe_float(raw_radius, 0.0) if raw_radius is not None else None,
+                "rings": rings,
+                "zone": _normalize_ideation_bubble_layout_zone(item.get("zone")),
+                "overlap_resolved_count": _safe_nonnegative_int(
+                    item.get("overlap_resolved_count") or item.get("overlapResolvedCount"),
+                    0,
+                ),
+                "bubble_ids": cluster_bubble_ids,
+            }
+        )
 
     processed_ids = _dedup_preserve(
         [
@@ -6276,12 +9181,221 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
     )
     return {
         "version": IDEATION_BUBBLE_GRAPH_VERSION,
+        "layout_mode": IDEATION_BUBBLE_GRAPH_LAYOUT_MODE,
         "update_cycle": _safe_nonnegative_int(raw.get("update_cycle") or raw.get("updateCycle"), 0),
         "layout_revision": _safe_nonnegative_int(raw.get("layout_revision") or raw.get("layoutRevision"), 0),
+        "layout_overlap_resolved_count": _safe_nonnegative_int(
+            raw.get("layout_overlap_resolved_count") or raw.get("layoutOverlapResolvedCount"),
+            0,
+        ),
+        "clusters": clusters,
         "bubbles": bubbles,
         "processed_utterance_ids": processed_ids,
         "updated_at": _safe_text(raw.get("updated_at") or raw.get("updatedAt")),
     }
+
+
+def _demo_balance_anchor_id(choice: str) -> str:
+    normalized = _safe_text(choice).lower()
+    if normalized == "a":
+        return DEMO_BALANCE_ANCHOR_A_ID
+    if normalized == "b":
+        return DEMO_BALANCE_ANCHOR_B_ID
+    return DEMO_BALANCE_ANCHOR_A_ID
+
+
+def _demo_balance_anchor_ids() -> set[str]:
+    return {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID, DEMO_BALANCE_ANCHOR_NEUTRAL_ID}
+
+
+def _demo_balance_visible_anchor_ids() -> set[str]:
+    return {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+
+
+def _is_demo_balance_anchor_bubble(bubble: dict[str, Any]) -> bool:
+    return _safe_text(bubble.get("id")) in _demo_balance_anchor_ids() or bool(bubble.get("durable"))
+
+
+def _is_demo_balance_visible_anchor_bubble(bubble: dict[str, Any]) -> bool:
+    return _safe_text(bubble.get("id")) in _demo_balance_visible_anchor_ids()
+
+
+def _demo_balance_anchor_label(choice: str, demo_config: dict[str, Any]) -> str:
+    normalized = _safe_text(choice).lower()
+    if normalized == "a":
+        return _normalize_ideation_keyword_text(demo_config.get("option_a_keyword") or demo_config.get("option_a")) or "A"
+    if normalized == "b":
+        return _normalize_ideation_keyword_text(demo_config.get("option_b_keyword") or demo_config.get("option_b")) or "B"
+    return DEMO_BALANCE_NEUTRAL_LABEL
+
+
+def _demo_balance_primary_anchor_texts(demo_config: dict[str, Any]) -> list[str]:
+    return _dedup_preserve(
+        [
+            _demo_balance_anchor_label("a", demo_config),
+            _demo_balance_anchor_label("b", demo_config),
+        ],
+        limit=2,
+    )
+
+
+def _ensure_demo_balance_anchor_bubbles(graph: dict[str, Any], demo_config: dict[str, Any]) -> bool:
+    if not _is_demo_balance_config(demo_config):
+        return False
+
+    changed = False
+    now = _now_ts()
+    existing_by_id = {
+        _safe_text(bubble.get("id")): bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+    }
+
+    before_count = len(graph.get("bubbles") or [])
+    graph["bubbles"] = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if not (
+            isinstance(bubble, dict)
+            and (
+                _safe_text(bubble.get("id")) == DEMO_BALANCE_ANCHOR_NEUTRAL_ID
+                or _safe_text(bubble.get("label")) == DEMO_BALANCE_NEUTRAL_LABEL
+            )
+        )
+    ]
+    if len(graph.get("bubbles") or []) != before_count:
+        changed = True
+
+    anchor_specs = [
+        ("a", DEMO_BALANCE_ANCHOR_A_ID, _demo_balance_anchor_label("a", demo_config), "primary", 7, 0.94),
+        ("b", DEMO_BALANCE_ANCHOR_B_ID, _demo_balance_anchor_label("b", demo_config), "primary", 7, 0.94),
+    ]
+    for choice, bubble_id, label, emphasis, count, importance in anchor_specs:
+        label = _normalize_ideation_keyword_text(label)
+        if not label:
+            continue
+        bubble = existing_by_id.get(bubble_id)
+        if bubble is None:
+            bubble = {
+                "id": bubble_id,
+                "label": label,
+                "canonical_label": label,
+                "aliases": [],
+                "kind": "topic",
+                "count": count,
+                "importance": importance,
+                "relevance": 1.0,
+                "activity": 1.0,
+                "opacity": 1.0,
+                "emphasis": emphasis,
+                "display_state": "active",
+                "layout_zone": "core",
+                "missing_cycles": 0,
+                "anchor_id": "",
+                "choice_affinity": choice,
+                "affinity_score": 1.0,
+                "durable": True,
+                "related_ids": [],
+                "evidence_utterance_ids": [],
+                "first_seen_at": now,
+                "last_seen_at": now,
+                "last_seen_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
+                "off_topic": False,
+                "off_topic_reason": "",
+                "archive_reason": "",
+                "lifecycle_state": "active",
+                "role": "center",
+                "orbit_order_key": 0.0,
+                "orbit_slot_index": 0,
+            }
+            graph.setdefault("bubbles", []).append(bubble)
+            existing_by_id[bubble_id] = bubble
+            changed = True
+        if _safe_text(bubble.get("label")) != label or _safe_text(bubble.get("canonical_label")) != label:
+            previous_label = _safe_text(bubble.get("label"))
+            aliases = _dedup_preserve([*(bubble.get("aliases") or []), previous_label], limit=20)
+            bubble["label"] = label
+            bubble["canonical_label"] = label
+            bubble["aliases"] = [value for value in aliases if value and value != label]
+            changed = True
+        desired_emphasis = "primary"
+        for key, value in {
+            "kind": "topic",
+            "display_state": "active",
+            "off_topic": False,
+            "off_topic_reason": "",
+            "archive_reason": "",
+            "lifecycle_state": "active",
+            "choice_affinity": choice,
+            "affinity_score": 1.0,
+            "durable": True,
+            "emphasis": desired_emphasis,
+            "orbit_order_key": 0.0,
+            "orbit_slot_index": 0,
+        }.items():
+            if bubble.get(key) != value:
+                bubble[key] = value
+                changed = True
+        bubble["count"] = max(count, _safe_nonnegative_int(bubble.get("count"), count))
+        bubble["importance"] = max(importance, _safe_float(bubble.get("importance"), importance))
+        bubble["relevance"] = max(0.9, _safe_float(bubble.get("relevance"), 1.0))
+        bubble["activity"] = max(1.0, _safe_float(bubble.get("activity"), 0.0))
+
+    changed = _normalize_demo_balance_graph_affinities(graph) or changed
+
+    return changed
+
+
+def _normalize_demo_balance_graph_affinities(graph: dict[str, Any]) -> bool:
+    changed = False
+    side_counts = {"a": 0, "b": 0}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict) or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            side_counts[affinity] += 1
+
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict) or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            desired_anchor = _demo_balance_anchor_id(affinity)
+            if _safe_text(bubble.get("anchor_id")) != desired_anchor:
+                bubble["anchor_id"] = desired_anchor
+                changed = True
+            continue
+
+        target = "a" if side_counts["a"] <= side_counts["b"] else "b"
+        side_counts[target] += 1
+        bubble["choice_affinity"] = target
+        bubble["anchor_id"] = _demo_balance_anchor_id(target)
+        bubble["affinity_score"] = min(_safe_float(bubble.get("affinity_score"), 0.0), 0.24)
+        bubble["needs_affinity_review"] = True
+        changed = True
+    return changed
+
+
+def _ensure_demo_balance_workspace_graph(workspace: dict[str, Any], saved_at: str = "") -> bool:
+    demo_config = _normalize_canvas_demo_config(workspace.get("demo_config"))
+    if not _is_demo_balance_config(demo_config):
+        return False
+
+    graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+    changed = _ensure_demo_balance_anchor_bubbles(graph, demo_config)
+    layout_changed = _ensure_ideation_bubble_graph_server_layout(graph)
+    if changed:
+        graph["update_cycle"] = max(1, _safe_nonnegative_int(graph.get("update_cycle"), 0))
+        graph["layout_revision"] = max(1, _safe_nonnegative_int(graph.get("layout_revision"), 0))
+        graph["updated_at"] = saved_at or _now_ts()
+    elif layout_changed and not _safe_text(graph.get("updated_at")):
+        graph["updated_at"] = saved_at or _now_ts()
+    workspace["demo_config"] = demo_config
+    workspace["ideation_bubble_graph"] = graph
+    return changed or layout_changed
 
 
 def _ideation_bubble_graph_text_maps(
@@ -6293,7 +9407,11 @@ def _ideation_bubble_graph_text_maps(
         if not isinstance(bubble, dict):
             continue
         by_id[_safe_text(bubble.get("id"))] = bubble
-        texts = [_safe_text(bubble.get("label")), *[_safe_text(value) for value in (bubble.get("aliases") or [])]]
+        texts = [
+            _safe_text(bubble.get("label")),
+            _safe_text(bubble.get("canonical_label")),
+            *[_safe_text(value) for value in (bubble.get("aliases") or [])],
+        ]
         for text in texts:
             key = _ideation_bubble_text_key(text)
             if key:
@@ -6301,9 +9419,21 @@ def _ideation_bubble_graph_text_maps(
     return by_id, by_text
 
 
-def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[IdeationExistingKeywordInput]:
-    bubbles = [item for item in (graph.get("bubbles") or []) if isinstance(item, dict)]
-    visible_rank = {"active": 0, "dimmed": 1, "archived": 2}
+def _ideation_bubble_existing_keyword_inputs(
+    graph: dict[str, Any],
+    *,
+    include_exiting: bool = False,
+) -> list[IdeationExistingKeywordInput]:
+    bubbles = [
+        item
+        for item in (graph.get("bubbles") or [])
+        if isinstance(item, dict)
+        and (
+            _is_ideation_bubble_visible_state(item.get("display_state"))
+            or (include_exiting and _normalize_ideation_bubble_state(item.get("display_state")) == "exiting")
+        )
+    ]
+    visible_rank = {"active": 0, "dimmed": 1, "exiting": 2, "archived": 3}
     bubbles.sort(
         key=lambda item: (
             visible_rank.get(_normalize_ideation_bubble_state(item.get("display_state")), 3),
@@ -6327,7 +9457,19 @@ def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[Idea
         anchor_label = _safe_text((by_id.get(_safe_text(bubble.get("anchor_id"))) or {}).get("label"))
         existing.append(
             IdeationExistingKeywordInput(
+                id=_safe_text(bubble.get("id")),
                 text=_safe_text(bubble.get("label")),
+                canonical_label=_safe_text(bubble.get("canonical_label")) or _safe_text(bubble.get("label")),
+                aliases=[
+                    _normalize_ideation_keyword_text(value)
+                    for value in (bubble.get("aliases") or [])
+                    if _normalize_ideation_keyword_text(value)
+                ][:8],
+                evidence_utterance_ids=[
+                    _safe_text(value)
+                    for value in (bubble.get("evidence_utterance_ids") or [])
+                    if _safe_text(value)
+                ][:10],
                 count=max(1, _safe_nonnegative_int(bubble.get("count"), 1) or 1),
                 related=related_labels,
                 kind=_safe_text(bubble.get("kind"), "topic"),
@@ -6335,13 +9477,22 @@ def _ideation_bubble_existing_keyword_inputs(graph: dict[str, Any]) -> list[Idea
                 relevance=max(0.0, min(1.0, _safe_float(bubble.get("relevance"), 1.0))),
                 off_topic=bool(bubble.get("off_topic")),
                 anchor=anchor_label,
+                choice_affinity=_safe_text(bubble.get("choice_affinity")),
+                affinity_score=max(0.0, min(1.0, _safe_float(bubble.get("affinity_score"), 0.0))),
+                needs_affinity_review=bool(bubble.get("needs_affinity_review") or bubble.get("needsAffinityReview")),
             )
         )
     return existing
 
 
-def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str) -> None:
-    bubble["display_state"] = "archived"
+def _archive_ideation_bubble(bubble: dict[str, Any], cycle: int, reason: str, *, exiting: bool = False) -> None:
+    if _is_demo_balance_anchor_bubble(bubble):
+        bubble["display_state"] = "active"
+        bubble["archive_reason"] = ""
+        bubble["missing_cycles"] = 0
+        bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+        return
+    bubble["display_state"] = "exiting" if exiting else "archived"
     bubble["layout_zone"] = "archived"
     bubble["activity"] = min(_safe_float(bubble.get("activity"), 0.0), 0.12)
     bubble["opacity"] = 0.0
@@ -6360,7 +9511,7 @@ def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
         for bubble in (graph.get("bubbles") or [])
         if isinstance(bubble, dict)
         and _safe_text(bubble.get("id"))
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
         and not bool(bubble.get("off_topic"))
     ]
     if not candidates:
@@ -6383,11 +9534,17 @@ def _ideation_bubble_core_ids(graph: dict[str, Any]) -> set[str]:
             _safe_text(bubble.get("label")),
         ),
     )[:top_n]
-    return {
+    core_ids = {
         _safe_text(bubble.get("id"))
         for bubble in [*by_count, *by_importance]
         if _safe_text(bubble.get("id"))
     }
+    core_ids.update(
+        _safe_text(bubble.get("id"))
+        for bubble in candidates
+        if _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+    )
+    return core_ids
 
 
 def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str]) -> None:
@@ -6396,7 +9553,7 @@ def _apply_ideation_bubble_layout_zones(graph: dict[str, Any], core_ids: set[str
             continue
         bubble_id = _safe_text(bubble.get("id"))
         state = _normalize_ideation_bubble_state(bubble.get("display_state"))
-        if state == "archived":
+        if state in {"exiting", "archived"}:
             bubble["layout_zone"] = "archived"
             continue
         if bubble_id in core_ids and not bool(bubble.get("off_topic")):
@@ -6415,41 +9572,54 @@ def _apply_ideation_bubble_decay(
     touched_ids: set[str],
     core_ids: set[str],
     cycle: int,
+    *,
+    dim_cycles: int = IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES,
+    archive_cycles: int = IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES,
+    off_topic_archive_cycles: int = IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES,
+    exit_before_archive: bool = False,
 ) -> None:
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
         if _safe_text(bubble.get("id")) in touched_ids:
             continue
-        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) in {"exiting", "archived"}:
             continue
         missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1
         bubble["missing_cycles"] = missing_cycles
         bubble["activity"] = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.4) * 0.62))
         is_core = _safe_text(bubble.get("id")) in core_ids
-        if bool(bubble.get("off_topic")) and missing_cycles >= IDEATION_BUBBLE_GRAPH_OFF_TOPIC_ARCHIVE_CYCLES:
-            _archive_ideation_bubble(bubble, cycle, "off_topic_inactive")
-        elif missing_cycles >= IDEATION_BUBBLE_GRAPH_ARCHIVE_MISSING_CYCLES and not is_core:
-            _archive_ideation_bubble(bubble, cycle, "inactive_low_importance")
-        elif missing_cycles >= IDEATION_BUBBLE_GRAPH_DIM_MISSING_CYCLES and not is_core:
+        if bool(bubble.get("off_topic")) and missing_cycles >= off_topic_archive_cycles:
+            _archive_ideation_bubble(bubble, cycle, "off_topic_inactive", exiting=exit_before_archive)
+        elif missing_cycles >= archive_cycles and not is_core:
+            _archive_ideation_bubble(bubble, cycle, "inactive_low_importance", exiting=exit_before_archive)
+        elif missing_cycles >= dim_cycles and not is_core:
             bubble["display_state"] = "dimmed"
         else:
             bubble["display_state"] = "active"
 
 
-def _apply_ideation_bubble_visual_state(graph: dict[str, Any], core_ids: set[str]) -> None:
+def _apply_ideation_bubble_visual_state(
+    graph: dict[str, Any],
+    core_ids: set[str],
+    *,
+    primary_ids: set[str] | None = None,
+) -> None:
+    explicit_primary_ids = primary_ids is not None
+    resolved_primary_ids = primary_ids or set()
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
         state = _normalize_ideation_bubble_state(bubble.get("display_state"))
         bubble_id = _safe_text(bubble.get("id"))
         off_topic = bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic"
-        if state == "archived":
+        if state in {"exiting", "archived"}:
             bubble["opacity"] = 0.0
             bubble["emphasis"] = "default"
             continue
 
-        if bubble_id in core_ids and not off_topic:
+        is_primary = bubble_id in resolved_primary_ids if explicit_primary_ids else bubble_id in core_ids
+        if is_primary and not off_topic:
             bubble["opacity"] = 1.0
             bubble["emphasis"] = "primary"
             bubble["display_state"] = "active"
@@ -6484,6 +9654,27 @@ def _prune_archived_ideation_bubbles(graph: dict[str, Any]) -> None:
             if related_id in visible_ids and related_id != _safe_text(bubble.get("id"))
         ][:12]
     graph["bubbles"] = visible
+
+
+def _prune_exiting_ideation_bubbles(graph: dict[str, Any]) -> None:
+    graph["bubbles"] = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "exiting"
+    ]
+
+
+def _ideation_bubble_state_counts(graph: dict[str, Any]) -> dict[str, int]:
+    counts = {"active": 0, "dimmed": 0, "exiting": 0, "archived": 0, "provisional": 0}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        state = _normalize_ideation_bubble_state(bubble.get("display_state"))
+        counts[state] = counts.get(state, 0) + 1
+        if _safe_text(bubble.get("lifecycle_state")).lower() == "provisional":
+            counts["provisional"] += 1
+    return counts
 
 
 def _ideation_bubble_seed_ratio(value: str, salt: int) -> float:
@@ -6529,6 +9720,40 @@ def _ideation_bubble_layout_circles_overlap(
 
 def _ideation_bubble_layout_clusters(bubbles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     by_id = {_safe_text(bubble.get("id")): bubble for bubble in bubbles if _safe_text(bubble.get("id"))}
+    if any(_safe_text(bubble.get("choice_affinity")).lower() in DEMO_BALANCE_AFFINITIES for bubble in bubbles):
+        clusters: list[list[dict[str, Any]]] = []
+        assigned_ids: set[str] = set()
+        for choice in ("a", "b"):
+            anchor_id = _demo_balance_anchor_id(choice)
+            cluster: list[dict[str, Any]] = []
+            anchor = by_id.get(anchor_id)
+            if anchor:
+                cluster.append(anchor)
+                assigned_ids.add(anchor_id)
+            for bubble in bubbles:
+                bubble_id = _safe_text(bubble.get("id"))
+                if not bubble_id or bubble_id in assigned_ids:
+                    continue
+                affinity = _safe_text(bubble.get("choice_affinity")).lower()
+                if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+                    affinity = "a" if len(clusters) == 0 else "b"
+                if affinity == choice or _safe_text(bubble.get("anchor_id")) == anchor_id:
+                    cluster.append(bubble)
+                    assigned_ids.add(bubble_id)
+            if cluster:
+                clusters.append(cluster)
+        remaining = [
+            bubble
+            for bubble in bubbles
+            if _safe_text(bubble.get("id")) and _safe_text(bubble.get("id")) not in assigned_ids
+        ]
+        if remaining:
+            if clusters:
+                clusters[-1].extend(remaining)
+            else:
+                clusters.append(remaining)
+        return clusters
+
     adjacency: dict[str, set[str]] = {bubble_id: set() for bubble_id in by_id}
     for bubble in bubbles:
         bubble_id = _safe_text(bubble.get("id"))
@@ -6578,6 +9803,19 @@ def _ideation_bubble_has_number(raw: Any) -> bool:
 def _ideation_bubble_cluster_anchor(cluster: list[dict[str, Any]]) -> dict[str, Any]:
     if not cluster:
         return {}
+    demo_anchors = [
+        bubble
+        for bubble in cluster
+        if _safe_text(bubble.get("id")) in _demo_balance_anchor_ids()
+    ]
+    if demo_anchors:
+        return sorted(
+            demo_anchors,
+            key=lambda bubble: (
+                0,
+                _safe_text(bubble.get("id")),
+            ),
+        )[0]
     return sorted(
         cluster,
         key=lambda bubble: (
@@ -6925,62 +10163,1051 @@ def _relax_ideation_bubble_layout(placements: list[dict[str, Any]]) -> list[dict
     return relaxed
 
 
-def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
-    visible = [
-        bubble
-        for bubble in (graph.get("bubbles") or [])
-        if isinstance(bubble, dict)
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
-    ]
-    if not visible:
-        graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
-        return
-
-    max_count = max(1, *[_safe_nonnegative_int(bubble.get("count"), 1) for bubble in visible])
-    for bubble in visible:
-        bubble["size"] = _ideation_bubble_layout_size(bubble, max_count)
-
-    clusters = _ideation_bubble_layout_clusters(visible)
-    cluster_boxes: list[dict[str, Any]] = []
-    for cluster_index, cluster in enumerate(clusters):
-        anchor = _ideation_bubble_cluster_anchor(cluster)
-        anchor_key = _safe_text(anchor.get("id")) or _safe_text(anchor.get("label")) or str(cluster_index)
-        cluster_id = f"bubble-cluster-{_stable_short_id(anchor_key)}"
-        cluster_boxes.append(_ideation_bubble_cluster_box(cluster, cluster_id))
-
-    cluster_boxes.sort(
-        key=lambda box: (
-            0 if _safe_text(box.get("zone")) == "core" else 1 if _safe_text(box.get("zone")) == "default" else 2,
-            -max(
-                _safe_nonnegative_int((placement.get("bubble") or {}).get("count"), 1)
-                for placement in box.get("placements") or [{"bubble": {}}]
-            ),
-            -float(box.get("width") or 0) * float(box.get("height") or 0),
-            _safe_text(box.get("cluster_id")),
-        )
+def _ideation_bubble_rank_tuple(bubble: dict[str, Any]) -> tuple[int, float, float, str]:
+    return (
+        _safe_nonnegative_int(bubble.get("count"), 1),
+        _safe_float(bubble.get("importance"), 0.0),
+        _safe_float(bubble.get("activity"), 0.0),
+        _safe_text(bubble.get("label")),
     )
 
-    placements = _place_ideation_bubble_cluster_boxes(cluster_boxes)
+
+def _split_large_ideation_bubble_orbit_cluster(cluster: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if any(_safe_text(bubble.get("id")) in _demo_balance_anchor_ids() for bubble in cluster):
+        return [cluster]
+    if len(cluster) <= 7:
+        return [cluster]
+
+    ranked = sorted(
+        cluster,
+        key=lambda bubble: (
+            -_safe_nonnegative_int(bubble.get("count"), 1),
+            -_safe_float(bubble.get("importance"), 0.0),
+            -_safe_float(bubble.get("activity"), 0.0),
+            _safe_text(bubble.get("label")),
+        ),
+    )
+    target_count = min(
+        IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS,
+        max(2, math.ceil(len(ranked) / 7)),
+    )
+    seeds = ranked[:target_count]
+    buckets: list[list[dict[str, Any]]] = [[seed] for seed in seeds]
+    seed_ids = [_safe_text(seed.get("id")) for seed in seeds]
+
+    for bubble in ranked[target_count:]:
+        related_ids = set(_safe_list_texts(bubble.get("related_ids")))
+        anchor_id = _safe_text(bubble.get("anchor_id"))
+        chosen_index: int | None = None
+        for index, seed_id in enumerate(seed_ids):
+            if seed_id and (seed_id == anchor_id or seed_id in related_ids):
+                chosen_index = index
+                break
+        if chosen_index is None:
+            chosen_index = min(range(len(buckets)), key=lambda index: len(buckets[index]))
+        buckets[chosen_index].append(bubble)
+
+    return buckets
+
+
+def _ideation_bubble_orbit_clusters(visible: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if any(_safe_text(bubble.get("choice_affinity")).lower() in DEMO_BALANCE_AFFINITIES for bubble in visible):
+        return _ideation_bubble_layout_clusters(visible)[:IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS]
+
+    expanded: list[list[dict[str, Any]]] = []
+    for cluster in _ideation_bubble_layout_clusters(visible):
+        expanded.extend(_split_large_ideation_bubble_orbit_cluster(cluster))
+
+    expanded.sort(
+        key=lambda cluster: (
+            0 if _ideation_bubble_cluster_zone(cluster) == "core" else 1,
+            -max(_safe_nonnegative_int(bubble.get("count"), 1) for bubble in cluster),
+            -max(_safe_float(bubble.get("importance"), 0.0) for bubble in cluster),
+            _safe_text(_ideation_bubble_cluster_anchor(cluster).get("label")),
+        )
+    )
+    if len(expanded) <= IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS:
+        return expanded
+
+    primary = [list(cluster) for cluster in expanded[:IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS]]
+    primary_id_sets = [
+        {_safe_text(bubble.get("id")) for bubble in cluster if _safe_text(bubble.get("id"))}
+        for cluster in primary
+    ]
+    for extra_cluster in expanded[IDEATION_BUBBLE_GRAPH_MAX_ORBIT_CLUSTERS:]:
+        anchor = _ideation_bubble_cluster_anchor(extra_cluster)
+        anchor_id = _safe_text(anchor.get("anchor_id"))
+        related_ids = set(_safe_list_texts(anchor.get("related_ids")))
+        chosen_index: int | None = None
+        for index, id_set in enumerate(primary_id_sets):
+            if (anchor_id and anchor_id in id_set) or related_ids.intersection(id_set):
+                chosen_index = index
+                break
+        if chosen_index is None:
+            chosen_index = min(range(len(primary)), key=lambda index: len(primary[index]))
+        primary[chosen_index].extend(extra_cluster)
+        primary_id_sets[chosen_index].update(
+            _safe_text(bubble.get("id"))
+            for bubble in extra_cluster
+            if _safe_text(bubble.get("id"))
+        )
+    return primary
+
+
+def _ideation_bubble_orbit_cluster_id(cluster: list[dict[str, Any]], fallback_index: int) -> str:
+    anchor = _ideation_bubble_cluster_anchor(cluster)
+    anchor_key = _safe_text(anchor.get("id")) or _safe_text(anchor.get("label")) or str(fallback_index)
+    return f"bubble-orbit-{_stable_short_id(anchor_key)}"
+
+
+def _ideation_bubble_orbit_previous_center(
+    graph: dict[str, Any],
+    cluster_id: str,
+) -> tuple[float, float] | None:
+    for cluster in graph.get("clusters") or []:
+        if not isinstance(cluster, dict):
+            continue
+        if _safe_text(cluster.get("id")) != cluster_id:
+            continue
+        if _ideation_bubble_has_number(cluster.get("x")) and _ideation_bubble_has_number(cluster.get("y")):
+            return float(cluster.get("x") or 0), float(cluster.get("y") or 0)
+    return None
+
+
+def _ideation_bubble_orbit_desired_center(index: int, total: int) -> tuple[float, float]:
+    if total <= 1:
+        return IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 10
+    if total == 2:
+        centers = [
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - 235, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 95),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 275, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y + 70),
+        ]
+    else:
+        centers = [
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X - 310, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 120),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 315, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y - 70),
+            (IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X + 10, IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y + 220),
+        ]
+    return centers[min(index, len(centers) - 1)]
+
+
+def _clamp_ideation_bubble_orbit_center(x: float, y: float, radius: float) -> tuple[float, float]:
+    margin_x = IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_X + radius
+    margin_y = IDEATION_BUBBLE_GRAPH_LAYOUT_MARGIN_Y + radius
+    max_x = max(margin_x, IDEATION_BUBBLE_GRAPH_LAYOUT_WIDTH - margin_x)
+    max_y = max(margin_y, IDEATION_BUBBLE_GRAPH_LAYOUT_HEIGHT - margin_y)
+    return (
+        max(margin_x, min(max_x, x)),
+        max(margin_y, min(max_y, y)),
+    )
+
+
+def _ideation_bubble_orbit_role(bubble: dict[str, Any], center_id: str) -> str:
+    bubble_id = _safe_text(bubble.get("id"))
+    if bubble_id == center_id:
+        return "center"
+    if _is_demo_balance_bubble(bubble):
+        return "satellite"
+    if bool(bubble.get("off_topic")) or _safe_text(bubble.get("kind")) == "off_topic":
+        return "satellite"
+    layout_zone = _normalize_ideation_bubble_layout_zone(bubble.get("layout_zone"))
+    count = _safe_nonnegative_int(bubble.get("count"), 1)
+    importance = _safe_float(bubble.get("importance"), 0.0)
+    relevance = _safe_float(bubble.get("relevance"), 1.0)
+    if layout_zone == "peripheral" and count <= 2 and importance < 0.52:
+        return "dot"
+    if count <= 1 and importance < 0.42 and relevance < 0.72:
+        return "dot"
+    return "satellite"
+
+
+def _is_demo_balance_bubble(bubble: dict[str, Any]) -> bool:
+    bubble_id = _safe_text(bubble.get("id"))
+    affinity = _safe_text(bubble.get("choice_affinity")).lower()
+    return bubble_id in _demo_balance_anchor_ids() or affinity in DEMO_BALANCE_AFFINITIES
+
+
+def _ideation_bubble_orbit_size(bubble: dict[str, Any], max_count: int, role: str) -> int:
+    if _is_demo_balance_bubble(bubble):
+        current_size = _safe_nonnegative_int(bubble.get("size"), 0)
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting" and current_size > 0:
+            return current_size
+        bubble_id = _safe_text(bubble.get("id"))
+        if role == "center":
+            if bubble_id == DEMO_BALANCE_ANCHOR_NEUTRAL_ID:
+                return DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE
+            return DEMO_BALANCE_CENTER_BUBBLE_SIZE
+        if bool(bubble.get("needs_affinity_review") or bubble.get("needsAffinityReview")):
+            return DEMO_BALANCE_REVIEW_BUBBLE_SIZE
+        return DEMO_BALANCE_SATELLITE_BUBBLE_SIZE
+
+    base = _ideation_bubble_layout_size(bubble, max_count)
+    if role == "center":
+        if _safe_text(bubble.get("id")) == DEMO_BALANCE_ANCHOR_NEUTRAL_ID:
+            return 76
+        return int(round(max(122, min(154, base * 0.82))))
+    if role == "dot":
+        return int(round(max(18, min(21, base * 0.13))))
+    return int(round(max(64, min(88, base * 0.52))))
+
+
+def _ideation_bubble_orbit_rings(center_size: int, cluster_size: int, total_clusters: int) -> list[float]:
+    scale = 0.88 if total_clusters >= 3 else 1.0
+    first = max(142.0, min(198.0, center_size * 0.72 + 82.0)) * scale
+    second = first + (88.0 if total_clusters >= 3 else 104.0)
+    rings = [round(first, 2)]
+    if cluster_size > 3:
+        rings.append(round(second, 2))
+    return rings
+
+
+def _is_demo_balance_orbit_cluster(cluster: list[dict[str, Any]]) -> bool:
+    return any(
+        _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+        for bubble in cluster
+        if isinstance(bubble, dict)
+    )
+
+
+def _demo_balance_orbit_order_key(bubble: dict[str, Any], cycle: int, fallback_index: int) -> float:
+    raw_order = bubble.get("orbit_order_key")
+    if _ideation_bubble_has_number(raw_order) and float(raw_order) > 0:
+        return float(raw_order)
+
+    first_seen_cycle = _safe_nonnegative_int(bubble.get("first_seen_cycle"), 0)
+    if first_seen_cycle > 0:
+        return float(first_seen_cycle * 1000 + fallback_index)
+
+    last_seen_cycle = _safe_nonnegative_int(bubble.get("last_seen_cycle"), 0)
+    if last_seen_cycle > 0:
+        return float(last_seen_cycle * 1000 + fallback_index)
+
+    created = _safe_text(bubble.get("first_seen_at"))
+    if created:
+        try:
+            return float(max(1, int(_stable_short_id(created), 16) % 1000000))
+        except Exception:
+            return float(cycle * 1000 + fallback_index)
+
+    return float(max(1, cycle * 1000 + fallback_index))
+
+
+def _demo_balance_reassign_orbit_orders(
+    cluster: list[dict[str, Any]],
+    cycle: int,
+    center_id: str,
+) -> None:
+    target_affinity = "a" if center_id == DEMO_BALANCE_ANCHOR_A_ID else "b"
+    next_order = max(
+        [
+            _safe_float(bubble.get("orbit_order_key"), 0.0)
+            for bubble in cluster
+            if isinstance(bubble, dict) and _safe_float(bubble.get("orbit_order_key"), 0.0) > 0
+        ]
+        or [float(cycle * 1000)]
+    )
+    used_orders: set[float] = set()
+    for index, bubble in enumerate(cluster):
+        if not isinstance(bubble, dict) or _safe_text(bubble.get("id")) == center_id:
+            continue
+        raw_order = _safe_float(bubble.get("orbit_order_key"), 0.0)
+        rounded_raw_order = round(raw_order, 4)
+        previous_anchor_id = _safe_text(bubble.get("anchor_id"))
+        previous_affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        moved_orbit = (
+            previous_anchor_id
+            and previous_anchor_id != center_id
+        ) or (
+            previous_affinity in DEMO_BALANCE_DISPLAY_AFFINITIES
+            and previous_affinity != target_affinity
+        )
+        needs_new_order = (
+            moved_orbit
+            or not _ideation_bubble_has_number(bubble.get("orbit_order_key"))
+            or raw_order <= 0
+            or rounded_raw_order in used_orders
+        )
+        if needs_new_order:
+            next_order = max(
+                next_order + 1,
+                _demo_balance_orbit_order_key(bubble, cycle, index),
+            )
+            assigned_order = round(next_order, 4)
+            bubble["orbit_order_key"] = assigned_order
+            used_orders.add(assigned_order)
+        else:
+            assigned_order = round(raw_order, 4)
+            bubble["orbit_order_key"] = assigned_order
+            used_orders.add(assigned_order)
+
+
+def _demo_balance_orbit_ring_for_slot(slot_index: int) -> int:
+    if slot_index < 8:
+        return 1
+    if slot_index < 20:
+        return 2
+    return 3 + max(0, slot_index - 20) // 16
+
+
+def _demo_balance_orbit_ring_capacity_limit(ring: int) -> int:
+    if ring <= 1:
+        return 8
+    if ring == 2:
+        return 12
+    return 16
+
+
+def _demo_balance_orbit_ring_start_index(ring: int) -> int:
+    if ring <= 1:
+        return 0
+    if ring == 2:
+        return 8
+    return 20 + max(0, ring - 3) * 16
+
+
+def _demo_balance_orbit_ring_slot_count(ring: int, total: int) -> int:
+    start_index = _demo_balance_orbit_ring_start_index(ring)
+    if total <= start_index:
+        return 0
+    return min(_demo_balance_orbit_ring_capacity_limit(ring), total - start_index)
+
+
+def _demo_balance_revolver_insert_angle() -> float:
+    # Screen coordinates use positive Y downward; -135deg is visually near 10 o'clock.
+    return -math.pi * 3 / 4
+
+
+def _demo_balance_revolver_slot_angle(slot_index: int, slot_count: int) -> float:
+    safe_slot_count = max(1, slot_count)
+    # Decreasing mathematical angle rotates visually counterclockwise in screen coordinates.
+    return _demo_balance_revolver_insert_angle() - slot_index * (math.pi * 2 / safe_slot_count)
+
+
+def _demo_balance_graph_bubbles_by_id(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        _safe_text(bubble.get("id")): bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+    }
+
+
+def _demo_balance_same_orbit(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    return (
+        _safe_text(previous.get("orbit_center_id"))
+        and _safe_text(previous.get("orbit_center_id")) == _safe_text(current.get("orbit_center_id"))
+    )
+
+
+def _demo_balance_mark_motion(
+    bubble: dict[str, Any],
+    *,
+    reason: str,
+    direction: str,
+    sequence: int = 0,
+    delay_ms: int = 0,
+    plan_id: str = "",
+    from_slot_index: int = 0,
+    to_slot_index: int = 0,
+    move_cost: float = 0.0,
+    gate_blocked: bool = False,
+) -> None:
+    bubble["motion_reason"] = reason
+    bubble["motion_direction"] = direction
+    bubble["motion_plan_id"] = _safe_text(plan_id)
+    bubble["from_slot_index"] = max(0, int(from_slot_index))
+    bubble["to_slot_index"] = max(0, int(to_slot_index))
+    bubble["move_cost"] = round(max(0.0, float(move_cost or 0.0)), 2)
+    bubble["gate_blocked"] = bool(gate_blocked)
+    bubble["enter_sequence"] = max(0, int(sequence))
+    bubble["enter_delay_ms"] = max(0, int(delay_ms))
+    bubble["gate_angle"] = round(_demo_balance_revolver_insert_angle(), 6)
+
+
+_DEMO_BALANCE_SLOT_LAYOUT_FIELDS = (
+    "x",
+    "y",
+    "cluster_id",
+    "cluster_x",
+    "cluster_y",
+    "local_x",
+    "local_y",
+    "role",
+    "orbit_center_id",
+    "orbit_ring",
+    "orbit_angle",
+    "orbit_radius",
+    "orbit_slot_index",
+)
+
+
+def _demo_balance_motion_plan_id(graph: dict[str, Any], signature: str) -> str:
+    cycle = _safe_nonnegative_int(graph.get("update_cycle"), 0)
+    return f"demo-orbit-plan-{cycle}-{_stable_short_id(signature)[:8]}"
+
+
+def _demo_balance_copy_slot_layout(target: dict[str, Any], source: dict[str, Any]) -> None:
+    target_size = max(1, _safe_nonnegative_int(target.get("size"), _safe_nonnegative_int(source.get("size"), 64)))
+    source_size = max(1, _safe_nonnegative_int(source.get("size"), target_size))
+    source_center_x = _safe_float(source.get("x"), 0.0) + source_size / 2
+    source_center_y = _safe_float(source.get("y"), 0.0) + source_size / 2
+    for field in _DEMO_BALANCE_SLOT_LAYOUT_FIELDS:
+        if field in {"x", "y", "local_x", "local_y"}:
+            continue
+        target[field] = copy.deepcopy(source.get(field))
+    target["x"] = round(source_center_x - target_size / 2, 2)
+    target["y"] = round(source_center_y - target_size / 2, 2)
+    cluster_x = _safe_float(target.get("cluster_x"), 0.0)
+    cluster_y = _safe_float(target.get("cluster_y"), 0.0)
+    target["local_x"] = round(target["x"] - cluster_x, 2)
+    target["local_y"] = round(target["y"] - cluster_y, 2)
+
+
+def _demo_balance_shortest_angle_delta(from_angle: float, to_angle: float) -> float:
+    return math.atan2(math.sin(to_angle - from_angle), math.cos(to_angle - from_angle))
+
+
+def _demo_balance_apply_gate_pose(bubble: dict[str, Any]) -> None:
+    size = max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+    cluster_x = _safe_float(bubble.get("cluster_x"), IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_X)
+    cluster_y = _safe_float(bubble.get("cluster_y"), IDEATION_BUBBLE_GRAPH_LAYOUT_CENTER_Y)
+    radius = max(1.0, _safe_float(bubble.get("orbit_radius"), 150.0))
+    angle = _demo_balance_revolver_insert_angle()
+    raw_x = cluster_x + math.cos(angle) * radius - size / 2
+    raw_y = cluster_y + math.sin(angle) * radius - size / 2
+    x, y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+    bubble["x"] = round(x, 2)
+    bubble["y"] = round(y, 2)
+    bubble["local_x"] = round(x - cluster_x, 2)
+    bubble["local_y"] = round(y - cluster_y, 2)
+    bubble["orbit_slot_index"] = 0
+    bubble["orbit_angle"] = round(angle, 6)
+
+
+def _demo_balance_assign_nearest_open_rail_slots(
+    previous_graph: dict[str, Any],
+    final_graph: dict[str, Any],
+    new_bubble_ids: set[str],
+) -> dict[str, Any]:
+    previous_by_id = _demo_balance_graph_bubbles_by_id(previous_graph)
+    final_by_id = _demo_balance_graph_bubbles_by_id(final_graph)
+    assigned_count = 0
+    total_move_cost = 0.0
+    max_move_cost = 0.0
+    groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for bubble in final_by_id.values():
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id in new_bubble_ids or bubble_id not in previous_by_id or _is_demo_balance_anchor_bubble(bubble):
+            continue
+        previous = previous_by_id.get(bubble_id) or {}
+        if _safe_text(previous.get("orbit_center_id")) != _safe_text(bubble.get("orbit_center_id")):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        key = (
+            _safe_text(bubble.get("orbit_center_id")),
+            _safe_nonnegative_int(bubble.get("orbit_ring"), 0),
+        )
+        if not key[0] or key[1] <= 0:
+            continue
+        groups.setdefault(key, []).append(bubble)
+
+    def _center_of(item: dict[str, Any]) -> tuple[float, float]:
+        size = max(1, _safe_nonnegative_int(item.get("size"), 64))
+        return (
+            _safe_float(item.get("x"), 0.0) + size / 2,
+            _safe_float(item.get("y"), 0.0) + size / 2,
+        )
+
+    def _orbit_center_for_slot(slot: dict[str, Any]) -> tuple[float, float]:
+        slot_x, slot_y = _center_of(slot)
+        angle = _safe_float(slot.get("orbit_angle"), 0.0)
+        radius = max(0.0, _safe_float(slot.get("orbit_radius"), 0.0))
+        if radius <= 0:
+            return slot_x, slot_y
+        return (
+            slot_x - math.cos(angle) * radius,
+            slot_y - math.sin(angle) * radius,
+        )
+
+    def _slot_cost_details(previous: dict[str, Any], slot: dict[str, Any]) -> dict[str, float]:
+        previous_x, previous_y = _center_of(previous)
+        orbit_x, orbit_y = _orbit_center_for_slot(slot)
+        current_angle = math.atan2(previous_y - orbit_y, previous_x - orbit_x)
+        current_radius = math.hypot(previous_x - orbit_x, previous_y - orbit_y)
+        target_angle = _safe_float(slot.get("orbit_angle"), current_angle)
+        target_radius = max(1.0, _safe_float(slot.get("orbit_radius"), current_radius or 1.0))
+        angle_delta = _demo_balance_shortest_angle_delta(current_angle, target_angle)
+        arc_radius = max(1.0, (current_radius + target_radius) / 2)
+        arc_cost = abs(angle_delta) * arc_radius
+        radius_cost = abs(target_radius - current_radius) * 0.65
+        previous_slot = _safe_nonnegative_int(previous.get("orbit_slot_index"), 0)
+        next_slot = _safe_nonnegative_int(slot.get("orbit_slot_index"), 0)
+        slot_delta = abs(next_slot - previous_slot)
+        move_cost = arc_cost + radius_cost + (arc_cost * arc_cost / 180.0) + slot_delta * 0.01
+        return {
+            "move_cost": move_cost,
+            "move_angle_delta": angle_delta,
+            "arc_cost": arc_cost,
+            "radius_cost": radius_cost,
+        }
+
+    def _slot_cost(previous: dict[str, Any], slot: dict[str, Any]) -> float:
+        return _slot_cost_details(previous, slot)["move_cost"]
+
+    def _minimum_cost_assignment(costs: list[list[float]]) -> list[int]:
+        count = len(costs)
+        if count == 0:
+            return []
+        if count > 16:
+            remaining = set(range(count))
+            assignment: list[int] = []
+            for row in costs:
+                chosen = min(remaining, key=lambda index: row[index])
+                remaining.remove(chosen)
+                assignment.append(chosen)
+            return assignment
+
+        full_mask = 1 << count
+        best_cost = [math.inf] * full_mask
+        parent: list[tuple[int, int] | None] = [None] * full_mask
+        best_cost[0] = 0.0
+        for mask in range(full_mask):
+            row_index = mask.bit_count()
+            if row_index >= count or not math.isfinite(best_cost[mask]):
+                continue
+            row = costs[row_index]
+            for slot_index in range(count):
+                if mask & (1 << slot_index):
+                    continue
+                next_mask = mask | (1 << slot_index)
+                next_cost = best_cost[mask] + row[slot_index]
+                if next_cost < best_cost[next_mask]:
+                    best_cost[next_mask] = next_cost
+                    parent[next_mask] = (mask, slot_index)
+
+        assignment = [0] * count
+        mask = full_mask - 1
+        for row_index in range(count - 1, -1, -1):
+            previous = parent[mask]
+            if previous is None:
+                assignment[row_index] = row_index
+                continue
+            previous_mask, slot_index = previous
+            assignment[row_index] = slot_index
+            mask = previous_mask
+        return assignment
+
+    for _key, bubbles in groups.items():
+        slot_snapshots = [
+            copy.deepcopy(bubble)
+            for bubble in sorted(
+                bubbles,
+                key=lambda item: (
+                    _safe_nonnegative_int(item.get("orbit_slot_index"), 0),
+                    _safe_text(item.get("id")),
+                ),
+            )
+        ]
+        ordered_bubbles = sorted(
+            bubbles,
+            key=lambda item: (
+                _safe_nonnegative_int((previous_by_id.get(_safe_text(item.get("id"))) or {}).get("orbit_slot_index"), 0),
+                _safe_text(item.get("id")),
+            ),
+        )
+        if len(slot_snapshots) != len(ordered_bubbles):
+            continue
+        costs = [
+            [
+                _slot_cost(previous_by_id.get(_safe_text(bubble.get("id"))) or bubble, slot)
+                for slot in slot_snapshots
+            ]
+            for bubble in ordered_bubbles
+        ]
+        assignment = _minimum_cost_assignment(costs)
+        for bubble_index, slot_index in enumerate(assignment):
+            if bubble_index >= len(ordered_bubbles) or slot_index >= len(slot_snapshots):
+                continue
+            bubble = ordered_bubbles[bubble_index]
+            bubble_id = _safe_text(bubble.get("id"))
+            previous = previous_by_id.get(bubble_id) or bubble
+            chosen = slot_snapshots[slot_index]
+            details = _slot_cost_details(previous, chosen)
+            move_cost = details["move_cost"]
+            _demo_balance_copy_slot_layout(bubble, chosen)
+            bubble["gate_blocked"] = False
+            bubble["move_cost"] = round(move_cost, 2)
+            bubble["move_angle_delta"] = round(details["move_angle_delta"], 6)
+            bubble["arc_cost"] = round(details["arc_cost"], 2)
+            bubble["radius_cost"] = round(details["radius_cost"], 2)
+            assigned_count += 1
+            total_move_cost += move_cost
+            max_move_cost = max(max_move_cost, move_cost)
+
+    return {
+        "assigned_count": assigned_count,
+        "gate_blocked_count": 0,
+        "total_move_cost": round(total_move_cost, 2),
+        "max_move_cost": round(max_move_cost, 2),
+    }
+
+
+def _annotate_demo_balance_motion_hints(
+    previous_graph: dict[str, Any],
+    next_graph: dict[str, Any],
+    *,
+    update_reason: str,
+    sequence: int = 0,
+    delay_ms: int = 0,
+    plan_id: str = "",
+) -> dict[str, int]:
+    previous_by_id = _demo_balance_graph_bubbles_by_id(previous_graph)
+    new_count = 0
+    relayout_count = 0
+    content_count = 0
+    exit_count = 0
+
+    for bubble in next_graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        previous = previous_by_id.get(bubble_id)
+
+        if _is_demo_balance_anchor_bubble(bubble):
+            _demo_balance_mark_motion(bubble, reason="content_update", direction="direct", plan_id=plan_id)
+            continue
+
+        if previous is None:
+            _demo_balance_mark_motion(
+                bubble,
+                reason="gate_enter",
+                direction="direct",
+                sequence=sequence,
+                delay_ms=delay_ms,
+                plan_id=plan_id,
+                from_slot_index=0,
+                to_slot_index=_safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                move_cost=0.0,
+            )
+            new_count += 1
+            continue
+
+        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting":
+            _demo_balance_mark_motion(
+                bubble,
+                reason="exit",
+                direction="direct",
+                plan_id=plan_id,
+                from_slot_index=_safe_nonnegative_int(previous.get("orbit_slot_index"), 0),
+                to_slot_index=_safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                move_cost=0.0,
+            )
+            exit_count += 1
+            continue
+
+        previous_slot = _safe_nonnegative_int(previous.get("orbit_slot_index"), 0)
+        current_slot = _safe_nonnegative_int(bubble.get("orbit_slot_index"), 0)
+        same_orbit = _demo_balance_same_orbit(previous, bubble)
+        same_ring = _safe_nonnegative_int(previous.get("orbit_ring"), 0) == _safe_nonnegative_int(bubble.get("orbit_ring"), 0)
+        same_position = (
+            abs(_safe_float(previous.get("x"), 0.0) - _safe_float(bubble.get("x"), 0.0)) < 0.5
+            and abs(_safe_float(previous.get("y"), 0.0) - _safe_float(bubble.get("y"), 0.0)) < 0.5
+            and same_orbit
+            and same_ring
+            and previous_slot == current_slot
+        )
+        move_cost = _safe_float(bubble.get("move_cost"), 0.0)
+
+        if same_position:
+            _demo_balance_mark_motion(
+                bubble,
+                reason="content_update",
+                direction="direct",
+                plan_id=plan_id,
+                from_slot_index=previous_slot,
+                to_slot_index=current_slot,
+                move_cost=0.0,
+            )
+            content_count += 1
+        else:
+            if not same_orbit:
+                reason = "relayout_transfer"
+                direction = "direct"
+            elif same_ring:
+                reason = "relayout"
+                direction = "nearest_arc"
+            else:
+                reason = "relayout"
+                direction = "orbit_radial_arc"
+            _demo_balance_mark_motion(
+                bubble,
+                reason=reason,
+                direction=direction,
+                plan_id=plan_id,
+                from_slot_index=previous_slot,
+                to_slot_index=current_slot,
+                move_cost=move_cost,
+            )
+            relayout_count += 1
+
+    return {
+        "new_count": new_count,
+        "relayout_count": relayout_count,
+        "push_count": 0,
+        "gap_count": 0,
+        "content_count": content_count,
+        "transfer_count": 0,
+        "overflow_count": 0,
+        "exit_count": exit_count,
+    }
+
+
+def _relax_ideation_bubble_orbit_placements(
+    placements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    if len(placements) < 2:
+        return placements, 0
+    relaxed = [dict(placement) for placement in placements]
+    resolved_count = 0
+    for iteration in range(90):
+        moved = False
+        for left_index in range(len(relaxed)):
+            for right_index in range(left_index + 1, len(relaxed)):
+                left = relaxed[left_index]
+                right = relaxed[right_index]
+                if not _ideation_bubble_layout_circles_overlap(left, right, IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP):
+                    continue
+
+                left_radius = max(1.0, float(left.get("size") or 1)) / 2
+                right_radius = max(1.0, float(right.get("size") or 1)) / 2
+                left_center_x = float(left.get("x") or 0) + left_radius
+                left_center_y = float(left.get("y") or 0) + left_radius
+                right_center_x = float(right.get("x") or 0) + right_radius
+                right_center_y = float(right.get("y") or 0) + right_radius
+                dx = right_center_x - left_center_x
+                dy = right_center_y - left_center_y
+                distance = math.sqrt(dx * dx + dy * dy)
+                if distance < 0.001:
+                    angle = _ideation_bubble_seed_ratio(
+                        f"{_safe_text((left.get('bubble') or {}).get('id'))}:{_safe_text((right.get('bubble') or {}).get('id'))}:{iteration}",
+                        97,
+                    ) * math.pi * 2
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    distance = 1.0
+
+                min_distance = left_radius + right_radius + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP
+                overlap = max(0.0, min_distance - distance)
+                if overlap <= 0:
+                    continue
+
+                push_x = (dx / distance) * (overlap + 2)
+                push_y = (dy / distance) * (overlap + 2)
+                if left_index == 0:
+                    left_share, right_share = 0.0, 1.0
+                elif right_index == 0:
+                    left_share, right_share = 1.0, 0.0
+                else:
+                    left_share = right_radius / max(1.0, left_radius + right_radius)
+                    right_share = 1 - left_share
+
+                if left_share:
+                    left_x, left_y = _clamp_ideation_bubble_layout_xy(
+                        float(left.get("x") or 0) - push_x * left_share,
+                        float(left.get("y") or 0) - push_y * left_share,
+                        left_radius * 2,
+                    )
+                    left["x"] = left_x
+                    left["y"] = left_y
+                if right_share:
+                    right_x, right_y = _clamp_ideation_bubble_layout_xy(
+                        float(right.get("x") or 0) + push_x * right_share,
+                        float(right.get("y") or 0) + push_y * right_share,
+                        right_radius * 2,
+                    )
+                    right["x"] = right_x
+                    right["y"] = right_y
+                resolved_count += 1
+                moved = True
+        if not moved:
+            break
+    return relaxed, resolved_count
+
+
+def _place_ideation_bubble_orbit_cluster(
+    graph: dict[str, Any],
+    cluster: list[dict[str, Any]],
+    cluster_id: str,
+    cluster_index: int,
+    total_clusters: int,
+    max_count: int,
+) -> dict[str, Any]:
+    anchor = _ideation_bubble_cluster_anchor(cluster)
+    center_id = _safe_text(anchor.get("id"))
+    is_demo_cluster = _is_demo_balance_orbit_cluster(cluster)
+    if is_demo_cluster:
+        _demo_balance_reassign_orbit_orders(
+            cluster,
+            _safe_nonnegative_int(graph.get("update_cycle"), 0),
+            center_id,
+        )
+        sorted_bubbles = sorted(
+            cluster,
+            key=lambda bubble: (
+                0 if _safe_text(bubble.get("id")) == center_id else 1,
+                -_safe_float(bubble.get("orbit_order_key"), 0.0),
+                _safe_text(bubble.get("id")),
+            ),
+        )
+    else:
+        sorted_bubbles = sorted(
+            cluster,
+            key=lambda bubble: (
+                0 if _safe_text(bubble.get("id")) == center_id else 1,
+                -_safe_nonnegative_int(bubble.get("count"), 1),
+                -_safe_float(bubble.get("importance"), 0.0),
+                -_safe_float(bubble.get("activity"), 0.0),
+                _safe_text(bubble.get("label")),
+            ),
+        )
+
+    for bubble in sorted_bubbles:
+        role = _ideation_bubble_orbit_role(bubble, center_id)
+        bubble["role"] = role
+        bubble["size"] = _ideation_bubble_orbit_size(bubble, max_count, role)
+
+    center = sorted_bubbles[0]
+    center_size = max(1, _safe_nonnegative_int(center.get("size"), 140))
+    rings = _ideation_bubble_orbit_rings(center_size, len(sorted_bubbles), total_clusters)
+    if is_demo_cluster:
+        satellite_sizes = [
+            max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+            for bubble in sorted_bubbles[1:]
+        ]
+
+        def demo_min_radius(slot_count: int, max_satellite_size: int) -> float:
+            safe_slot_count = max(2, slot_count)
+            chord_radius = (max_satellite_size + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP + 8) / max(
+                0.2,
+                2 * math.sin(math.pi / safe_slot_count),
+            )
+            anchor_radius = center_size / 2 + max_satellite_size / 2 + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP + 10
+            return max(anchor_radius, chord_radius)
+
+        demo_rings: list[float] = []
+        ring_index = 1
+        while _demo_balance_orbit_ring_start_index(ring_index) < len(satellite_sizes):
+            ring_start_index = _demo_balance_orbit_ring_start_index(ring_index)
+            ring_slot_count = _demo_balance_orbit_ring_capacity_limit(ring_index)
+            ring_sizes = satellite_sizes[ring_start_index:ring_start_index + ring_slot_count]
+            max_ring_size = max(ring_sizes or [64])
+            previous_radius = demo_rings[-1] if demo_rings else 0.0
+            base_radius = rings[min(ring_index - 1, len(rings) - 1)] if rings else 0.0
+            min_gap_radius = previous_radius + (104 if ring_index > 1 else 0)
+            demo_rings.append(
+                round(max(base_radius, min_gap_radius, demo_min_radius(ring_slot_count, max_ring_size)), 2)
+            )
+            ring_index += 1
+        rings = demo_rings or rings
+    orbit_radius = max(rings or [center_size / 2]) + 54
+    desired_x, desired_y = _ideation_bubble_orbit_desired_center(cluster_index, total_clusters)
+    desired_x, desired_y = _clamp_ideation_bubble_orbit_center(desired_x, desired_y, orbit_radius)
+    previous_center = _ideation_bubble_orbit_previous_center(graph, cluster_id)
+    if previous_center:
+        move_limit = _ideation_bubble_cluster_move_limit(_ideation_bubble_cluster_zone(cluster))
+        center_x, center_y = _limit_ideation_bubble_layout_delta(
+            previous_center[0],
+            previous_center[1],
+            desired_x,
+            desired_y,
+            move_limit,
+        )
+        center_x, center_y = _clamp_ideation_bubble_orbit_center(center_x, center_y, orbit_radius)
+    else:
+        center_x, center_y = desired_x, desired_y
+
+    placements: list[dict[str, Any]] = []
+    center_x_top = center_x - center_size / 2
+    center_y_top = center_y - center_size / 2
+    placements.append(
+        {
+            "bubble": center,
+            "x": center_x_top,
+            "y": center_y_top,
+            "size": center_size,
+            "orbit_ring": 0,
+            "orbit_angle": 0.0,
+            "orbit_radius": 0.0,
+        }
+    )
+
+    satellites = sorted_bubbles[1:]
+    slot_count = max(6, len(satellites) + 2)
+    golden_angle = math.pi * (3 - math.sqrt(5))
+    if is_demo_cluster:
+        base_angle = _demo_balance_revolver_insert_angle()
+    else:
+        base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
+    for index, bubble in enumerate(satellites):
+        bubble_id = _safe_text(bubble.get("id"))
+        size = max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+        role = _normalize_ideation_bubble_role(bubble.get("role"))
+        preferred_ring_index = _demo_balance_orbit_ring_for_slot(index) if is_demo_cluster else 1 if index < max(4, math.ceil(slot_count * 0.56)) else 2
+        if not is_demo_cluster and role == "dot" and len(rings) > 1:
+            preferred_ring_index = 2
+        radius = rings[min(preferred_ring_index - 1, len(rings) - 1)]
+        if is_demo_cluster:
+            ring_start_index = _demo_balance_orbit_ring_start_index(preferred_ring_index)
+            ring_slot_index = max(0, index - ring_start_index)
+            ring_slot_count = max(1, _demo_balance_orbit_ring_slot_count(preferred_ring_index, len(satellites)))
+            angle = _demo_balance_revolver_slot_angle(ring_slot_index, ring_slot_count)
+            raw_x = center_x + math.cos(angle) * radius - size / 2
+            raw_y = center_y + math.sin(angle) * radius - size / 2
+            candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+            placements.append(
+                {
+                    "bubble": bubble,
+                    "x": candidate_x,
+                    "y": candidate_y,
+                    "size": size,
+                    "orbit_ring": preferred_ring_index,
+                    "orbit_angle": angle,
+                    "orbit_radius": radius,
+                    "orbit_slot_index": ring_slot_index,
+                }
+            )
+            continue
+        seed_jitter = (_ideation_bubble_seed_ratio(f"{bubble_id}:{cluster_id}", 89) - 0.5) * 0.34
+        angle = base_angle + index * (math.pi * 2 / slot_count) + seed_jitter
+        chosen: dict[str, Any] | None = None
+        fallback_candidate: dict[str, Any] | None = None
+        fallback_overlap_score = float("inf")
+        for attempt in range(108):
+            attempt_slot = attempt % slot_count
+            attempt_ring = attempt // slot_count
+            attempt_angle = angle + attempt_slot * (math.pi * 2 / slot_count) + attempt_ring * golden_angle * 0.36
+            attempt_radius = radius + attempt_ring * 28
+            raw_x = center_x + math.cos(attempt_angle) * attempt_radius - size / 2
+            raw_y = center_y + math.sin(attempt_angle) * attempt_radius - size / 2
+            candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+            candidate = {
+                "bubble": bubble,
+                "x": candidate_x,
+                "y": candidate_y,
+                "size": size,
+                "orbit_ring": preferred_ring_index,
+                "orbit_angle": attempt_angle,
+                "orbit_radius": attempt_radius,
+            }
+            overlap_score = 0.0
+            for placed in placements:
+                if _ideation_bubble_layout_circles_overlap(
+                    candidate,
+                    placed,
+                    IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP,
+                ):
+                    candidate_radius = size / 2
+                    placed_radius = max(1.0, float(placed.get("size") or 1)) / 2
+                    dx = candidate_x + candidate_radius - (float(placed.get("x") or 0) + placed_radius)
+                    dy = candidate_y + candidate_radius - (float(placed.get("y") or 0) + placed_radius)
+                    distance = math.sqrt(dx * dx + dy * dy)
+                    overlap_score += max(0.0, candidate_radius + placed_radius + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP - distance)
+            if overlap_score <= 0:
+                chosen = candidate
+                break
+            if overlap_score < fallback_overlap_score:
+                fallback_candidate = candidate
+                fallback_overlap_score = overlap_score
+        placements.append(chosen or fallback_candidate or candidate)
+
+    bubble_ids: list[str] = []
+    if is_demo_cluster:
+        overlap_resolved_count = 0
+    else:
+        placements, overlap_resolved_count = _relax_ideation_bubble_orbit_placements(placements)
     for placement in placements:
         bubble = placement.get("bubble")
         if not isinstance(bubble, dict):
             continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if bubble_id:
+            bubble_ids.append(bubble_id)
         size = max(1.0, float(placement.get("size") or bubble.get("size") or 1))
         x, y = _clamp_ideation_bubble_layout_xy(float(placement.get("x") or 0), float(placement.get("y") or 0), size)
         bubble["x"] = round(x, 2)
         bubble["y"] = round(y, 2)
         bubble["size"] = int(round(size))
-        bubble["cluster_id"] = _safe_text(placement.get("cluster_id")) or _safe_text(bubble.get("cluster_id"))
-        bubble["cluster_x"] = round(float(placement.get("cluster_x") or 0), 2)
-        bubble["cluster_y"] = round(float(placement.get("cluster_y") or 0), 2)
-        bubble["local_x"] = round(float(placement.get("local_x") or 0), 2)
-        bubble["local_y"] = round(float(placement.get("local_y") or 0), 2)
+        bubble["cluster_id"] = cluster_id
+        bubble["cluster_x"] = round(center_x, 2)
+        bubble["cluster_y"] = round(center_y, 2)
+        bubble["local_x"] = round(x - center_x, 2)
+        bubble["local_y"] = round(y - center_y, 2)
+        bubble["orbit_center_id"] = center_id if bubble_id != center_id else ""
+        bubble["orbit_ring"] = _safe_nonnegative_int(placement.get("orbit_ring"), 0)
+        bubble["orbit_slot_index"] = _safe_nonnegative_int(placement.get("orbit_slot_index"), 0)
+        if bubble_id != center_id:
+            dx = x + size / 2 - center_x
+            dy = y + size / 2 - center_y
+            bubble["orbit_angle"] = round(math.atan2(dy, dx), 6)
+            bubble["orbit_radius"] = round(math.sqrt(dx * dx + dy * dy), 2)
+        else:
+            bubble["orbit_angle"] = 0.0
+            bubble["orbit_radius"] = 0.0
+            bubble["orbit_order_key"] = 0.0
+            bubble["orbit_slot_index"] = 0
+
+    return {
+        "id": cluster_id,
+        "center_bubble_id": center_id,
+        "x": round(center_x, 2),
+        "y": round(center_y, 2),
+        "radius": round(orbit_radius, 2),
+        "rings": rings,
+        "zone": _ideation_bubble_cluster_zone(cluster),
+        "overlap_resolved_count": overlap_resolved_count,
+        "bubble_ids": _dedup_preserve(bubble_ids, limit=IDEATION_BUBBLE_GRAPH_MAX_BUBBLES),
+    }
+
+
+def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
+    graph["layout_mode"] = IDEATION_BUBBLE_GRAPH_LAYOUT_MODE
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
+    ]
+    if not visible:
+        graph["clusters"] = []
+        graph["layout_overlap_resolved_count"] = 0
+        graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
+        return
+
+    max_count = max(1, *[_safe_nonnegative_int(bubble.get("count"), 1) for bubble in visible])
+    clusters = _ideation_bubble_orbit_clusters(visible)
+    graph["clusters"] = [
+        _place_ideation_bubble_orbit_cluster(
+            graph,
+            cluster,
+            _ideation_bubble_orbit_cluster_id(cluster, cluster_index),
+            cluster_index,
+            len(clusters),
+            max_count,
+        )
+        for cluster_index, cluster in enumerate(clusters)
+    ]
+    graph["layout_overlap_resolved_count"] = sum(
+        _safe_nonnegative_int(cluster.get("overlap_resolved_count"), 0)
+        for cluster in graph.get("clusters") or []
+        if isinstance(cluster, dict)
+    )
 
     for bubble in graph.get("bubbles") or []:
         if not isinstance(bubble, dict):
             continue
-        if _normalize_ideation_bubble_state(bubble.get("display_state")) == "archived":
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
             bubble["cluster_id"] = _safe_text(bubble.get("cluster_id"))
+            bubble["role"] = _normalize_ideation_bubble_role(bubble.get("role"))
             continue
         if bubble.get("x") is None or bubble.get("y") is None:
             size = max(1, _safe_nonnegative_int(bubble.get("size"), 96))
@@ -6996,6 +11223,11 @@ def _apply_ideation_bubble_server_layout(graph: dict[str, Any]) -> None:
             bubble["cluster_y"] = round(y, 2)
             bubble["local_x"] = 0.0
             bubble["local_y"] = 0.0
+            bubble["role"] = _normalize_ideation_bubble_role(bubble.get("role"))
+            bubble["orbit_center_id"] = _safe_text(bubble.get("orbit_center_id"))
+            bubble["orbit_ring"] = _safe_nonnegative_int(bubble.get("orbit_ring"), 0)
+            bubble["orbit_angle"] = _safe_float(bubble.get("orbit_angle"), 0.0)
+            bubble["orbit_radius"] = _safe_float(bubble.get("orbit_radius"), 0.0)
 
     graph["layout_revision"] = _safe_nonnegative_int(graph.get("layout_revision"), 0) + 1
 
@@ -7005,30 +11237,98 @@ def _ensure_ideation_bubble_graph_server_layout(graph: dict[str, Any]) -> bool:
         bubble
         for bubble in (graph.get("bubbles") or [])
         if isinstance(bubble, dict)
-        and _normalize_ideation_bubble_state(bubble.get("display_state")) != "archived"
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
     ]
     if not visible:
         return False
 
     core_ids = _ideation_bubble_core_ids(graph)
     _apply_ideation_bubble_layout_zones(graph, core_ids)
-    _apply_ideation_bubble_visual_state(graph, core_ids)
+    demo_primary_ids = {
+        _safe_text(bubble.get("id"))
+        for bubble in visible
+        if _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+    }
+    _apply_ideation_bubble_visual_state(
+        graph,
+        core_ids | demo_primary_ids,
+        primary_ids=demo_primary_ids if demo_primary_ids else None,
+    )
+    graph["layout_mode"] = IDEATION_BUBBLE_GRAPH_LAYOUT_MODE
     needs_layout = any(
         not isinstance(bubble.get("x"), (int, float))
         or not isinstance(bubble.get("y"), (int, float))
         or not isinstance(bubble.get("size"), int)
+        or (
+            _is_demo_balance_bubble(bubble)
+            and _normalize_ideation_bubble_state(bubble.get("display_state")) != "exiting"
+            and int(bubble.get("size") or 0)
+            not in {
+                DEMO_BALANCE_CENTER_BUBBLE_SIZE,
+                DEMO_BALANCE_SATELLITE_BUBBLE_SIZE,
+                DEMO_BALANCE_REVIEW_BUBBLE_SIZE,
+                DEMO_BALANCE_NEUTRAL_BUBBLE_SIZE,
+            }
+        )
         or not _safe_text(bubble.get("cluster_id"))
         or not _ideation_bubble_has_number(bubble.get("cluster_x"))
         or not _ideation_bubble_has_number(bubble.get("cluster_y"))
         or not _ideation_bubble_has_number(bubble.get("local_x"))
         or not _ideation_bubble_has_number(bubble.get("local_y"))
+        or not _safe_text(bubble.get("role"))
+        or not isinstance(bubble.get("orbit_ring"), int)
+        or not _ideation_bubble_has_number(bubble.get("orbit_angle"))
+        or not _ideation_bubble_has_number(bubble.get("orbit_radius"))
         for bubble in visible
-    )
+    ) or not isinstance(graph.get("clusters"), list) or not graph.get("clusters")
     if not needs_layout:
         return False
 
     _apply_ideation_bubble_server_layout(graph)
     return True
+
+
+def _demo_balance_bubble_side(bubble: dict[str, Any]) -> str:
+    side = _safe_text(bubble.get("choice_affinity")).lower()
+    return side if side in DEMO_BALANCE_DISPLAY_AFFINITIES else ""
+
+
+def _demo_balance_bubble_texts(bubble: dict[str, Any]) -> list[str]:
+    return _dedup_preserve(
+        [
+            _normalize_ideation_keyword_text(bubble.get("label")),
+            _normalize_ideation_keyword_text(bubble.get("canonical_label")),
+            *[
+                _normalize_ideation_keyword_text(value)
+                for value in (bubble.get("aliases") or [])
+                if _normalize_ideation_keyword_text(value)
+            ],
+        ],
+        limit=24,
+    )
+
+
+def _find_demo_balance_bubble_by_text_side(
+    graph: dict[str, Any],
+    text: Any,
+    side: str,
+    *,
+    exclude_id: str = "",
+) -> dict[str, Any] | None:
+    text_key = _ideation_bubble_text_key(text)
+    normalized_side = _safe_text(side).lower()
+    if not text_key or normalized_side not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+        return None
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _safe_text(bubble.get("id")) == exclude_id:
+            continue
+        if _demo_balance_bubble_side(bubble) != normalized_side:
+            continue
+        if any(_ideation_bubble_text_key(value) == text_key for value in _demo_balance_bubble_texts(bubble)):
+            return bubble
+    return None
 
 
 def _upsert_ideation_bubble_from_keyword(
@@ -7037,23 +11337,43 @@ def _upsert_ideation_bubble_from_keyword(
     rows: list[dict[str, str]],
     cycle: int,
     now: str,
+    *,
+    allow_single_support: bool = False,
+    lifecycle_state: str = "active",
 ) -> str:
     _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
     text = _normalize_ideation_keyword_text(keyword.get("text"))
     if not text:
         return ""
-    bubble = by_text.get(_ideation_bubble_text_key(text))
+    alias_sources = [
+        _normalize_ideation_keyword_text(value)
+        for value in (keyword.get("alias_sources") or keyword.get("aliases") or [])
+        if _normalize_ideation_keyword_text(value)
+    ]
+    alias_sources = [value for value in _dedup_preserve(alias_sources, limit=8) if value != text]
+    keyword_side = _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity")).lower()
+    bubble = (
+        _find_demo_balance_bubble_by_text_side(graph, text, keyword_side)
+        if keyword_side in DEMO_BALANCE_DISPLAY_AFFINITIES
+        else by_text.get(_ideation_bubble_text_key(text))
+    )
     if bubble is None:
         support_count = max(
             _safe_nonnegative_int(keyword.get("support_count"), 0),
             _safe_nonnegative_int(keyword.get("count"), 1),
         )
-        if support_count < 2:
+        if support_count < (1 if allow_single_support else 2):
             return ""
+        bubble_id = (
+            f"ideation-bubble-{keyword_side}-{_stable_short_id(text)}"
+            if keyword_side in DEMO_BALANCE_DISPLAY_AFFINITIES
+            else f"ideation-bubble-{_stable_short_id(text)}"
+        )
         bubble = {
-            "id": f"ideation-bubble-{_stable_short_id(text)}",
+            "id": bubble_id,
             "label": text,
-            "aliases": [],
+            "canonical_label": text,
+            "aliases": alias_sources,
             "kind": "topic",
             "count": 0,
             "importance": 0.5,
@@ -7062,7 +11382,11 @@ def _upsert_ideation_bubble_from_keyword(
             "display_state": "active",
             "layout_zone": "default",
             "missing_cycles": 0,
-            "anchor_id": "",
+            "anchor_id": _safe_text(keyword.get("anchor_id") or keyword.get("anchorId")),
+            "choice_affinity": _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity")),
+            "affinity_score": max(0.0, min(1.0, _safe_float(keyword.get("affinity_score") or keyword.get("affinityScore"), 0.0))),
+            "needs_affinity_review": bool(keyword.get("needs_affinity_review") or keyword.get("needsAffinityReview")),
+            "durable": False,
             "related_ids": [],
             "evidence_utterance_ids": [],
             "first_seen_at": now,
@@ -7071,11 +11395,15 @@ def _upsert_ideation_bubble_from_keyword(
             "off_topic": False,
             "off_topic_reason": "",
             "archive_reason": "",
+            "lifecycle_state": "provisional" if lifecycle_state == "provisional" else "active",
         }
         graph.setdefault("bubbles", []).append(bubble)
     elif text != _safe_text(bubble.get("label")):
         aliases = _dedup_preserve([*(bubble.get("aliases") or []), text], limit=20)
         bubble["aliases"] = [value for value in aliases if value != _safe_text(bubble.get("label"))]
+    if alias_sources:
+        aliases = _dedup_preserve([*(bubble.get("aliases") or []), *alias_sources], limit=20)
+        bubble["aliases"] = [value for value in aliases if value and value != _safe_text(bubble.get("label"))]
 
     kind = _safe_text(keyword.get("kind"), "topic").lower()
     off_topic = bool(keyword.get("off_topic") or kind == "off_topic")
@@ -7100,7 +11428,17 @@ def _upsert_ideation_bubble_from_keyword(
         max(0.28, min(1.0, _safe_float(keyword.get("importance"), 0.65))),
     )
     bubble["display_state"] = "active"
+    bubble["lifecycle_state"] = "provisional" if lifecycle_state == "provisional" else "active"
     bubble["layout_zone"] = "core"
+    choice_affinity = _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity") or bubble.get("choice_affinity")).lower()
+    if choice_affinity in DEMO_BALANCE_AFFINITIES:
+        bubble["choice_affinity"] = choice_affinity
+        bubble["anchor_id"] = _safe_text(keyword.get("anchor_id") or keyword.get("anchorId")) or _demo_balance_anchor_id(choice_affinity)
+        bubble["affinity_score"] = max(
+            _safe_float(bubble.get("affinity_score"), 0.0),
+            max(0.0, min(1.0, _safe_float(keyword.get("affinity_score") or keyword.get("affinityScore"), 0.0))),
+        )
+        bubble["needs_affinity_review"] = bool(keyword.get("needs_affinity_review") or keyword.get("needsAffinityReview"))
     bubble["missing_cycles"] = 0
     bubble["last_seen_at"] = now
     bubble["last_seen_cycle"] = cycle
@@ -7113,17 +11451,68 @@ def _upsert_ideation_bubble_from_keyword(
     return _safe_text(bubble.get("id"))
 
 
+def _rename_ideation_bubble(
+    graph: dict[str, Any],
+    source_text: str,
+    target_text: str,
+    cycle: int,
+    reason: str = "",
+    *,
+    exiting: bool = False,
+) -> str:
+    _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
+    source = by_text.get(_ideation_bubble_text_key(source_text))
+    if not source:
+        return ""
+    if _is_demo_balance_anchor_bubble(source):
+        return _safe_text(source.get("id"))
+
+    normalized_target = _normalize_ideation_keyword_text(target_text)
+    if not normalized_target:
+        return _safe_text(source.get("id"))
+
+    existing_target = by_text.get(_ideation_bubble_text_key(normalized_target))
+    if existing_target and existing_target is not source:
+        if _is_demo_balance_anchor_bubble(existing_target):
+            return _safe_text(source.get("id"))
+        return _merge_ideation_bubbles(graph, source_text, normalized_target, cycle, exiting=exiting)
+
+    previous_label = _safe_text(source.get("label"))
+    aliases = _dedup_preserve(
+        [
+            previous_label,
+            *(source.get("aliases") or []),
+            source_text,
+        ],
+        limit=20,
+    )
+    source["label"] = normalized_target
+    source["canonical_label"] = normalized_target
+    source["aliases"] = [value for value in aliases if value and value != normalized_target]
+    source["archive_reason"] = ""
+    source["display_state"] = "active"
+    source["activity"] = max(_safe_float(source.get("activity"), 0.0), 0.62)
+    source["last_seen_cycle"] = max(_safe_nonnegative_int(source.get("last_seen_cycle"), 0), cycle)
+    if reason:
+        source["rename_reason"] = _truncate_text(reason, 120)
+    return _safe_text(source.get("id"))
+
+
 def _merge_ideation_bubbles(
     graph: dict[str, Any],
     source_text: str,
     target_text: str,
     cycle: int,
+    *,
+    exiting: bool = False,
 ) -> str:
     _by_id, by_text = _ideation_bubble_graph_text_maps(graph)
     source = by_text.get(_ideation_bubble_text_key(source_text))
     target = by_text.get(_ideation_bubble_text_key(target_text))
     if not source or not target or source is target:
         return _safe_text(target.get("id")) if target else ""
+    if _is_demo_balance_anchor_bubble(source) or _is_demo_balance_anchor_bubble(target):
+        return _safe_text(target.get("id"))
 
     target["count"] = max(1, _safe_nonnegative_int(target.get("count"), 1) + _safe_nonnegative_int(source.get("count"), 1))
     target["importance"] = max(_safe_float(target.get("importance"), 0.0), _safe_float(source.get("importance"), 0.0))
@@ -7167,24 +11556,472 @@ def _merge_ideation_bubbles(
             [value for value in bubble["related_ids"] if value and value != _safe_text(bubble.get("id"))],
             limit=12,
         )
-    _archive_ideation_bubble(source, cycle, "merged")
+    _archive_ideation_bubble(source, cycle, "merged", exiting=exiting)
     return target_id
+
+
+def _merge_ideation_bubbles_by_id(
+    graph: dict[str, Any],
+    source_id: str,
+    target_id: str,
+    cycle: int,
+    *,
+    exiting: bool = False,
+) -> str:
+    by_id, _by_text = _ideation_bubble_graph_text_maps(graph)
+    source = by_id.get(_safe_text(source_id))
+    target = by_id.get(_safe_text(target_id))
+    if not source or not target or source is target:
+        return _safe_text((target or {}).get("id"))
+    if _is_demo_balance_anchor_bubble(source) or _is_demo_balance_anchor_bubble(target):
+        return _safe_text(target.get("id"))
+
+    target["count"] = max(1, _safe_nonnegative_int(target.get("count"), 1) + _safe_nonnegative_int(source.get("count"), 1))
+    target["importance"] = max(_safe_float(target.get("importance"), 0.0), _safe_float(source.get("importance"), 0.0))
+    target["relevance"] = max(_safe_float(target.get("relevance"), 0.0), _safe_float(source.get("relevance"), 0.0))
+    target["activity"] = max(_safe_float(target.get("activity"), 0.0), _safe_float(source.get("activity"), 0.0), 0.55)
+    target["aliases"] = _dedup_preserve(
+        [
+            *(target.get("aliases") or []),
+            _safe_text(source.get("label")),
+            _safe_text(source.get("canonical_label")),
+            *(source.get("aliases") or []),
+        ],
+        limit=24,
+    )
+    target["aliases"] = [value for value in target["aliases"] if value and value != _safe_text(target.get("label"))]
+    target["evidence_utterance_ids"] = _dedup_preserve(
+        [
+            *(target.get("evidence_utterance_ids") or []),
+            *(source.get("evidence_utterance_ids") or []),
+        ],
+        limit=80,
+    )
+    target["related_ids"] = _dedup_preserve(
+        [
+            *(target.get("related_ids") or []),
+            *(source.get("related_ids") or []),
+        ],
+        limit=12,
+    )
+    source_id = _safe_text(source.get("id"))
+    target_id = _safe_text(target.get("id"))
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _safe_text(bubble.get("anchor_id")) == source_id:
+            bubble["anchor_id"] = target_id
+        bubble["related_ids"] = [
+            target_id if related_id == source_id else related_id
+            for related_id in (bubble.get("related_ids") or [])
+        ]
+        bubble["related_ids"] = _dedup_preserve(
+            [value for value in bubble["related_ids"] if value and value != _safe_text(bubble.get("id"))],
+            limit=12,
+        )
+    _archive_ideation_bubble(source, cycle, "merged", exiting=exiting)
+    return target_id
+
+
+def _rename_demo_balance_bubble_by_id(
+    graph: dict[str, Any],
+    bubble_id: str,
+    target_text: str,
+    cycle: int,
+    *,
+    exiting: bool = True,
+) -> str:
+    by_id, _by_text = _ideation_bubble_graph_text_maps(graph)
+    bubble = by_id.get(_safe_text(bubble_id))
+    if not bubble:
+        return ""
+    if _is_demo_balance_anchor_bubble(bubble):
+        return _safe_text(bubble.get("id"))
+    normalized_target = _normalize_ideation_keyword_text(target_text)
+    if not normalized_target:
+        return _safe_text(bubble.get("id"))
+    side = _demo_balance_bubble_side(bubble)
+    existing_target = _find_demo_balance_bubble_by_text_side(
+        graph,
+        normalized_target,
+        side,
+        exclude_id=_safe_text(bubble.get("id")),
+    )
+    if existing_target:
+        return _merge_ideation_bubbles_by_id(
+            graph,
+            _safe_text(bubble.get("id")),
+            _safe_text(existing_target.get("id")),
+            cycle,
+            exiting=exiting,
+        )
+
+    previous_label = _safe_text(bubble.get("label"))
+    bubble["label"] = normalized_target
+    bubble["canonical_label"] = normalized_target
+    bubble["aliases"] = [
+        value
+        for value in _dedup_preserve(
+            [previous_label, _safe_text(bubble.get("canonical_label")), *(bubble.get("aliases") or [])],
+            limit=24,
+        )
+        if value and value != normalized_target
+    ]
+    bubble["archive_reason"] = ""
+    bubble["display_state"] = "active"
+    bubble["activity"] = max(_safe_float(bubble.get("activity"), 0.0), 0.62)
+    bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+    bubble["rename_reason"] = "demo compact directive"
+    return _safe_text(bubble.get("id"))
+
+
+def _normalize_demo_balance_directive_side(raw: Any) -> str:
+    side = _safe_text(raw).lower()
+    if side in {"option_a", "a_choice", "left"}:
+        return "a"
+    if side in {"option_b", "b_choice", "right"}:
+        return "b"
+    return side if side in DEMO_BALANCE_DISPLAY_AFFINITIES else ""
+
+
+def _demo_balance_has_compact_id_directives(parsed: Any) -> bool:
+    return isinstance(parsed, dict) and any(key in parsed for key in ("rename", "merge", "remove", "move"))
+
+
+def _resolve_demo_balance_llm_bubble_id(raw: Any, id_map: dict[str, str] | None = None) -> str:
+    bubble_id = _safe_text(raw)
+    if not bubble_id:
+        return ""
+    return _safe_text((id_map or {}).get(bubble_id) or bubble_id)
+
+
+def _apply_demo_balance_compact_id_directives(
+    graph: dict[str, Any],
+    parsed: Any,
+    cycle: int,
+    *,
+    id_map: dict[str, str] | None = None,
+    metrics: dict[str, int] | None = None,
+) -> set[str]:
+    if not isinstance(parsed, dict):
+        return set()
+    touched_ids: set[str] = set()
+
+    def _bump(key: str, amount: int = 1) -> None:
+        if metrics is not None:
+            metrics[key] = _safe_nonnegative_int(metrics.get(key), 0) + max(0, amount)
+
+    raw_renames = parsed.get("rename") or []
+    if isinstance(raw_renames, list):
+        for item in raw_renames[:12]:
+            if not isinstance(item, dict):
+                continue
+            bubble_id = _resolve_demo_balance_llm_bubble_id(
+                item.get("id") or item.get("bubble_id") or item.get("bubbleId"),
+                id_map,
+            )
+            label = _normalize_ideation_keyword_text(item.get("label") or item.get("text") or item.get("target"))
+            if not bubble_id or not label:
+                continue
+            changed_id = _rename_demo_balance_bubble_by_id(graph, bubble_id, label, cycle, exiting=True)
+            if changed_id:
+                touched_ids.add(changed_id)
+                _bump("rename_count")
+
+    raw_merges = parsed.get("merge") or []
+    if isinstance(raw_merges, list):
+        for item in raw_merges[:12]:
+            if not isinstance(item, dict):
+                continue
+            from_id = _resolve_demo_balance_llm_bubble_id(
+                item.get("from")
+                or item.get("from_id")
+                or item.get("fromId")
+                or item.get("source")
+                or item.get("source_id")
+                or item.get("sourceId"),
+                id_map,
+            )
+            to_id = _resolve_demo_balance_llm_bubble_id(
+                item.get("to")
+                or item.get("to_id")
+                or item.get("toId")
+                or item.get("target")
+                or item.get("target_id")
+                or item.get("targetId"),
+                id_map,
+            )
+            by_id, _by_text = _ideation_bubble_graph_text_maps(graph)
+            source = by_id.get(from_id)
+            target = by_id.get(to_id)
+            if not source or not target or source is target:
+                continue
+            if _demo_balance_bubble_side(source) != _demo_balance_bubble_side(target):
+                _bump("cross_side_merge_ignored_count")
+                continue
+            changed_id = _merge_ideation_bubbles_by_id(graph, from_id, to_id, cycle, exiting=True)
+            if changed_id:
+                touched_ids.add(changed_id)
+                _bump("merge_count")
+
+    raw_moves = parsed.get("move") or []
+    if isinstance(raw_moves, list):
+        for item in raw_moves[:12]:
+            if not isinstance(item, dict):
+                continue
+            bubble_id = _resolve_demo_balance_llm_bubble_id(
+                item.get("id") or item.get("bubble_id") or item.get("bubbleId"),
+                id_map,
+            )
+            target_side = _normalize_demo_balance_directive_side(item.get("side") or item.get("target") or item.get("choice_affinity"))
+            if not bubble_id or target_side not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+                continue
+            by_id, _by_text = _ideation_bubble_graph_text_maps(graph)
+            bubble = by_id.get(bubble_id)
+            if not bubble or _is_demo_balance_anchor_bubble(bubble):
+                continue
+            if _demo_balance_bubble_side(bubble) == target_side:
+                continue
+            target = None
+            for text in _demo_balance_bubble_texts(bubble):
+                target = _find_demo_balance_bubble_by_text_side(graph, text, target_side, exclude_id=bubble_id)
+                if target:
+                    break
+            if target:
+                changed_id = _merge_ideation_bubbles_by_id(
+                    graph,
+                    bubble_id,
+                    _safe_text(target.get("id")),
+                    cycle,
+                    exiting=True,
+                )
+                if changed_id:
+                    touched_ids.add(changed_id)
+                    _bump("merge_count")
+                    _bump("move_count")
+                continue
+            bubble["choice_affinity"] = target_side
+            bubble["anchor_id"] = _demo_balance_anchor_id(target_side)
+            bubble["affinity_score"] = max(_safe_float(bubble.get("affinity_score"), 0.0), 0.86)
+            bubble["needs_affinity_review"] = False
+            bubble["display_state"] = "active"
+            bubble["activity"] = max(_safe_float(bubble.get("activity"), 0.0), 0.58)
+            bubble["last_seen_cycle"] = max(_safe_nonnegative_int(bubble.get("last_seen_cycle"), 0), cycle)
+            bubble["orbit_order_key"] = None
+            bubble["orbit_slot_index"] = None
+            touched_ids.add(bubble_id)
+            _bump("move_count")
+
+    raw_removes = parsed.get("remove") or []
+    protected_ids = _demo_balance_minimum_side_protected_ids(graph)
+    if isinstance(raw_removes, list):
+        by_id, _by_text = _ideation_bubble_graph_text_maps(graph)
+        for item in raw_removes[:12]:
+            bubble_id = _resolve_demo_balance_llm_bubble_id(
+                item.get("id") if isinstance(item, dict) else item,
+                id_map,
+            )
+            bubble = by_id.get(bubble_id)
+            if not bubble or _is_demo_balance_anchor_bubble(bubble):
+                continue
+            if bubble_id in protected_ids and not bool(bubble.get("off_topic")):
+                _bump("protected_remove_ignored_count")
+                continue
+            _archive_ideation_bubble(bubble, cycle, "llm_remove", exiting=True)
+            _bump("remove_count")
+
+    return touched_ids
+
+
+def _mark_demo_balance_overflow_bubbles_exiting(
+    graph: dict[str, Any],
+    cycle: int,
+    core_ids: set[str],
+    protected_ids: set[str] | None = None,
+) -> None:
+    protected_ids = protected_ids or set()
+    visible = [
+        bubble
+        for bubble in (graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _is_ideation_bubble_visible_state(bubble.get("display_state"))
+    ]
+    overflow = len(visible) - DEMO_BALANCE_BUBBLE_GRAPH_VISIBLE_CAP
+    if overflow <= 0:
+        return
+
+    def removal_rank(bubble: dict[str, Any]) -> tuple[int, float, str]:
+        bubble_id = _safe_text(bubble.get("id"))
+        protected = (
+            ((bubble_id in core_ids or bubble_id in protected_ids) and not bool(bubble.get("off_topic")))
+            or _is_demo_balance_anchor_bubble(bubble)
+        )
+        recent = 1.0 / max(1, _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1)
+        score = (
+            _safe_float(bubble.get("activity"), 0.0) * 0.34
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.24
+            + _safe_float(bubble.get("importance"), 0.0) * 0.24
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 5) * 0.12
+            + recent * 0.06
+        )
+        if bool(bubble.get("off_topic")):
+            score -= 0.35
+        if _safe_text(bubble.get("lifecycle_state")).lower() == "provisional":
+            score -= 0.08
+        return (1 if protected else 0, score, _safe_text(bubble.get("label")))
+
+    for bubble in sorted(visible, key=removal_rank)[:overflow]:
+        _archive_ideation_bubble(bubble, cycle, "demo_overflow", exiting=True)
+
+
+def _apply_demo_balance_local_provisional_cleanup(
+    graph: dict[str, Any],
+    touched_ids: set[str],
+    core_ids: set[str],
+    cycle: int,
+    protected_ids: set[str] | None = None,
+) -> int:
+    protected_ids = protected_ids or set()
+    cleaned = 0
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = _safe_text(bubble.get("id"))
+        if not bubble_id or bubble_id in touched_ids:
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        if _is_demo_balance_anchor_bubble(bubble):
+            bubble["missing_cycles"] = 0
+            continue
+        if _safe_text(bubble.get("lifecycle_state")).lower() != "provisional":
+            continue
+        if bubble_id in core_ids and _safe_nonnegative_int(bubble.get("count"), 1) >= 3:
+            continue
+        if bubble_id in protected_ids and not bool(bubble.get("off_topic")):
+            bubble["missing_cycles"] = 0
+            bubble["display_state"] = "active"
+            continue
+
+        missing_cycles = _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1
+        bubble["missing_cycles"] = missing_cycles
+        bubble["activity"] = max(0.0, min(1.0, _safe_float(bubble.get("activity"), 0.0) * 0.72))
+        weak_score = (
+            _safe_float(bubble.get("importance"), 0.0) * 0.36
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.34
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 4) * 0.3
+        )
+        if missing_cycles >= 3 or (missing_cycles >= 2 and weak_score < 0.62):
+            _archive_ideation_bubble(bubble, cycle, "demo_local_cleanup", exiting=True)
+            cleaned += 1
+        elif missing_cycles >= 2:
+            bubble["display_state"] = "dimmed"
+    return cleaned
+
+
+def _demo_balance_minimum_side_protected_ids(graph: dict[str, Any]) -> set[str]:
+    protected: set[str] = set()
+    by_side: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for bubble in graph.get("bubbles") or []:
+        if not isinstance(bubble, dict):
+            continue
+        if _is_demo_balance_anchor_bubble(bubble):
+            continue
+        if bool(bubble.get("off_topic")):
+            continue
+        if not _is_ideation_bubble_visible_state(bubble.get("display_state")):
+            continue
+        affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        if affinity not in DEMO_BALANCE_DISPLAY_AFFINITIES:
+            continue
+        by_side[affinity].append(bubble)
+
+    def keep_rank(bubble: dict[str, Any]) -> tuple[float, int, str]:
+        recent = 1.0 / max(1, _safe_nonnegative_int(bubble.get("missing_cycles"), 0) + 1)
+        score = (
+            _safe_float(bubble.get("activity"), 0.0) * 0.34
+            + _safe_float(bubble.get("relevance"), 0.0) * 0.24
+            + _safe_float(bubble.get("importance"), 0.0) * 0.2
+            + min(1.0, _safe_nonnegative_int(bubble.get("count"), 1) / 5) * 0.16
+            + recent * 0.06
+        )
+        return (score, _safe_nonnegative_int(bubble.get("count"), 1), _safe_text(bubble.get("label")))
+
+    for bubbles in by_side.values():
+        for bubble in sorted(bubbles, key=keep_rank, reverse=True)[:DEMO_BALANCE_MIN_VISIBLE_PER_SIDE]:
+            bubble_id = _safe_text(bubble.get("id"))
+            if bubble_id:
+                protected.add(bubble_id)
+    return protected
 
 
 def _apply_ideation_bubble_graph_update(
     graph: dict[str, Any],
     rows: list[dict[str, str]],
     keywords: list[dict[str, Any]],
+    rename_keywords: list[dict[str, str]],
     merge_keywords: list[dict[str, str]],
     remove_keywords: list[str],
+    *,
+    allow_single_support: bool = False,
+    decay_profile: str = "normal",
+    apply_decay: bool = True,
+    mark_processed: bool = True,
+    demo_local_cleanup: bool = False,
+    primary_keyword_texts: list[str] | None = None,
+    affinity_updates: list[dict[str, Any]] | None = None,
+    demo_id_directives: dict[str, Any] | None = None,
+    demo_id_map: dict[str, str] | None = None,
+    metrics: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     next_graph = _normalize_canvas_ideation_bubble_graph(graph)
+    if decay_profile == "demo_balance":
+        _prune_exiting_ideation_bubbles(next_graph)
+    previous_primary_ids = {
+        _safe_text(bubble.get("id"))
+        for bubble in (next_graph.get("bubbles") or [])
+        if isinstance(bubble, dict)
+        and _safe_text(bubble.get("id"))
+        and _safe_text(bubble.get("emphasis")) == "primary"
+    }
     cycle = _safe_nonnegative_int(next_graph.get("update_cycle"), 0) + 1
     now = _now_ts()
     touched_ids: set[str] = set()
+    lifecycle_state = "provisional" if decay_profile == "demo_balance" and not mark_processed else "active"
 
     for keyword in keywords:
-        bubble_id = _upsert_ideation_bubble_from_keyword(next_graph, keyword, rows, cycle, now)
+        bubble_id = _upsert_ideation_bubble_from_keyword(
+            next_graph,
+            keyword,
+            rows,
+            cycle,
+            now,
+            allow_single_support=allow_single_support,
+            lifecycle_state=lifecycle_state,
+        )
+        if bubble_id:
+            touched_ids.add(bubble_id)
+
+    if decay_profile == "demo_balance" and demo_id_directives:
+        touched_ids.update(
+            _apply_demo_balance_compact_id_directives(
+                next_graph,
+                demo_id_directives,
+                cycle,
+                id_map=demo_id_map,
+                metrics=metrics,
+            )
+        )
+
+    for directive in rename_keywords:
+        bubble_id = _rename_ideation_bubble(
+            next_graph,
+            _safe_text(directive.get("source")),
+            _safe_text(directive.get("target")),
+            cycle,
+            _safe_text(directive.get("reason")),
+            exiting=decay_profile == "demo_balance",
+        )
         if bubble_id:
             touched_ids.add(bubble_id)
 
@@ -7194,19 +12031,38 @@ def _apply_ideation_bubble_graph_update(
             _safe_text(directive.get("source")),
             _safe_text(directive.get("target")),
             cycle,
+            exiting=decay_profile == "demo_balance",
         )
         if target_id:
             touched_ids.add(target_id)
 
+    if decay_profile == "demo_balance":
+        _normalize_demo_balance_graph_affinities(next_graph)
+
     _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
+    protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph) if decay_profile == "demo_balance" else set()
     for text in remove_keywords:
         bubble = by_text.get(_ideation_bubble_text_key(text))
-        if bubble and _safe_text(bubble.get("id")) not in touched_ids:
-            _archive_ideation_bubble(bubble, cycle, "llm_remove")
+        bubble_id = _safe_text((bubble or {}).get("id"))
+        protected = bubble_id in protected_minimum_ids and not bool((bubble or {}).get("off_topic"))
+        if bubble and bubble_id not in touched_ids and not protected and not _is_demo_balance_anchor_bubble(bubble):
+            _archive_ideation_bubble(bubble, cycle, "llm_remove", exiting=decay_profile == "demo_balance")
+
+    affinity_update_count = 0
+    if decay_profile == "demo_balance" and affinity_updates:
+        affinity_update_count = _apply_demo_balance_affinity_updates(next_graph, affinity_updates, cycle)
+        _normalize_demo_balance_graph_affinities(next_graph)
+        if metrics is not None:
+            metrics["affinity_update_count"] = affinity_update_count
 
     _by_id, by_text = _ideation_bubble_graph_text_maps(next_graph)
     for keyword in keywords:
-        current = by_text.get(_ideation_bubble_text_key(keyword.get("text")))
+        keyword_side = _safe_text(keyword.get("choice_affinity") or keyword.get("choiceAffinity")).lower()
+        current = (
+            _find_demo_balance_bubble_by_text_side(next_graph, keyword.get("text"), keyword_side)
+            if decay_profile == "demo_balance" and keyword_side in DEMO_BALANCE_DISPLAY_AFFINITIES
+            else by_text.get(_ideation_bubble_text_key(keyword.get("text")))
+        )
         if not current:
             continue
         current_id = _safe_text(current.get("id"))
@@ -7225,26 +12081,88 @@ def _apply_ideation_bubble_graph_update(
         if anchor and _safe_text(anchor.get("id")) != current_id:
             current["anchor_id"] = _safe_text(anchor.get("id"))
 
+    explicit_primary_ids: set[str] | None = None
+    if primary_keyword_texts is not None:
+        explicit_primary_ids = _resolve_ideation_primary_keyword_ids(
+            next_graph,
+            primary_keyword_texts,
+            limit=4,
+        )
+
     core_ids = _ideation_bubble_core_ids(next_graph)
-    _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
-    _prune_archived_ideation_bubbles(next_graph)
+    if explicit_primary_ids is not None:
+        core_ids = {*core_ids, *explicit_primary_ids}
+    protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph) if decay_profile == "demo_balance" else set()
+    if apply_decay:
+        if decay_profile == "demo_balance":
+            _apply_ideation_bubble_decay(
+                next_graph,
+                touched_ids,
+                {*core_ids, *protected_minimum_ids},
+                cycle,
+                dim_cycles=1,
+                archive_cycles=3,
+                off_topic_archive_cycles=1,
+                exit_before_archive=True,
+            )
+        else:
+            _apply_ideation_bubble_decay(next_graph, touched_ids, core_ids, cycle)
+        _prune_archived_ideation_bubbles(next_graph)
     core_ids = _ideation_bubble_core_ids(next_graph)
+    if decay_profile == "demo_balance" and demo_local_cleanup:
+        protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph)
+        cleaned_count = _apply_demo_balance_local_provisional_cleanup(
+            next_graph,
+            touched_ids,
+            core_ids,
+            cycle,
+            protected_minimum_ids,
+        )
+        if metrics is not None:
+            metrics["local_cleanup_count"] = cleaned_count
+        if cleaned_count:
+            core_ids = _ideation_bubble_core_ids(next_graph)
+            if explicit_primary_ids is not None:
+                explicit_primary_ids = {
+                    bubble_id
+                    for bubble_id in explicit_primary_ids
+                    if any(
+                        isinstance(item, dict)
+                        and _safe_text(item.get("id")) == bubble_id
+                        and _is_ideation_bubble_visible_state(item.get("display_state"))
+                        for item in (next_graph.get("bubbles") or [])
+                    )
+                }
+                core_ids = {*core_ids, *explicit_primary_ids}
+    if decay_profile == "demo_balance":
+        protected_minimum_ids = _demo_balance_minimum_side_protected_ids(next_graph)
+        _mark_demo_balance_overflow_bubbles_exiting(next_graph, cycle, core_ids, protected_minimum_ids)
     _apply_ideation_bubble_layout_zones(next_graph, core_ids)
-    _apply_ideation_bubble_visual_state(next_graph, core_ids)
+    _apply_ideation_bubble_visual_state(next_graph, core_ids, primary_ids=explicit_primary_ids)
+    if explicit_primary_ids is not None and metrics is not None:
+        current_primary_ids = {
+            _safe_text(bubble.get("id"))
+            for bubble in (next_graph.get("bubbles") or [])
+            if isinstance(bubble, dict) and _safe_text(bubble.get("emphasis")) == "primary"
+        }
+        metrics["primary_count"] = len(current_primary_ids)
+        metrics["promote_count"] = len(current_primary_ids - previous_primary_ids)
+        metrics["demote_count"] = len(previous_primary_ids - current_primary_ids)
     _apply_ideation_bubble_server_layout(next_graph)
-    processed_ids = _dedup_preserve(
-        [
-            *(next_graph.get("processed_utterance_ids") or []),
-            *[_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
-        ],
-        limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
-    )
-    next_graph["processed_utterance_ids"] = processed_ids
+    if mark_processed:
+        processed_ids = _dedup_preserve(
+            [
+                *(next_graph.get("processed_utterance_ids") or []),
+                *[_safe_text(row.get("id")) for row in rows if _safe_text(row.get("id"))],
+            ],
+            limit=IDEATION_BUBBLE_GRAPH_PROCESSED_IDS_LIMIT,
+        )
+        next_graph["processed_utterance_ids"] = processed_ids
     next_graph["update_cycle"] = cycle
     next_graph["updated_at"] = now
 
     def sort_key(item: dict[str, Any]) -> tuple[int, int, float, str]:
-        state_rank = {"active": 0, "dimmed": 1, "archived": 2}.get(
+        state_rank = {"active": 0, "dimmed": 1, "exiting": 2, "archived": 3}.get(
             _normalize_ideation_bubble_state(item.get("display_state")),
             3,
         )
@@ -7899,6 +12817,101 @@ def _summary_document_blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
     return "\n\n".join(chunk for chunk in chunks if _safe_text(chunk)).strip()
 
 
+def _build_demo_balance_structured_from_blocks(
+    classification: dict[str, Any],
+    document_blocks: list[dict[str, Any]],
+    fallback: dict[str, Any],
+    report_meta: Any = None,
+) -> dict[str, Any]:
+    base = _normalize_summary_structured_document({}, fallback)
+    meta = report_meta if isinstance(report_meta, dict) else {}
+    first_heading = ""
+    first_paragraph = ""
+    bullets: list[str] = []
+    for block in document_blocks or []:
+        if not isinstance(block, dict):
+            continue
+        block_type = _safe_text(block.get("type"))
+        if block_type == "heading" and not first_heading:
+            first_heading = _safe_text(block.get("text"))
+        elif block_type == "paragraph" and not first_paragraph:
+            first_paragraph = _safe_text(block.get("text"))
+        elif block_type == "bullets":
+            bullets.extend(_safe_text(item) for item in block.get("items") or [] if _safe_text(item))
+
+    verdict = _safe_text(meta.get("verdict")) or "최종 판정"
+    summary = _safe_text(meta.get("summary")) or first_paragraph or _safe_text(base.get("key_summary"))
+    option_a = _safe_text(classification.get("option_a"), "A")
+    option_b = _safe_text(classification.get("option_b"), "B")
+    main_opinions = _normalize_demo_balance_main_opinions(classification.get("main_opinions"))
+    a_items = [
+        _safe_text(item.get("text") or item.get("title"))
+        for item in main_opinions.get("a", [])
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
+    ][:6]
+    b_items = [
+        _safe_text(item.get("text") or item.get("title"))
+        for item in main_opinions.get("b", [])
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
+    ][:6]
+    conclusion_bullets = bullets[:8] or ([summary] if summary else [])
+    return _normalize_summary_structured_document(
+        {
+            **base,
+            "meeting_overview": _safe_text(base.get("meeting_overview"))
+            or f"{option_a}와 {option_b}를 비교한 밸런스 게임입니다.",
+            "key_summary": summary,
+            "idea_groups": [
+                {"group_id": "demo-balance-a", "title": f"A. {option_a}", "items": a_items},
+                {"group_id": "demo-balance-b", "title": f"B. {option_b}", "items": b_items},
+            ],
+            "discussion_flows": [
+                {
+                    "group_id": "demo-balance",
+                    "title": "A/B 의견 비교",
+                    "opinions": [
+                        {"label": f"A. {option_a}", "text": "; ".join(a_items[:3])},
+                        {"label": f"B. {option_b}", "text": "; ".join(b_items[:3])},
+                    ],
+                    "conclusion": verdict,
+                }
+            ],
+            "flow_sections": [
+                {
+                    "section_id": "demo-balance-flow",
+                    "group_id": "demo-balance",
+                    "title": "A/B 선택지 비교",
+                    "time_range": "",
+                    "trigger": "참가자들이 A/B 중 하나를 선택하고 이유를 제시함",
+                    "narrative": summary,
+                    "key_points": conclusion_bullets[:5],
+                    "opinions": [
+                        {"label": f"A. {option_a}", "text": "; ".join(a_items[:3])},
+                        {"label": f"B. {option_b}", "text": "; ".join(b_items[:3])},
+                    ],
+                    "settlement": verdict,
+                    "open_questions": [],
+                }
+            ],
+            "pending_items": [],
+            "conclusion": {
+                "title": first_heading or "최종 판정",
+                "summary": summary,
+                "groups": [
+                    {
+                        "group_id": "winner",
+                        "title": verdict,
+                        "status": "final",
+                        "status_label": "확정",
+                        "bullets": conclusion_bullets,
+                    }
+                ],
+            },
+        },
+        fallback,
+    )
+
+
 def _build_summary_document_structured(
     meeting_topic: str,
     groups: list[dict[str, Any]],
@@ -8224,12 +13237,98 @@ def _build_summary_document_local_markdown(meeting_topic: str, groups: list[dict
     return "\n".join(lines).strip()
 
 
+def _build_demo_balance_summary_prompt(
+    payload: SummaryDocumentGenerateInput,
+    groups: list[dict[str, Any]],
+    sections: list[dict[str, Any]],
+    context: dict[str, Any],
+    *,
+    conclusion_only: bool = False,
+    current_structured: dict[str, Any] | None = None,
+) -> str:
+    demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    demo_balance_classification = _normalize_canvas_demo_balance_classification(
+        context.get("demo_balance_classification") or payload.demo_balance_classification
+    )
+    rows = context.get("rows") if isinstance(context.get("rows"), list) else []
+    opinions = [
+        opinion
+        for opinion in (demo_balance_classification.get("opinions") or [])
+        if isinstance(opinion, dict)
+    ]
+    valid_a_opinions = [opinion for opinion in opinions if opinion.get("valid") and opinion.get("choice") == "a"]
+    valid_b_opinions = [opinion for opinion in opinions if opinion.get("valid") and opinion.get("choice") == "b"]
+    unclassified_opinions = [opinion for opinion in opinions if not opinion.get("valid") or opinion.get("choice") not in {"a", "b"}]
+    input_payload = {
+        "meeting_topic": _safe_text(payload.meeting_topic),
+        "demo_config": demo_config,
+        "mode": "demo_balance",
+        "source_policy": {
+            "valid_opinion_rule": "demo_balance_classification의 valid=true 의견만 유효 의견으로 집계한다.",
+            "unclassified_rule": "미분류는 참고 의견으로만 다루고 A/B 유효 비율에는 넣지 않는다.",
+            "winner_rule": "판정은 유효 의견 수, 반복 근거, 근거의 설득력을 함께 보고 A 우세/B 우세/무승부 중 하나로 판단한다.",
+        },
+        "classification": {
+            "option_a": demo_balance_classification.get("option_a"),
+            "option_b": demo_balance_classification.get("option_b"),
+            "valid_a_count": demo_balance_classification.get("valid_a_count"),
+            "valid_b_count": demo_balance_classification.get("valid_b_count"),
+            "unclassified_count": demo_balance_classification.get("unclassified_count"),
+            "summary": demo_balance_classification.get("summary"),
+            "main_opinions": demo_balance_classification.get("main_opinions"),
+            "valid_a_opinions": valid_a_opinions,
+            "valid_b_opinions": valid_b_opinions,
+            "unclassified_opinions": unclassified_opinions[:24],
+        },
+        "raw_utterances_for_reference": _problem_taxonomy_prompt_rows(rows[:80], 220) if not opinions else [],
+        "current_structured": current_structured or {},
+    }
+    title_hint = "최종 판정 문서" if conclusion_only else "시연 토론 요약 및 판정 리포트"
+    return (
+        "너는 3분 내외의 A/B 밸런스 게임 토론을 정리하고 판정하는 AI 심판이다. 출력은 JSON 하나만 반환한다.\n\n"
+        "[목표]\n"
+        f"- 오른쪽 문서 편집기에 들어갈 {title_hint}를 만든다.\n"
+        "- classification의 A/B 유효 의견 전체를 기준으로 각 선택지의 주요 근거를 정리한다.\n"
+        "- 유효 의견 비율, A/B 핵심 근거, 설득력 Matrix, 최종 판정만 간결하게 만든다.\n"
+        "- 무승부가 가능하다. 근거의 질과 비율이 비슷하면 무승부로 판단한다.\n"
+        "- 입력에 없는 사실, 참가자 수, 명시되지 않은 투표 결과를 발명하지 않는다.\n"
+        "- 화자명, timestamp, 긴 원문 인용은 넣지 않는다.\n\n"
+        "[입력 JSON]\n"
+        f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "[출력 JSON 스키마]\n"
+        "{\n"
+        '  "document_blocks": [\n'
+        '    {"id":"heading-demo-report","type":"heading","level":1,"text":"A vs B 판정 리포트"},\n'
+        '    {"id":"paragraph-demo-summary","type":"paragraph","text":"이번 세션의 핵심 판정을 1~2문장으로 요약"},\n'
+        '    {"id":"table-valid-ratio","type":"table","title":"유효 의견 비율","columns":[{"id":"col-choice","title":"선택지","type":"text"},{"id":"col-valid","title":"유효 의견","type":"text"},{"id":"col-ratio","title":"비율","type":"text"},{"id":"col-main","title":"주요 근거","type":"text"}],"rows":[]},\n'
+        '    {"id":"table-score-matrix","type":"table","title":"설득력 Matrix","columns":[{"id":"col-criterion","title":"평가 기준","type":"text"},{"id":"col-a-score","title":"A 점수","type":"text"},{"id":"col-b-score","title":"B 점수","type":"text"},{"id":"col-reason","title":"판단 이유","type":"text"}],"rows":[]},\n'
+        '    {"id":"heading-winner","type":"heading","level":2,"text":"최종 판정"},\n'
+        '    {"id":"bullets-winner","type":"bullets","items":["A 우세/B 우세/무승부 중 하나와 이유"]}\n'
+        "  ],\n"
+        '  "report_meta": {"verdict":"A 우세|B 우세|무승부","summary":"판정 요약 1문장","option_a_ratio":"0%","option_b_ratio":"0%"}\n'
+        "}\n\n"
+        "[작성 규칙]\n"
+        "- document_blocks의 첫 블록은 heading level 1, 두 번째 블록은 paragraph다.\n"
+        "- 표는 가능한 한 짧게 쓴다. 셀 하나에 여러 문장을 넣지 않는다.\n"
+        "- 유효 의견 비율 표에는 A, B, 미분류/무효를 넣는다. A/B 비율은 valid_a_count + valid_b_count 기준으로 계산하고, 미분류는 별도 행으로 표시한다.\n"
+        "- 설득력 Matrix 기준은 근거 명확성, 현실성, 일관성, 공감 가능성, 반박 대응력 중 회의에 맞는 4~5개를 사용한다.\n"
+        "- 점수는 1~5점 숫자로 쓰고, 총점만으로 승자를 정하지 말고 발화 근거를 함께 본다.\n"
+        "- 최종 판정은 'A 우세', 'B 우세', '무승부' 중 하나를 명확히 쓴다.\n"
+        "- A/B가 명시되지 않은 발화를 억지로 유효 의견에 넣지 않는다.\n"
+        "- document_blocks는 4~7개 정도로 짧게 만든다.\n"
+        "- 불필요한 설명 없이 JSON만 반환한다."
+    )
+
+
 def _build_summary_document_prompt(
     payload: SummaryDocumentGenerateInput,
     groups: list[dict[str, Any]],
     sections: list[dict[str, Any]],
     context: dict[str, Any],
 ) -> str:
+    if _is_demo_balance_config(payload.demo_config):
+        return _build_demo_balance_summary_prompt(payload, groups, sections, context)
+
     overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
     chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
     rows = context.get("rows") if isinstance(context.get("rows"), list) else []
@@ -8332,6 +13431,16 @@ def _build_summary_conclusion_prompt(
     current_structured: dict[str, Any],
     context: dict[str, Any],
 ) -> str:
+    if _is_demo_balance_config(payload.demo_config):
+        return _build_demo_balance_summary_prompt(
+            payload,
+            groups,
+            sections,
+            context,
+            conclusion_only=True,
+            current_structured=current_structured,
+        )
+
     conclusion = current_structured.get("conclusion") if isinstance(current_structured.get("conclusion"), dict) else {}
     overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
     chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
@@ -10935,7 +16044,7 @@ def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        kwargs = {"language": "ko", "task": "transcribe", "verbose": False}
+        kwargs = {"language": WHISPER_LANGUAGE, "task": "transcribe", "verbose": False}
         try:
             import torch
 
@@ -10944,7 +16053,7 @@ def _transcribe_with_whisper(data: bytes, suffix: str) -> str:
             kwargs["fp16"] = False
         print(
             f"[STT][backend] whisper.transcribe start path={tmp_path} "
-            f"fp16={kwargs.get('fp16')} prompt=False",
+            f"language={WHISPER_LANGUAGE} fp16={kwargs.get('fp16')} prompt=False",
             flush=True,
         )
         result = model.transcribe(tmp_path, **kwargs)
@@ -11170,17 +16279,37 @@ def _ensure_llm_ready(rt: RuntimeStore) -> tuple[Any, bool, str]:
 
     if not _safe_text(getattr(client, "api_key", "")):
         rt.llm_enabled = False
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 300
+        rt.llm_connect_retry_note = "LLM API 키가 없어 로컬 결과를 사용했습니다."
         return client, False, "LLM API 키가 없어 로컬 결과를 사용했습니다."
+
+    now_monotonic = time.monotonic()
+    retry_after = float(getattr(rt, "llm_connect_retry_after_monotonic", 0.0) or 0.0)
+    if not bool(client.connected) and retry_after > now_monotonic:
+        remaining = max(1, round(retry_after - now_monotonic))
+        note = _safe_text(
+            getattr(rt, "llm_connect_retry_note", ""),
+            "LLM 연결 재시도 대기 중입니다.",
+        )
+        return client, False, f"{note} ({remaining}초 후 재시도)"
 
     try:
         result = client.connect()
         rt.llm_enabled = bool(result.get("ok"))
         if rt.llm_enabled and client.connected:
+            rt.llm_connect_retry_after_monotonic = 0.0
+            rt.llm_connect_retry_note = ""
             return client, True, ""
-        return client, False, _safe_text(result.get("message"), "LLM 연결 실패로 로컬 결과를 사용했습니다.")
+        note = _safe_text(result.get("message"), "LLM 연결 실패로 로컬 결과를 사용했습니다.")
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 60
+        rt.llm_connect_retry_note = note
+        return client, False, note
     except Exception as exc:
         rt.llm_enabled = False
-        return client, False, f"LLM 자동 연결 실패: {exc}"
+        note = f"LLM 자동 연결 실패: {exc}"
+        rt.llm_connect_retry_after_monotonic = time.monotonic() + 60
+        rt.llm_connect_retry_note = note
+        return client, False, note
 
 
 def _fallback_stt_flow_summary(turns: list[SttFlowSummaryTurnInput], max_chars: int = 30) -> str:
@@ -11372,6 +16501,9 @@ def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]
             "updated_at": _safe_text(raw_value.get("updated_at")),
             "finished_at": _safe_text(raw_value.get("finished_at")),
             "error": _safe_text(raw_value.get("error")),
+            "phase": _safe_text(raw_value.get("phase")),
+            "detail": _safe_text(raw_value.get("detail")),
+            "retryable": bool(raw_value.get("retryable")),
             "version": version,
             "input_transcript_revision": _safe_nonnegative_int(raw_value.get("input_transcript_revision")),
         }
@@ -11467,6 +16599,9 @@ def _finish_canvas_artifact_generation_entry(
     requested_by: str,
     saved_at: str,
     error: str = "",
+    phase: str = "",
+    detail: str = "",
+    retryable: bool = False,
 ) -> dict[str, Any]:
     previous_version = _safe_nonnegative_int(current.get("version"))
     next_version = previous_version + 1 if status == "ready" else previous_version
@@ -11479,6 +16614,9 @@ def _finish_canvas_artifact_generation_entry(
         "updated_at": saved_at,
         "finished_at": saved_at,
         "error": error if status == "failed" else "",
+        "phase": _safe_text(phase) if status == "failed" else "",
+        "detail": _safe_text(detail) if status == "failed" else "",
+        "retryable": bool(retryable) if status == "failed" else False,
         "version": next_version,
         "input_transcript_revision": _safe_nonnegative_int(current.get("input_transcript_revision")),
     }
@@ -11574,6 +16712,7 @@ def get_health():
     return {
         "ok": True,
         "whisper_model": WHISPER_MODEL_NAME,
+        "whisper_language": WHISPER_LANGUAGE,
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "deps": {
@@ -11590,8 +16729,13 @@ def get_health():
 def post_llm_connect():
     with RT.lock:
         client = get_client()
+        RT.llm_connect_retry_after_monotonic = 0.0
+        RT.llm_connect_retry_note = ""
         result = client.connect()
         RT.llm_enabled = bool(result.get("ok"))
+        if not RT.llm_enabled:
+            RT.llm_connect_retry_after_monotonic = time.monotonic() + 60
+            RT.llm_connect_retry_note = _safe_text(result.get("message"), "LLM 연결 실패")
         queue_ok = False
         queue_err = ""
         queued_task_id = 0
@@ -11632,6 +16776,28 @@ def post_llm_ping():
 @app.post("/api/stt/flow-summary")
 def post_stt_flow_summary(payload: SttFlowSummaryInput):
     return _generate_stt_flow_summary(payload)
+
+
+@app.post("/api/stt/refine-transcript")
+def post_stt_refine_transcript(payload: SttTranscriptRefineInput):
+    text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
+        payload.raw_text,
+        meeting_goal=payload.meeting_goal,
+        meeting_goal_context=payload.meeting_goal_context,
+        context_pack=payload.context_pack,
+    )
+    return {
+        "text": _safe_text(text),
+        "raw_text": _safe_text(payload.raw_text),
+        "refined_text": _safe_text(text),
+        "refine_used_llm": refine_used_llm,
+        "refine_warning": refine_warning,
+        "confidence": refine_meta.get("confidence"),
+        "corrections": refine_meta.get("corrections") or [],
+        "uncertain_terms": refine_meta.get("uncertain_terms") or [],
+        "context_terms": refine_meta.get("context_terms") or [],
+        "context_pack_summary": refine_meta.get("context_pack_summary") or {},
+    }
 
 
 @app.post("/api/transcript/import-json-dir")
@@ -13764,11 +18930,16 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
             "payload": signature_payload,
             "utterance_snapshot_signature": _canvas_llm_signature(snapshot_rows),
             "conclusion_policy": "section_body_compression_v1",
-            "taxonomy_policy": "outline_reveal_v6",
+            "taxonomy_policy": "demo_balance_direct_ab_summary_v2"
+            if _is_demo_balance_config(payload.demo_config)
+            else "outline_reveal_v6",
         }
     )
 
     def _compute() -> dict[str, Any]:
+        if _is_demo_balance_config(payload.demo_config):
+            return _build_demo_balance_problem_taxonomy_result(payload)
+
         groups = _build_problem_taxonomy_groups_local(payload)
         used_llm = False
         warning = ""
@@ -14026,18 +19197,25 @@ def post_canvas_problem_structure(payload: ProblemStructureGenerateInput):
 def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
     workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id) if normalized_meeting_id else {}
+    demo_balance_mode = _is_demo_balance_config(payload.demo_config)
     groups = _summary_document_groups(payload, workspace)
     source_signature = _summary_document_source_signature(groups)
+    demo_balance_classification = _normalize_canvas_demo_balance_classification(
+        payload.demo_balance_classification or workspace.get("demo_balance_classification")
+    )
     signature = _canvas_llm_signature(
         {
-            "version": 6,
+            "version": "demo_balance_document_blocks_v3" if demo_balance_mode else 7,
             "meeting_topic": _safe_text(payload.meeting_topic),
+            "demo_config": _normalize_canvas_demo_config(payload.demo_config),
+            "demo_balance_classification": demo_balance_classification,
             "source_signature": source_signature,
             "refresh_chunk_summaries": bool(payload.refresh_chunk_summaries),
         }
     )
 
     def _compute() -> dict[str, Any]:
+        started_at = time.perf_counter()
         rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
         sections = _summary_document_sections(groups, rows)
         fallback_markdown = _build_summary_document_local_markdown(payload.meeting_topic, groups)
@@ -14047,6 +19225,9 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
         document_blocks = fallback_document_blocks
         used_llm = False
         warning = ""
+        llm_error: dict[str, Any] = {}
+        prompt_chars = 0
+        llm_ms = 0
 
         if not groups:
             return {
@@ -14070,52 +19251,84 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
             "included_utterance_count": len(rows),
             "included_chunk_summary_count": 0,
             "overview_summary_count": 0,
+            "demo_balance_classification": demo_balance_classification,
         }
         if llm_ready:
             try:
-                taxonomy_payload = ProblemTaxonomyGenerateInput(
-                    meeting_id=normalized_meeting_id,
-                    meeting_topic=_safe_text(payload.meeting_topic),
-                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
-                    max_groups=6,
-                )
-                taxonomy_context, context_warning = _build_problem_taxonomy_context(
-                    RT,
-                    taxonomy_payload,
-                    client,
-                    llm_ready,
-                )
-                if context_warning:
-                    warning = context_warning
+                if demo_balance_mode:
+                    taxonomy_context = {
+                        "rows": rows,
+                        "chunk_summaries": [],
+                        "overview_summaries": [],
+                        "total_utterance_count": len(rows),
+                        "included_utterance_count": len(rows),
+                        "included_chunk_summary_count": 0,
+                        "overview_summary_count": 0,
+                        "demo_balance_classification": demo_balance_classification,
+                    }
+                else:
+                    taxonomy_payload = ProblemTaxonomyGenerateInput(
+                        meeting_id=normalized_meeting_id,
+                        meeting_topic=_safe_text(payload.meeting_topic),
+                        refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                        max_groups=6,
+                    )
+                    taxonomy_context, context_warning = _build_problem_taxonomy_context(
+                        RT,
+                        taxonomy_payload,
+                        client,
+                        llm_ready,
+                    )
+                    taxonomy_context["demo_balance_classification"] = demo_balance_classification
+                    if context_warning:
+                        warning = context_warning
             except Exception as exc:
                 warning = f"요약 문서용 chunk context 생성 실패: {exc}"
 
         markdown = fallback_markdown
         if llm_ready and client is not None:
             try:
+                prompt = _build_summary_document_prompt(payload, groups, sections, taxonomy_context)
+                prompt_chars = len(prompt)
+                llm_started_at = time.perf_counter()
                 parsed = _call_llm_json(
                     RT,
                     client,
-                    prompt=_build_summary_document_prompt(payload, groups, sections, taxonomy_context),
-                    stage="canvas_summary_document",
+                    prompt=prompt,
+                    stage="canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
                     temperature=0.18,
-                    max_tokens=3600,
+                    max_tokens=1800 if demo_balance_mode else 3600,
                 )
-                markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
-                structured = _normalize_summary_structured_document(
-                    parsed.get("structured") if isinstance(parsed, dict) else {},
-                    fallback_structured,
-                )
-                document_blocks = _normalize_summary_document_blocks(
-                    parsed.get("document_blocks") if isinstance(parsed, dict) else [],
-                    structured,
-                    markdown,
-                )
-                if not markdown:
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
+                if demo_balance_mode:
+                    document_blocks = _normalize_summary_document_blocks(
+                        parsed.get("document_blocks") if isinstance(parsed, dict) else [],
+                        fallback_structured,
+                        "",
+                    )
                     markdown = _summary_document_blocks_to_markdown(document_blocks)
+                    structured = _build_demo_balance_structured_from_blocks(
+                        demo_balance_classification,
+                        document_blocks,
+                        fallback_structured,
+                        parsed.get("report_meta") if isinstance(parsed, dict) else {},
+                    )
+                else:
+                    markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
+                    structured = _normalize_summary_structured_document(
+                        parsed.get("structured") if isinstance(parsed, dict) else {},
+                        fallback_structured,
+                    )
+                    document_blocks = _normalize_summary_document_blocks(
+                        parsed.get("document_blocks") if isinstance(parsed, dict) else [],
+                        structured,
+                        markdown,
+                    )
+                    if not markdown:
+                        markdown = _summary_document_blocks_to_markdown(document_blocks)
                 used_llm = True
                 RT.last_llm_parsed_json = {
-                    "stage": "canvas_summary_document",
+                    "stage": "canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
                     "source_signature": source_signature,
                     "markdown": markdown,
                     "document_blocks": document_blocks,
@@ -14123,14 +19336,85 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
                 }
                 RT.last_llm_parsed_at = _now_ts()
             except Exception as exc:
-                warning = f"{warning} 요약 문서 LLM 생성 실패: {exc}".strip()
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
+                    error_type=type(exc).__name__,
+                    error_preview=repr(exc),
+                    client=client,
+                    elapsed_ms=llm_ms,
+                )
+                if demo_balance_mode:
+                    print(
+                        "[canvas demo balance summary document llm failed]",
+                        {
+                            "meeting_id": normalized_meeting_id,
+                            "prompt_chars": prompt_chars,
+                            "elapsed_ms": llm_ms,
+                            "llm_error": llm_error,
+                        },
+                        flush=True,
+                    )
+                    warning = _demo_llm_retryable_warning("요약 문서", exc)
+                    return {
+                        "ok": False,
+                        "used_llm": False,
+                        "retryable": True,
+                        "warning": warning,
+                        "llm_error": llm_error,
+                        "generated_at": _now_ts(),
+                        "source_signature": source_signature,
+                        "markdown": "",
+                        "document_blocks": [],
+                        "sections": sections,
+                        "structured": fallback_structured,
+                    }
+                else:
+                    warning = f"{warning} 요약 문서 LLM 생성 실패: {exc}".strip()
         elif not warning:
             warning = llm_note or "LLM 미연결 상태로 로컬 요약 문서를 만들었습니다."
+            if demo_balance_mode:
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_document",
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM client is not ready",
+                    client=client,
+                    elapsed_ms=0,
+                )
+                return {
+                    "ok": False,
+                    "used_llm": False,
+                    "retryable": True,
+                    "warning": "요약 문서 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요.",
+                    "llm_error": llm_error,
+                    "generated_at": _now_ts(),
+                    "source_signature": source_signature,
+                    "markdown": "",
+                    "document_blocks": [],
+                    "sections": sections,
+                    "structured": fallback_structured,
+                }
+
+        if demo_balance_mode:
+            print(
+                "[canvas demo balance summary document]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows_count": len(rows),
+                    "prompt_chars": prompt_chars,
+                    "used_llm": used_llm,
+                    "llm_ms": llm_ms,
+                    "total_ms": int((time.perf_counter() - started_at) * 1000),
+                    "document_blocks": len(document_blocks),
+                },
+            )
 
         return {
             "ok": True,
             "used_llm": used_llm,
+            "retryable": False,
             "warning": warning,
+            "llm_error": llm_error,
             "generated_at": _now_ts(),
             "source_signature": source_signature,
             "markdown": markdown,
@@ -14152,8 +19436,12 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
 def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
     workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id) if normalized_meeting_id else {}
+    demo_balance_mode = _is_demo_balance_config(payload.demo_config)
     groups = _summary_document_groups(payload, workspace)
     source_signature = _summary_document_source_signature(groups)
+    demo_balance_classification = _normalize_canvas_demo_balance_classification(
+        payload.demo_balance_classification or workspace.get("demo_balance_classification")
+    )
     current_summary = payload.current_summary if isinstance(payload.current_summary, dict) else {}
     current_structured_raw = current_summary.get("structured") if isinstance(current_summary.get("structured"), dict) else {}
     signature_rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
@@ -14170,8 +19458,10 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     )
     signature = _canvas_llm_signature(
         {
-            "version": 7,
+            "version": "demo_balance_conclusion_blocks_v3" if demo_balance_mode else 8,
             "meeting_topic": _safe_text(payload.meeting_topic),
+            "demo_config": _normalize_canvas_demo_config(payload.demo_config),
+            "demo_balance_classification": demo_balance_classification,
             "source_signature": source_signature,
             "utterance_signature": utterance_signature,
             "current_structured": current_structured_raw,
@@ -14181,6 +19471,7 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     )
 
     def _compute() -> dict[str, Any]:
+        started_at = time.perf_counter()
         rows = signature_rows
         sections = _summary_document_sections(groups, rows)
         fallback_structured = _build_summary_document_structured(payload.meeting_topic, groups, sections)
@@ -14198,6 +19489,9 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
         markdown = fallback_markdown
         used_llm = False
         warning = ""
+        llm_error: dict[str, Any] = {}
+        prompt_chars = 0
+        llm_ms = 0
 
         if not groups:
             return {
@@ -14221,51 +19515,83 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
             "included_utterance_count": len(rows),
             "included_chunk_summary_count": 0,
             "overview_summary_count": 0,
+            "demo_balance_classification": demo_balance_classification,
         }
         if llm_ready:
             try:
-                taxonomy_payload = ProblemTaxonomyGenerateInput(
-                    meeting_id=normalized_meeting_id,
-                    meeting_topic=_safe_text(payload.meeting_topic),
-                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
-                    max_groups=6,
-                )
-                transcript_context, context_warning = _build_problem_taxonomy_context(
-                    RT,
-                    taxonomy_payload,
-                    client,
-                    llm_ready,
-                )
-                if context_warning:
-                    warning = context_warning
+                if demo_balance_mode:
+                    transcript_context = {
+                        "rows": rows,
+                        "chunk_summaries": [],
+                        "overview_summaries": [],
+                        "total_utterance_count": len(rows),
+                        "included_utterance_count": len(rows),
+                        "included_chunk_summary_count": 0,
+                        "overview_summary_count": 0,
+                        "demo_balance_classification": demo_balance_classification,
+                    }
+                else:
+                    taxonomy_payload = ProblemTaxonomyGenerateInput(
+                        meeting_id=normalized_meeting_id,
+                        meeting_topic=_safe_text(payload.meeting_topic),
+                        refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                        max_groups=6,
+                    )
+                    transcript_context, context_warning = _build_problem_taxonomy_context(
+                        RT,
+                        taxonomy_payload,
+                        client,
+                        llm_ready,
+                    )
+                    transcript_context["demo_balance_classification"] = demo_balance_classification
+                    if context_warning:
+                        warning = context_warning
             except Exception as exc:
                 warning = f"결론 문서용 전체 전사 context 생성 실패: {exc}"
 
         if llm_ready and client is not None:
             try:
+                prompt = _build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context)
+                prompt_chars = len(prompt)
+                llm_started_at = time.perf_counter()
                 parsed = _call_llm_json(
                     RT,
                     client,
-                    prompt=_build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context),
-                    stage="canvas_summary_conclusion",
+                    prompt=prompt,
+                    stage="canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
                     temperature=0.16,
-                    max_tokens=5200,
+                    max_tokens=1800 if demo_balance_mode else 5200,
                 )
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
                 if isinstance(parsed, dict):
-                    parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
-                    parsed_conclusion = parsed.get("conclusion") if isinstance(parsed.get("conclusion"), dict) else {}
-                    structured_source = parsed_structured if parsed_structured else {"conclusion": parsed_conclusion}
-                    normalized_structured = _normalize_summary_structured_document(structured_source, base_structured)
-                    structured = {
-                        **base_structured,
-                        "conclusion": normalized_structured.get("conclusion") or base_structured.get("conclusion", {}),
-                    }
-                    markdown = _normalize_summary_document_markdown(parsed, "")
-                    document_blocks = _normalize_summary_document_blocks(
-                        parsed.get("document_blocks"),
-                        structured,
-                        markdown,
-                    )
+                    if demo_balance_mode:
+                        document_blocks = _normalize_summary_document_blocks(
+                            parsed.get("document_blocks"),
+                            base_structured,
+                            "",
+                        )
+                        markdown = _summary_document_blocks_to_markdown(document_blocks)
+                        structured = _build_demo_balance_structured_from_blocks(
+                            demo_balance_classification,
+                            document_blocks,
+                            base_structured,
+                            parsed.get("report_meta"),
+                        )
+                    else:
+                        parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
+                        parsed_conclusion = parsed.get("conclusion") if isinstance(parsed.get("conclusion"), dict) else {}
+                        structured_source = parsed_structured if parsed_structured else {"conclusion": parsed_conclusion}
+                        normalized_structured = _normalize_summary_structured_document(structured_source, base_structured)
+                        structured = {
+                            **base_structured,
+                            "conclusion": normalized_structured.get("conclusion") or base_structured.get("conclusion", {}),
+                        }
+                        markdown = _normalize_summary_document_markdown(parsed, "")
+                        document_blocks = _normalize_summary_document_blocks(
+                            parsed.get("document_blocks"),
+                            structured,
+                            markdown,
+                        )
                 else:
                     markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
                     document_blocks = _normalize_summary_document_blocks([], structured, markdown)
@@ -14273,7 +19599,7 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
                     markdown = _summary_document_blocks_to_markdown(document_blocks)
                 used_llm = True
                 RT.last_llm_parsed_json = {
-                    "stage": "canvas_summary_conclusion",
+                    "stage": "canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
                     "source_signature": source_signature,
                     "markdown": markdown,
                     "document_blocks": document_blocks,
@@ -14281,14 +19607,85 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
                 }
                 RT.last_llm_parsed_at = _now_ts()
             except Exception as exc:
-                warning = f"결론 문서 LLM 생성 실패: {exc}"
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
+                    error_type=type(exc).__name__,
+                    error_preview=repr(exc),
+                    client=client,
+                    elapsed_ms=llm_ms,
+                )
+                if demo_balance_mode:
+                    print(
+                        "[canvas demo balance summary conclusion llm failed]",
+                        {
+                            "meeting_id": normalized_meeting_id,
+                            "prompt_chars": prompt_chars,
+                            "elapsed_ms": llm_ms,
+                            "llm_error": llm_error,
+                        },
+                        flush=True,
+                    )
+                    warning = _demo_llm_retryable_warning("결론 문서", exc)
+                    return {
+                        "ok": False,
+                        "used_llm": False,
+                        "retryable": True,
+                        "warning": warning,
+                        "llm_error": llm_error,
+                        "generated_at": _now_ts(),
+                        "source_signature": source_signature,
+                        "markdown": "",
+                        "document_blocks": [],
+                        "sections": sections,
+                        "structured": structured,
+                    }
+                else:
+                    warning = f"결론 문서 LLM 생성 실패: {exc}"
         else:
             warning = llm_note or "LLM 미연결 상태로 기존 결론 문서를 유지했습니다."
+            if demo_balance_mode:
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_conclusion",
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM client is not ready",
+                    client=client,
+                    elapsed_ms=0,
+                )
+                return {
+                    "ok": False,
+                    "used_llm": False,
+                    "retryable": True,
+                    "warning": "결론 문서 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요.",
+                    "llm_error": llm_error,
+                    "generated_at": _now_ts(),
+                    "source_signature": source_signature,
+                    "markdown": "",
+                    "document_blocks": [],
+                    "sections": sections,
+                    "structured": structured,
+                }
+
+        if demo_balance_mode:
+            print(
+                "[canvas demo balance summary conclusion]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows_count": len(rows),
+                    "prompt_chars": prompt_chars,
+                    "used_llm": used_llm,
+                    "llm_ms": llm_ms,
+                    "total_ms": int((time.perf_counter() - started_at) * 1000),
+                    "document_blocks": len(document_blocks),
+                },
+            )
 
         return {
             "ok": True,
             "used_llm": used_llm,
+            "retryable": False,
             "warning": warning,
+            "llm_error": llm_error,
             "generated_at": _now_ts(),
             "source_signature": source_signature,
             "markdown": markdown,
@@ -14459,6 +19856,75 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
     normalized_meeting_id = _safe_text(payload.meeting_id)
     if not normalized_meeting_id:
         raise HTTPException(status_code=400, detail="meeting_id is required")
+    normalized_input_rows = _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
+    payload_demo_config = _normalize_canvas_demo_config(payload.demo_config)
+    is_payload_demo_balance = _is_demo_balance_config(payload_demo_config)
+    requested_update_mode = _safe_text(payload.update_mode).lower()
+    update_mode = (
+        "local_fast_keywords"
+        if is_payload_demo_balance and requested_update_mode == "local_fast_keywords"
+        else
+        "realtime_text_batch"
+        if is_payload_demo_balance and requested_update_mode == "realtime_text_batch"
+        else "fast_keywords"
+        if is_payload_demo_balance and requested_update_mode == "fast_keywords"
+        else "consolidate"
+        if is_payload_demo_balance
+        else "normal"
+    )
+    request_started = time.perf_counter()
+    print(
+        "[canvas ideation bubble graph request]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "input_rows": len(normalized_input_rows),
+            "demo": is_payload_demo_balance,
+            "update_mode": update_mode,
+            "max_keywords": payload.max_keywords,
+        },
+        flush=True,
+    )
+    llm_stage = "canvas_ideation_bubble_graph_update"
+    route_model, route_thinking_level = _llm_route_for_stage(llm_stage)
+    llm_route = {
+        "stage": llm_stage,
+        "model": route_model,
+        "thinking_level": route_thinking_level,
+    }
+
+    def _llm_trace_payload(client: Any = None) -> dict[str, Any]:
+        if client is None or not hasattr(client, "status"):
+            return {}
+        try:
+            status_payload = client.status()
+            diagnostics = status_payload if isinstance(status_payload, dict) else {}
+        except Exception:
+            return {}
+        trace = diagnostics.get("last_generate_trace")
+        return copy.deepcopy(trace) if isinstance(trace, dict) else {}
+
+    def _llm_error_payload(
+        *,
+        error_type: str,
+        error_preview: Any,
+        elapsed_ms: int | None = None,
+        client: Any = None,
+    ) -> dict[str, Any]:
+        diagnostics: dict[str, Any] = {}
+        if client is not None and hasattr(client, "status"):
+            try:
+                status_payload = client.status()
+                diagnostics = status_payload if isinstance(status_payload, dict) else {}
+            except Exception:
+                diagnostics = {}
+        return {
+            "stage": llm_stage,
+            "model": _safe_text(diagnostics.get("last_model") or route_model),
+            "http_status": _safe_nonnegative_int(diagnostics.get("last_http_status"), 0),
+            "error_type": _safe_text(error_type),
+            "error_preview": _safe_text(error_preview or diagnostics.get("last_error"))[:500],
+            "elapsed_ms": elapsed_ms,
+        }
 
     def _response(
         graph: dict[str, Any],
@@ -14466,45 +19932,144 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         warning: str,
         signature: str,
         workspace: dict[str, Any] | None = None,
+        reason: str = "",
+        llm_error: dict[str, Any] | None = None,
+        refined_transcripts: list[dict[str, Any]] | None = None,
+        ignored_utterance_ids: list[str] | None = None,
+        rename_keywords: list[dict[str, str]] | None = None,
+        keyword_count: int = 0,
+        rename_count: int = 0,
+        merge_count: int = 0,
+        remove_count: int = 0,
+        move_count: int = 0,
+        refine_count: int = 0,
+        input_bubble_count: int = 0,
+        primary_count: int = 0,
+        promote_count: int = 0,
+        demote_count: int = 0,
+        affinity_update_count: int = 0,
+        processed_count: int = 0,
+        alias_merge_count: int = 0,
+        canonicalized_count: int = 0,
+        local_cleanup_count: int = 0,
+        slow_backoff_ms: int = 0,
+        used_local: bool = False,
+        extractor_route: dict[str, Any] | None = None,
+        raw_directives: dict[str, Any] | None = None,
+        llm_request_payload: dict[str, Any] | None = None,
+        llm_response_payload: dict[str, Any] | None = None,
+        llm_id_map: dict[str, str] | None = None,
+        llm_trace: dict[str, Any] | None = None,
+        ignored_refine_count: int = 0,
+        timing_ms: dict[str, Any] | None = None,
+        broadcast_steps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         workspace_payload = workspace or _warm_canvas_workspace_cache(RT, normalized_meeting_id)
-        workspace_payload["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(graph)
+        response_graph = _normalize_canvas_ideation_bubble_graph(graph)
+        _ensure_demo_balance_anchor_bubbles(
+            response_graph,
+            _normalize_canvas_demo_config(workspace_payload.get("demo_config") or payload_demo_config),
+        )
+        _ensure_ideation_bubble_graph_server_layout(response_graph)
+        workspace_payload["ideation_bubble_graph"] = response_graph
+        state_counts = _ideation_bubble_state_counts(response_graph)
+        layout_debug = _bubble_debug_compact_bubbles(response_graph, limit=24)
+        response_timing = {
+            key: _safe_nonnegative_int(value, 0)
+            for key, value in (timing_ms or {}).items()
+            if _safe_text(key)
+        }
+        response_timing["backend_total_ms"] = round((time.perf_counter() - request_started) * 1000)
         return {
-            "ok": bool(used_llm),
+            "ok": bool(used_llm or used_local),
             "used_llm": used_llm,
+            "used_local": used_local,
+            "reason": _safe_text(reason),
             "warning": warning,
+            "update_mode": update_mode,
+            "llm_route": llm_route,
+            "llm_error": llm_error or {},
+            "raw_directives": raw_directives or {},
+            "llm_request": llm_request_payload or {},
+            "llm_response": llm_response_payload or {},
+            "llm_id_map": llm_id_map or {},
+            "llm_trace": llm_trace or {},
+            "ignored_refine_count": _safe_nonnegative_int(ignored_refine_count),
+            "timing": response_timing,
+            "extractor_route": extractor_route or {},
+            "layout_debug": layout_debug,
+            "broadcast_steps": broadcast_steps or [],
+            "refined_transcripts": refined_transcripts or [],
+            "ignored_utterance_ids": ignored_utterance_ids or [],
+            "rename_keywords": rename_keywords or [],
+            "keyword_count": _safe_nonnegative_int(keyword_count),
+            "rename_count": _safe_nonnegative_int(rename_count),
+            "merge_count": _safe_nonnegative_int(merge_count),
+            "remove_count": _safe_nonnegative_int(remove_count),
+            "move_count": _safe_nonnegative_int(move_count),
+            "refine_count": _safe_nonnegative_int(refine_count),
+            "input_bubble_count": _safe_nonnegative_int(input_bubble_count),
+            "primary_count": _safe_nonnegative_int(primary_count),
+            "promote_count": _safe_nonnegative_int(promote_count),
+            "demote_count": _safe_nonnegative_int(demote_count),
+            "affinity_update_count": _safe_nonnegative_int(affinity_update_count),
+            "alias_merge_count": _safe_nonnegative_int(alias_merge_count),
+            "canonicalized_count": _safe_nonnegative_int(canonicalized_count),
+            "local_cleanup_count": _safe_nonnegative_int(local_cleanup_count),
+            "slow_backoff_ms": _safe_nonnegative_int(slow_backoff_ms),
+            "overlap_resolved_count": _safe_nonnegative_int(response_graph.get("layout_overlap_resolved_count"), 0),
+            "processed_count": _safe_nonnegative_int(processed_count),
+            "active_count": state_counts.get("active", 0),
+            "dimmed_count": state_counts.get("dimmed", 0),
+            "exiting_count": state_counts.get("exiting", 0),
+            "archived_count": state_counts.get("archived", 0),
+            "provisional_count": state_counts.get("provisional", 0),
             "generated_at": _now_ts(),
             "source_signature": signature,
-            "bubble_graph": _normalize_canvas_ideation_bubble_graph(graph),
+            "bubble_graph": response_graph,
             "workspace": _canvas_workspace_response(workspace_payload),
         }
 
-    with RT.canvas_llm_request_lock:
+    if is_payload_demo_balance and requested_update_mode == "local_fast_keywords":
         workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
         graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
-        processed_ids = {
-            _safe_text(value)
-            for value in (graph.get("processed_utterance_ids") or [])
-            if _safe_text(value)
-        }
+        demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
+        if not _is_demo_balance_config(demo_config):
+            signature = _canvas_llm_signature(
+                {
+                    "version": 1,
+                    "meeting_id": normalized_meeting_id,
+                    "update_mode": update_mode,
+                    "rows": normalized_input_rows,
+                }
+            )
+            return _response(
+                graph,
+                False,
+                "demo_balance 모드가 아니라 로컬 fast 버블을 실행하지 않았습니다.",
+                signature,
+                workspace,
+                reason="not_demo_balance",
+            )
+        anchors_changed = _ensure_demo_balance_anchor_bubbles(graph, demo_config)
         rows = [
             row
-            for row in _normalize_problem_taxonomy_utterance_rows(payload.utterances)[-180:]
-            if _safe_text(row.get("id")) and _safe_text(row.get("id")) not in processed_ids
+            for row in normalized_input_rows[-6:]
+            if _safe_text(row.get("id")) and _safe_text(row.get("text"))
         ]
         existing_inputs = _ideation_bubble_existing_keyword_inputs(graph)
-        max_keywords = min(3, max(1, int(payload.max_keywords or 3)))
+        max_keywords = min(4, max(1, int(payload.max_keywords or 4)))
         extract_payload = IdeationKeywordExtractInput(
             meeting_id=normalized_meeting_id,
             meeting_topic=_safe_text(payload.meeting_topic),
             meeting_goal=_safe_text(payload.meeting_goal),
             meeting_goal_context=_safe_text(payload.meeting_goal_context),
+            demo_config=demo_config,
             utterances=[ProblemTaxonomyUtteranceInput(**row) for row in rows],
             context_cache=_safe_text(payload.context_cache),
             existing_keywords=existing_inputs,
             max_keywords=max_keywords,
         )
-        context_cache = _ideation_context_cache_text(extract_payload)
         existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
         signature = _canvas_llm_signature(
             {
@@ -14513,12 +20078,488 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "meeting_topic": _safe_text(payload.meeting_topic),
                 "meeting_goal": _safe_text(payload.meeting_goal),
                 "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+                "demo_config": demo_config,
+                "update_mode": update_mode,
                 "graph_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
                 "existing_keywords": existing_keyword_rows,
-                "context_cache": context_cache,
                 "rows": rows,
             }
         )
+        if not rows:
+            return _response(
+                graph,
+                False,
+                "로컬 fast 버블로 처리할 발화가 없습니다.",
+                signature,
+                workspace,
+                reason="no_rows",
+            )
+
+        normalized_keywords, extractor_route = _extract_demo_local_fast_keywords(
+            extract_payload,
+            rows,
+            max_keywords=max_keywords,
+        )
+        if not normalized_keywords:
+            cleanup_graph = _normalize_canvas_ideation_bubble_graph(graph)
+            _normalize_demo_balance_graph_affinities(cleanup_graph)
+            previous_bubble_count = len(cleanup_graph.get("bubbles") or [])
+            _prune_exiting_ideation_bubbles(cleanup_graph)
+            cleanup_cycle = _safe_nonnegative_int(cleanup_graph.get("update_cycle"), 0) + 1
+            cleanup_core_ids = _ideation_bubble_core_ids(cleanup_graph)
+            cleanup_protected_ids = _demo_balance_minimum_side_protected_ids(cleanup_graph)
+            cleanup_metrics = {
+                "local_cleanup_count": _apply_demo_balance_local_provisional_cleanup(
+                    cleanup_graph,
+                    set(),
+                    cleanup_core_ids,
+                    cleanup_cycle,
+                    cleanup_protected_ids,
+                )
+            }
+            cleanup_changed = (
+                anchors_changed
+                or cleanup_metrics["local_cleanup_count"] > 0
+                or len(cleanup_graph.get("bubbles") or []) != previous_bubble_count
+            )
+            if cleanup_changed:
+                cleanup_graph["update_cycle"] = cleanup_cycle
+                cleanup_graph["updated_at"] = _now_ts()
+                cleanup_core_ids = _ideation_bubble_core_ids(cleanup_graph)
+                cleanup_protected_ids = _demo_balance_minimum_side_protected_ids(cleanup_graph)
+                _mark_demo_balance_overflow_bubbles_exiting(cleanup_graph, cleanup_cycle, cleanup_core_ids, cleanup_protected_ids)
+                _apply_ideation_bubble_layout_zones(cleanup_graph, cleanup_core_ids)
+                cleanup_primary_ids = _resolve_ideation_primary_keyword_ids(
+                    cleanup_graph,
+                    _demo_balance_primary_anchor_texts(demo_config),
+                    limit=2,
+                )
+                _apply_ideation_bubble_visual_state(cleanup_graph, cleanup_core_ids | cleanup_primary_ids, primary_ids=cleanup_primary_ids)
+                _apply_ideation_bubble_server_layout(cleanup_graph)
+                saved_at = _now_ts()
+                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+                next_workspace["ideation_bubble_graph"] = cleanup_graph
+                next_workspace["demo_config"] = demo_config
+                with RT.lock:
+                    RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+                _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+                _write_bubble_debug_event(
+                    normalized_meeting_id,
+                    "local_fast_cleanup_without_keywords",
+                    {
+                        "update_mode": update_mode,
+                        "reason": "cleanup",
+                        "rows": _bubble_debug_compact_rows(rows),
+                        "extractor_route": extractor_route,
+                        "state_counts": _ideation_bubble_state_counts(cleanup_graph),
+                        "graph_cycle": cleanup_graph.get("update_cycle"),
+                        "graph_bubbles": _bubble_debug_compact_bubbles(cleanup_graph),
+                    },
+                )
+                return _response(
+                    cleanup_graph,
+                    False,
+                    "",
+                    signature,
+                    next_workspace,
+                    reason="cleanup",
+                    keyword_count=0,
+                    local_cleanup_count=cleanup_metrics["local_cleanup_count"],
+                    used_local=True,
+                    extractor_route=extractor_route,
+                )
+            print(
+                "[canvas ideation bubble graph local fast no keywords]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows": len(rows),
+                    "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                    "extractor_route": extractor_route,
+                },
+                flush=True,
+            )
+            _write_bubble_debug_event(
+                normalized_meeting_id,
+                "local_fast_no_keywords",
+                {
+                    "update_mode": update_mode,
+                    "reason": "no_keywords",
+                    "rows": _bubble_debug_compact_rows(rows),
+                    "extractor_route": extractor_route,
+                    "state_counts": _ideation_bubble_state_counts(graph),
+                    "graph_cycle": graph.get("update_cycle"),
+                    "graph_bubbles": _bubble_debug_compact_bubbles(graph),
+                },
+            )
+            return _response(
+                graph,
+                False,
+                "로컬 추출기에서 표시할 명사구가 없었습니다.",
+                signature,
+                workspace,
+                reason="no_keywords",
+                used_local=True,
+                extractor_route=extractor_route,
+            )
+
+        graph_metrics: dict[str, int] = {}
+        initial_graph = _normalize_canvas_ideation_bubble_graph(graph)
+        initial_ids = {
+            _safe_text(bubble.get("id"))
+            for bubble in (initial_graph.get("bubbles") or [])
+            if isinstance(bubble, dict) and _safe_text(bubble.get("id"))
+        }
+        next_graph = _apply_ideation_bubble_graph_update(
+            initial_graph,
+            rows,
+            normalized_keywords,
+            [],
+            [],
+            [],
+            allow_single_support=True,
+            decay_profile="demo_balance",
+            apply_decay=False,
+            mark_processed=False,
+            demo_local_cleanup=False,
+            primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
+            metrics=graph_metrics,
+        )
+        _final_by_id, final_by_text = _ideation_bubble_graph_text_maps(next_graph)
+        ordered_new_ids: list[str] = []
+        for keyword in normalized_keywords:
+            bubble = final_by_text.get(_ideation_bubble_text_key(keyword.get("text")))
+            bubble_id = _safe_text((bubble or {}).get("id"))
+            if bubble_id and bubble_id not in initial_ids and bubble_id not in ordered_new_ids:
+                ordered_new_ids.append(bubble_id)
+        for bubble_id in _demo_balance_graph_bubbles_by_id(next_graph):
+            if bubble_id not in initial_ids and bubble_id not in ordered_new_ids:
+                ordered_new_ids.append(bubble_id)
+        slot_assignment_metrics = _demo_balance_assign_nearest_open_rail_slots(
+            initial_graph,
+            next_graph,
+            set(ordered_new_ids),
+        )
+        plan_id = _demo_balance_motion_plan_id(next_graph, signature)
+        base_cycle = _safe_nonnegative_int(initial_graph.get("update_cycle"), 0)
+        next_step_cycle = base_cycle
+        previous_step_graph = copy.deepcopy(initial_graph)
+        broadcast_steps: list[dict[str, Any]] = []
+        motion_metrics: dict[str, int] = {
+            "new_count": 0,
+            "relayout_count": 0,
+            "push_count": 0,
+            "gap_count": 0,
+            "content_count": 0,
+            "transfer_count": 0,
+            "overflow_count": 0,
+            "exit_count": 0,
+        }
+        if ordered_new_ids:
+            revealed_ids = set(initial_ids)
+            step_specs = [(index, bubble_id) for index, bubble_id in enumerate(ordered_new_ids)]
+        else:
+            step_specs = [(0, "")]
+
+        for keyword_index, bubble_id in step_specs:
+            next_step_cycle += 1
+            step_graph = copy.deepcopy(next_graph)
+            if bubble_id:
+                revealed_ids.add(bubble_id)
+                step_graph["bubbles"] = [
+                    bubble
+                    for bubble in (step_graph.get("bubbles") or [])
+                    if isinstance(bubble, dict)
+                    and (
+                        _safe_text(bubble.get("id")) in revealed_ids
+                        or _is_demo_balance_anchor_bubble(bubble)
+                        or _normalize_ideation_bubble_state(bubble.get("display_state")) == "exiting"
+                    )
+                ]
+                step_by_id = _demo_balance_graph_bubbles_by_id(step_graph)
+                current_new = step_by_id.get(bubble_id)
+                if current_new:
+                    _demo_balance_apply_gate_pose(current_new)
+            step_graph["update_cycle"] = next_step_cycle
+            step_delay_ms = DEMO_BALANCE_GATE_ENTER_DELAY_MS if keyword_index == 0 else DEMO_BALANCE_GATE_STEP_DELAY_MS
+            step_motion_metrics = _annotate_demo_balance_motion_hints(
+                previous_step_graph,
+                step_graph,
+                update_reason="insert" if bubble_id else "content",
+                sequence=keyword_index,
+                delay_ms=step_delay_ms,
+                plan_id=plan_id,
+            )
+            for metric_key, metric_value in step_motion_metrics.items():
+                motion_metrics[metric_key] = _safe_nonnegative_int(motion_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            broadcast_steps.append(
+                {
+                    "delay_ms": step_delay_ms,
+                    "reason": "gate_enter" if bubble_id else "content_update",
+                    "keyword": _safe_text((_demo_balance_graph_bubbles_by_id(step_graph).get(bubble_id) or {}).get("label")) if bubble_id else "",
+                    "motion": step_motion_metrics,
+                    "motion_plan_id": plan_id,
+                    "bubble_graph": copy.deepcopy(step_graph),
+                    "layout_debug": _bubble_debug_compact_bubbles(step_graph, limit=24),
+                }
+            )
+            previous_step_graph = copy.deepcopy(step_graph)
+        next_graph["update_cycle"] = next_step_cycle
+        cleanup_previous_graph = copy.deepcopy(next_graph)
+        cleanup_metrics: dict[str, int] = {}
+        cleanup_graph = _apply_ideation_bubble_graph_update(
+            next_graph,
+            rows,
+            [],
+            [],
+            [],
+            [],
+            allow_single_support=True,
+            decay_profile="demo_balance",
+            apply_decay=False,
+            mark_processed=False,
+            demo_local_cleanup=True,
+            primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
+            metrics=cleanup_metrics,
+        )
+        cleanup_count = _safe_nonnegative_int(cleanup_metrics.get("local_cleanup_count"), 0)
+        if cleanup_count > 0:
+            next_graph = cleanup_graph
+            next_step_cycle = max(next_step_cycle + 1, _safe_nonnegative_int(next_graph.get("update_cycle"), 0))
+            next_graph["update_cycle"] = next_step_cycle
+            for metric_key, metric_value in cleanup_metrics.items():
+                graph_metrics[metric_key] = _safe_nonnegative_int(graph_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            cleanup_motion_metrics = _annotate_demo_balance_motion_hints(
+                cleanup_previous_graph,
+                next_graph,
+                update_reason="cleanup",
+                plan_id=plan_id,
+            )
+            for metric_key, metric_value in cleanup_motion_metrics.items():
+                motion_metrics[metric_key] = _safe_nonnegative_int(motion_metrics.get(metric_key), 0) + _safe_nonnegative_int(metric_value, 0)
+            broadcast_steps.append(
+                {
+                    "delay_ms": DEMO_BALANCE_GATE_STEP_DELAY_MS,
+                    "reason": "cleanup",
+                    "keyword": "",
+                    "motion": cleanup_motion_metrics,
+                    "motion_plan_id": plan_id,
+                    "bubble_graph": copy.deepcopy(next_graph),
+                    "layout_debug": _bubble_debug_compact_bubbles(next_graph, limit=24),
+                }
+            )
+        saved_at = _now_ts()
+        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+        next_workspace["ideation_bubble_graph"] = next_graph
+        next_workspace["demo_config"] = demo_config
+        with RT.lock:
+            RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+            RT.last_llm_parsed_json = {
+                "stage": "canvas_ideation_bubble_graph_local_fast",
+                "update_mode": update_mode,
+                "source_signature": signature,
+                "keywords": copy.deepcopy(normalized_keywords),
+                "extractor_route": copy.deepcopy(extractor_route),
+                "bubble_graph": copy.deepcopy(next_graph),
+            }
+            RT.last_llm_parsed_at = _now_ts()
+        _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+        print(
+            "[canvas ideation bubble graph local fast]",
+            {
+                "meeting_id": normalized_meeting_id,
+                "rows": len(rows),
+                "keywords": len(normalized_keywords),
+                "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                "cycle": next_graph.get("update_cycle"),
+                "extractor_route": extractor_route,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "selected_keywords": extractor_route.get("selected_keywords"),
+                "graph_bubbles": [
+                    {
+                        "label": item.get("label"),
+                        "state": item.get("display_state"),
+                        "choice": item.get("choice_affinity"),
+                        "count": item.get("count"),
+                        "motion": item.get("motion_reason"),
+                        "direction": item.get("motion_direction"),
+                        "slot": item.get("orbit_slot_index"),
+                        "move_cost": item.get("move_cost"),
+                        "angle_delta": item.get("move_angle_delta"),
+                        "arc_cost": item.get("arc_cost"),
+                        "radius_cost": item.get("radius_cost"),
+                    }
+                    for item in _bubble_debug_compact_bubbles(next_graph, limit=16)
+                ],
+                "local_cleanup": graph_metrics.get("local_cleanup_count", 0),
+                "slot_assignment": slot_assignment_metrics,
+                "motion_plan_id": plan_id,
+                "broadcast_steps": len(broadcast_steps),
+                "motion": motion_metrics,
+            },
+            flush=True,
+        )
+        _write_bubble_debug_event(
+            normalized_meeting_id,
+            "local_fast_updated",
+            {
+                "update_mode": update_mode,
+                "reason": "updated",
+                "rows": _bubble_debug_compact_rows(rows),
+                "selected_keywords": extractor_route.get("selected_keywords"),
+                "top_candidates": extractor_route.get("top_candidates"),
+                "extractor_route": extractor_route,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "graph_cycle": next_graph.get("update_cycle"),
+                "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
+                "local_cleanup_count": _safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
+                "slot_assignment": slot_assignment_metrics,
+                "motion_plan_id": plan_id,
+                "broadcast_steps": [
+                    {
+                        "delay_ms": _safe_nonnegative_int(step.get("delay_ms"), 0),
+                        "reason": _safe_text(step.get("reason")),
+                        "keyword": _safe_text(step.get("keyword")),
+                        "motion": step.get("motion") or {},
+                        "motion_plan_id": _safe_text(step.get("motion_plan_id")),
+                        "cycle": _safe_nonnegative_int((step.get("bubble_graph") or {}).get("update_cycle"), 0),
+                    }
+                    for step in broadcast_steps
+                ],
+                "motion": motion_metrics,
+            },
+        )
+        return _response(
+            next_graph,
+            False,
+            "",
+            signature,
+            next_workspace,
+            reason="updated",
+            keyword_count=len(normalized_keywords),
+            processed_count=0,
+            alias_merge_count=_safe_nonnegative_int(extractor_route.get("alias_merge_count"), 0),
+            canonicalized_count=_safe_nonnegative_int(extractor_route.get("canonicalized_count"), 0),
+            local_cleanup_count=_safe_nonnegative_int(graph_metrics.get("local_cleanup_count"), 0),
+            used_local=True,
+            extractor_route=extractor_route,
+            broadcast_steps=broadcast_steps,
+        )
+
+    lock_wait_started = time.perf_counter()
+    request_lock = _get_canvas_llm_request_lock(RT, normalized_meeting_id, "ideation_bubble_graph_update")
+    with request_lock:
+        lock_wait_ms = round((time.perf_counter() - lock_wait_started) * 1000)
+        timing_ms: dict[str, Any] = {"lock_wait_ms": lock_wait_ms}
+        if lock_wait_ms > 100:
+            print(
+                "[canvas ideation bubble graph lock acquired]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "lock_wait_ms": lock_wait_ms,
+                },
+                flush=True,
+            )
+        workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+        graph = _normalize_canvas_ideation_bubble_graph(workspace.get("ideation_bubble_graph"))
+        demo_config = _normalize_canvas_demo_config(payload.demo_config or workspace.get("demo_config"))
+        is_demo_balance = _is_demo_balance_config(demo_config)
+        if is_demo_balance:
+            _ensure_demo_balance_anchor_bubbles(graph, demo_config)
+        requested_demo_update_mode = _safe_text(requested_update_mode).lower()
+        processed_ids = {
+            _safe_text(value)
+            for value in (graph.get("processed_utterance_ids") or [])
+            if _safe_text(value)
+        }
+        rows = [
+            row
+            for row in normalized_input_rows
+            if _safe_text(row.get("id")) and _safe_text(row.get("id")) not in processed_ids
+        ]
+        include_exiting_existing = (
+            is_demo_balance
+            and requested_demo_update_mode
+            not in {"local_fast_keywords", "fast_keywords", "realtime_text_batch"}
+        )
+        existing_inputs = _ideation_bubble_existing_keyword_inputs(
+            graph,
+            include_exiting=include_exiting_existing,
+        )
+        update_mode = (
+            "local_fast_keywords"
+            if is_demo_balance and requested_update_mode == "local_fast_keywords"
+            else
+            "realtime_text_batch"
+            if is_demo_balance and requested_update_mode == "realtime_text_batch"
+            else "fast_keywords"
+            if is_demo_balance and requested_update_mode == "fast_keywords"
+            else "consolidate"
+            if is_demo_balance
+            else "normal"
+        )
+        if is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}:
+            max_keywords = min(8, max(1, int(payload.max_keywords or 8)))
+        else:
+            max_keywords = min(6 if is_demo_balance else 3, max(1, int(payload.max_keywords or 3)))
+        extract_payload = IdeationKeywordExtractInput(
+            meeting_id=normalized_meeting_id,
+            meeting_topic=_safe_text(payload.meeting_topic),
+            meeting_goal=_safe_text(payload.meeting_goal),
+            meeting_goal_context=_safe_text(payload.meeting_goal_context),
+            demo_config=demo_config,
+            utterances=[ProblemTaxonomyUtteranceInput(**row) for row in rows],
+            context_cache=_safe_text(payload.context_cache),
+            existing_keywords=existing_inputs,
+            max_keywords=max_keywords,
+        )
+        context_cache = "" if is_demo_balance and update_mode == "consolidate" else _ideation_context_cache_text(extract_payload)
+        existing_keyword_rows = _ideation_existing_keyword_rows(extract_payload)
+        demo_consolidate_llm_request_payload = (
+            _demo_balance_consolidate_llm_input_payload(extract_payload, rows)
+            if is_demo_balance and update_mode == "consolidate"
+            else {}
+        )
+        demo_consolidate_llm_id_map = (
+            _demo_balance_consolidate_llm_id_map(extract_payload, rows)
+            if is_demo_balance and update_mode == "consolidate"
+            else {}
+        )
+        refined_transcripts: list[dict[str, Any]] = []
+        ignored_utterance_ids: list[str] = []
+        ignored_refine_count = 0
+        primary_keyword_texts: list[str] | None = None
+        primary_keywords_present = False
+        affinity_updates: list[dict[str, Any]] = []
+        signature_payload = {
+            "version": 2 if is_demo_balance and update_mode == "consolidate" else 1,
+            "meeting_id": normalized_meeting_id,
+            "demo_config": demo_config,
+            "update_mode": update_mode,
+            "graph_cycle": _safe_nonnegative_int(graph.get("update_cycle"), 0),
+            "rows": rows[-5:] if is_demo_balance and update_mode == "consolidate" else rows,
+            "existing_keywords": [
+                {
+                    "id": item.get("id"),
+                    "text": item.get("text"),
+                    "aliases": item.get("aliases") or [],
+                    "choice_affinity": item.get("choice_affinity"),
+                    "needs_affinity_review": bool(item.get("needs_affinity_review")),
+                }
+                for item in existing_keyword_rows
+            ]
+            if is_demo_balance and update_mode == "consolidate"
+            else existing_keyword_rows,
+        }
+        if not (is_demo_balance and update_mode == "consolidate"):
+            signature_payload.update(
+                {
+                    "meeting_topic": _safe_text(payload.meeting_topic),
+                    "meeting_goal": _safe_text(payload.meeting_goal),
+                    "meeting_goal_context": _safe_text(payload.meeting_goal_context),
+                    "context_cache": context_cache,
+                }
+            )
+        signature = _canvas_llm_signature(signature_payload)
 
         if not rows:
             return _response(
@@ -14527,9 +20568,13 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 "새로 처리할 아이디어 단계 발화가 없습니다.",
                 signature,
                 workspace,
+                reason="no_rows",
+                timing_ms=timing_ms,
             )
 
+        ready_started = time.perf_counter()
         client, llm_ready, llm_note = _ensure_llm_ready(RT)
+        timing_ms["llm_ready_ms"] = round((time.perf_counter() - ready_started) * 1000)
         if not llm_ready or client is None:
             return _response(
                 graph,
@@ -14537,27 +20582,146 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
                 llm_note or "LLM 미연결 상태라 서버 버블 그래프를 갱신하지 않았습니다.",
                 signature,
                 workspace,
+                reason="llm_not_ready",
+                llm_error=_llm_error_payload(
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM 미연결 상태",
+                    elapsed_ms=round((time.perf_counter() - request_started) * 1000),
+                    client=client,
+                ),
+                llm_request_payload=demo_consolidate_llm_request_payload,
+                llm_id_map=demo_consolidate_llm_id_map,
+                timing_ms=timing_ms,
             )
 
         warning = ""
         parsed: Any = {}
+        llm_trace: dict[str, Any] = {}
+
+        def _write_demo_consolidate_llm_log(event: str, extra: dict[str, Any] | None = None) -> None:
+            if not (is_demo_balance and update_mode == "consolidate"):
+                return
+            _write_demo_bubble_llm_event(
+                normalized_meeting_id,
+                event,
+                {
+                    "update_mode": update_mode,
+                    "model": llm_route.get("model"),
+                    "llm_route": llm_route,
+                    "request": copy.deepcopy(demo_consolidate_llm_request_payload),
+                    "response": copy.deepcopy(parsed) if isinstance(parsed, dict) else {},
+                    "id_map": copy.deepcopy(demo_consolidate_llm_id_map),
+                    "timing": copy.deepcopy(timing_ms),
+                    "trace": copy.deepcopy(llm_trace),
+                    "rows_count": len(rows),
+                    "input_bubbles": len(existing_keyword_rows),
+                    **(extra or {}),
+                },
+            )
+
+        _write_demo_consolidate_llm_log(
+            "request_started",
+            {
+                "reason": "before_llm_call",
+                "prompt_phase": "pending",
+            },
+        )
+
         try:
+            prompt_started = time.perf_counter()
+            llm_prompt = _build_ideation_keyword_extract_prompt(extract_payload, rows, update_mode)
+            timing_ms["prompt_build_ms"] = round((time.perf_counter() - prompt_started) * 1000)
+            llm_started = time.perf_counter()
             parsed = _call_llm_json(
                 RT,
                 client,
-                prompt=_build_ideation_keyword_extract_prompt(extract_payload, rows),
-                stage="canvas_ideation_bubble_graph_update",
+                prompt=llm_prompt,
+                stage=llm_stage,
                 temperature=0.08,
-                max_tokens=1400,
+                max_tokens=320 if is_demo_balance and update_mode == "fast_keywords" else 760 if is_demo_balance and update_mode == "realtime_text_batch" else 520 if is_demo_balance and update_mode == "consolidate" else 1400,
             )
+            timing_ms["llm_ms"] = round((time.perf_counter() - llm_started) * 1000)
+            llm_trace = _llm_trace_payload(client)
         except Exception as exc:
+            llm_trace = _llm_trace_payload(client)
+            elapsed_ms = round((time.perf_counter() - request_started) * 1000)
+            llm_error = _llm_error_payload(
+                error_type=type(exc).__name__,
+                error_preview=repr(exc),
+                elapsed_ms=elapsed_ms,
+                client=client,
+            )
+            print(
+                "[canvas ideation bubble graph llm exception]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "elapsed_ms": elapsed_ms,
+                    "llm_route": llm_route,
+                    "llm_error": llm_error,
+                    "llm_trace": llm_trace,
+                },
+                flush=True,
+            )
+            _write_demo_consolidate_llm_log(
+                "exception",
+                {
+                    "elapsed_ms": elapsed_ms,
+                    "llm_error": llm_error,
+                    "warning": f"아이디어 버블 그래프 LLM 갱신 실패: {exc}",
+                },
+            )
+            _write_bubble_debug_event(
+                normalized_meeting_id,
+                "llm_update_exception",
+                {
+                    "update_mode": update_mode,
+                    "rows": _bubble_debug_compact_rows(rows),
+                    "llm_route": llm_route,
+                    "llm_error": llm_error,
+                    "llm_trace": llm_trace,
+                    "graph_cycle": graph.get("update_cycle"),
+                    "graph_bubbles": _bubble_debug_compact_bubbles(graph),
+                },
+            )
             return _response(
                 graph,
                 False,
                 f"아이디어 버블 그래프 LLM 갱신 실패: {exc}",
                 signature,
                 workspace,
+                reason="llm_exception",
+                llm_error=llm_error,
+                llm_request_payload=demo_consolidate_llm_request_payload,
+                llm_id_map=demo_consolidate_llm_id_map,
+                llm_trace=llm_trace,
+                timing_ms=timing_ms,
             )
+
+        directive_started = time.perf_counter()
+        if is_demo_balance:
+            if update_mode == "realtime_text_batch":
+                refined_transcripts = _normalize_demo_balance_refined_transcripts(parsed, rows)
+                ignored_utterance_ids = _normalize_demo_balance_ignored_utterance_ids(parsed, rows)
+            if update_mode == "consolidate":
+                raw_refine = []
+                if isinstance(parsed, dict):
+                    raw_refine = (
+                        parsed.get("refine")
+                        or parsed.get("refined_transcripts")
+                        or parsed.get("refinedTranscripts")
+                        or []
+                    )
+                ignored_refine_count = len(raw_refine) if isinstance(raw_refine, list) else 0
+                primary_keywords_present = True
+                primary_keyword_texts = _demo_balance_primary_anchor_texts(demo_config)
+        compact_demo_directives = is_demo_balance and update_mode == "consolidate" and _demo_balance_has_compact_id_directives(parsed)
+        compact_graph_directive_actions = (
+            compact_demo_directives
+            and any(
+                isinstance(parsed.get(key), list) and len(parsed.get(key) or []) > 0
+                for key in ("rename", "merge", "remove", "move")
+            )
+        )
 
         normalized_keywords = _normalize_ideation_keyword_items(
             parsed,
@@ -14565,34 +20729,292 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             max_keywords,
             existing_keyword_rows,
         )
-        merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
+        if is_demo_balance and update_mode == "consolidate":
+            normalized_keywords = []
+        if compact_demo_directives:
+            merge_keywords, remove_keywords = [], []
+        else:
+            merge_keywords, remove_keywords = _normalize_ideation_keyword_operations(
+                parsed,
+                existing_keyword_rows,
+                normalized_keywords,
+            )
+        rename_merge_keywords = _normalize_ideation_keyword_rename_merges(
             parsed,
             existing_keyword_rows,
-            normalized_keywords,
-        )
-        if not normalized_keywords and not merge_keywords and not remove_keywords:
-            warning = "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
-
-        next_graph = _apply_ideation_bubble_graph_update(
-            graph,
-            rows,
-            normalized_keywords,
             merge_keywords,
             remove_keywords,
         )
+        if rename_merge_keywords:
+            merge_keywords = [
+                *merge_keywords,
+                *[
+                    item
+                    for item in rename_merge_keywords
+                    if not any(
+                        _safe_text(item.get("source")) == _safe_text(existing.get("source"))
+                        and _safe_text(item.get("target")) == _safe_text(existing.get("target"))
+                        for existing in merge_keywords
+                    )
+                ],
+            ][:8]
+        rename_keywords = [] if compact_demo_directives else _normalize_ideation_keyword_renames(
+            parsed,
+            existing_keyword_rows,
+            merge_keywords,
+            remove_keywords,
+        )
+        if is_demo_balance and update_mode == "consolidate" and not compact_demo_directives:
+            local_rename_keywords = _demo_balance_local_keyword_renames(existing_keyword_rows)
+            if local_rename_keywords:
+                existing_pairs = {
+                    (_safe_text(item.get("source")), _safe_text(item.get("target")))
+                    for item in rename_keywords
+                    if _safe_text(item.get("source")) and _safe_text(item.get("target"))
+                }
+                for item in local_rename_keywords:
+                    pair = (_safe_text(item.get("source")), _safe_text(item.get("target")))
+                    if pair not in existing_pairs:
+                        rename_keywords.append(item)
+                        existing_pairs.add(pair)
+        correction_protected_texts = {
+            _safe_text(item.get("source"))
+            for item in [*merge_keywords, *rename_keywords]
+            if _safe_text(item.get("source"))
+        } | {
+            _safe_text(item.get("target"))
+            for item in [*merge_keywords, *rename_keywords]
+            if _safe_text(item.get("target"))
+        }
+        if correction_protected_texts:
+            remove_keywords = [
+                text
+                for text in remove_keywords
+                if _safe_text(text) not in correction_protected_texts
+            ]
+        if is_demo_balance and update_mode == "consolidate" and not compact_demo_directives:
+            affinity_updates = _normalize_demo_balance_affinity_updates(parsed, existing_keyword_rows)
+        is_demo_balance = _is_demo_balance_config(demo_config)
+        if not is_demo_balance:
+            existing_text_keys = {
+                _ideation_bubble_text_key(item.get("text"))
+                for item in existing_keyword_rows
+                if _safe_text(item.get("text"))
+            }
+            supported_keywords: list[dict[str, Any]] = []
+            skipped_single_support_count = 0
+            for keyword in normalized_keywords:
+                text_key = _ideation_bubble_text_key(keyword.get("text"))
+                support_count = max(
+                    _safe_nonnegative_int(keyword.get("support_count"), 0),
+                    _safe_nonnegative_int(keyword.get("count"), 1),
+                )
+                if text_key in existing_text_keys or support_count >= 2:
+                    supported_keywords.append(keyword)
+                else:
+                    skipped_single_support_count += 1
+            if skipped_single_support_count:
+                warning = f"1회성 언급 {skipped_single_support_count}개는 버블 생성 조건에 미달해 보류했습니다."
+            normalized_keywords = supported_keywords
+        timing_ms["directive_parse_ms"] = round((time.perf_counter() - directive_started) * 1000)
+        has_primary_directive = is_demo_balance and update_mode == "consolidate" and primary_keywords_present
+        if not normalized_keywords and not rename_keywords and not merge_keywords and not remove_keywords and not affinity_updates and not compact_graph_directive_actions and not has_primary_directive:
+            warning = warning or "이번 발화에서는 추가하거나 정리할 핵심 명사 버블이 없었습니다."
+            if is_demo_balance:
+                if update_mode in {"fast_keywords", "realtime_text_batch"}:
+                    return _response(
+                        graph,
+                        True,
+                        warning,
+                        signature,
+                        workspace,
+                        reason="no_keywords",
+                        refined_transcripts=refined_transcripts,
+                        ignored_utterance_ids=ignored_utterance_ids,
+                    )
+                latest_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+                latest_graph = _normalize_canvas_ideation_bubble_graph(latest_workspace.get("ideation_bubble_graph"))
+                _ensure_demo_balance_anchor_bubbles(latest_graph, demo_config)
+                graph_apply_started = time.perf_counter()
+                next_graph = _apply_ideation_bubble_graph_update(
+                    latest_graph,
+                    rows,
+                    [],
+                    [],
+                    [],
+                    [],
+                    allow_single_support=True,
+                    decay_profile="demo_balance",
+                    apply_decay=True,
+                    mark_processed=True,
+                    primary_keyword_texts=_demo_balance_primary_anchor_texts(demo_config),
+                )
+                timing_ms["graph_apply_ms"] = round((time.perf_counter() - graph_apply_started) * 1000)
+                motion_started = time.perf_counter()
+                motion_metrics = _annotate_demo_balance_motion_hints(
+                    latest_graph,
+                    next_graph,
+                    update_reason="cleanup",
+                )
+                timing_ms["motion_ms"] = round((time.perf_counter() - motion_started) * 1000)
+                saved_at = _now_ts()
+                next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
+                next_workspace["ideation_bubble_graph"] = next_graph
+                next_workspace["demo_config"] = demo_config
+                save_started = time.perf_counter()
+                with RT.lock:
+                    RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
+                _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+                timing_ms["save_ms"] = round((time.perf_counter() - save_started) * 1000)
+                RT.last_llm_parsed_json = {
+                    "stage": llm_stage,
+                    "update_mode": update_mode,
+                    "source_signature": signature,
+                    "raw_directives": _bubble_debug_compact_directives(parsed),
+                    "rename_keywords": [],
+                    "merge_keywords": [],
+                    "remove_keywords": [],
+                    "keywords": [],
+                    "ignored_refine_count": ignored_refine_count,
+                    "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
+                    "llm_id_map": copy.deepcopy(demo_consolidate_llm_id_map),
+                    "bubble_graph": copy.deepcopy(next_graph),
+                    "reason": "no_keywords",
+                }
+                RT.last_llm_parsed_at = _now_ts()
+                print(
+                    "[canvas ideation bubble graph no keywords processed]",
+                    {
+                        "meeting_id": normalized_meeting_id,
+                        "rows": len(rows),
+                        "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                        "cycle": next_graph.get("update_cycle"),
+                        "refined": len(refined_transcripts),
+                        "ignored_refine": ignored_refine_count,
+                        "ignored": len(ignored_utterance_ids),
+                    },
+                    flush=True,
+                )
+                _write_demo_consolidate_llm_log(
+                    "response_no_keywords",
+                    {
+                        "reason": "no_keywords",
+                        "warning": warning,
+                        "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                        "refined_count": len(refined_transcripts),
+                        "ignored_refine_count": ignored_refine_count,
+                        "ignored_count": len(ignored_utterance_ids),
+                        "state_counts": _ideation_bubble_state_counts(next_graph),
+                        "motion": motion_metrics,
+                    },
+                )
+                _write_bubble_debug_event(
+                    normalized_meeting_id,
+                    "llm_update_no_keywords_processed",
+                    {
+                        "update_mode": update_mode,
+                        "rows": _bubble_debug_compact_rows(rows),
+                        "raw_directives": _bubble_debug_compact_directives(parsed),
+                        "warning": warning,
+                        "refined_count": len(refined_transcripts),
+                        "ignored_refine_count": ignored_refine_count,
+                        "ignored_count": len(ignored_utterance_ids),
+                        "ignored_utterance_ids": ignored_utterance_ids,
+                        "llm_id_map": demo_consolidate_llm_id_map,
+                        "llm_trace": llm_trace,
+                        "motion": motion_metrics,
+                        "timing": timing_ms,
+                        "state_counts": _ideation_bubble_state_counts(next_graph),
+                        "graph_cycle": next_graph.get("update_cycle"),
+                        "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
+                    },
+                )
+                return _response(
+                    next_graph,
+                    True,
+                    warning,
+                    signature,
+                    next_workspace,
+                    reason="no_keywords",
+                    refined_transcripts=refined_transcripts,
+                    ignored_utterance_ids=ignored_utterance_ids,
+                    raw_directives=_bubble_debug_compact_directives(parsed),
+                    llm_request_payload=demo_consolidate_llm_request_payload,
+                    llm_response_payload=copy.deepcopy(parsed) if isinstance(parsed, dict) else {},
+                    llm_id_map=demo_consolidate_llm_id_map,
+                    llm_trace=llm_trace,
+                    ignored_refine_count=ignored_refine_count,
+                    refine_count=0 if is_demo_balance and update_mode == "consolidate" else len(refined_transcripts),
+                    input_bubble_count=len(existing_keyword_rows),
+                    timing_ms=timing_ms,
+                    processed_count=len(rows),
+                )
+            return _response(graph, True, warning, signature, workspace, reason="no_keywords")
+
+        graph_metrics: dict[str, int] = {}
+        latest_workspace = workspace
+        latest_graph = graph
+        if is_demo_balance and update_mode == "consolidate":
+            workspace_reload_started = time.perf_counter()
+            latest_workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id)
+            latest_graph = _normalize_canvas_ideation_bubble_graph(latest_workspace.get("ideation_bubble_graph"))
+            _ensure_demo_balance_anchor_bubbles(latest_graph, demo_config)
+            timing_ms["workspace_reload_ms"] = round((time.perf_counter() - workspace_reload_started) * 1000)
+        graph_apply_started = time.perf_counter()
+        next_graph = _apply_ideation_bubble_graph_update(
+            latest_graph,
+            rows,
+            normalized_keywords,
+            rename_keywords,
+            merge_keywords,
+            remove_keywords,
+            allow_single_support=is_demo_balance,
+            decay_profile="demo_balance" if is_demo_balance else "normal",
+            apply_decay=not (is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}),
+            mark_processed=not (is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"}),
+            primary_keyword_texts=primary_keyword_texts if is_demo_balance and update_mode == "consolidate" else None,
+            affinity_updates=affinity_updates if is_demo_balance and update_mode == "consolidate" else None,
+            demo_id_directives=parsed if compact_demo_directives else None,
+            demo_id_map=demo_consolidate_llm_id_map if compact_demo_directives else None,
+            metrics=graph_metrics,
+        )
+        timing_ms["graph_apply_ms"] = round((time.perf_counter() - graph_apply_started) * 1000)
+        motion_metrics: dict[str, int] = {}
+        if is_demo_balance:
+            motion_started = time.perf_counter()
+            motion_metrics = _annotate_demo_balance_motion_hints(
+                latest_graph,
+                next_graph,
+                update_reason="cleanup" if update_mode == "consolidate" else "insert",
+            )
+            timing_ms["motion_ms"] = round((time.perf_counter() - motion_started) * 1000)
         saved_at = _now_ts()
-        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, workspace, saved_at)
+        next_workspace = _clone_runtime_workspace_state(normalized_meeting_id, latest_workspace, saved_at)
         next_workspace["ideation_bubble_graph"] = next_graph
+        if is_demo_balance:
+            next_workspace["demo_config"] = demo_config
+        save_started = time.perf_counter()
         with RT.lock:
             RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(next_workspace)
         _save_canvas_workspace_to_db(normalized_meeting_id, next_workspace)
+        timing_ms["save_ms"] = round((time.perf_counter() - save_started) * 1000)
 
         RT.last_llm_parsed_json = {
-            "stage": "canvas_ideation_bubble_graph_update",
+            "stage": llm_stage,
+            "update_mode": update_mode,
             "source_signature": signature,
+            "raw_directives": _bubble_debug_compact_directives(parsed),
+            "rename_keywords": copy.deepcopy(rename_keywords),
             "merge_keywords": copy.deepcopy(merge_keywords),
             "remove_keywords": copy.deepcopy(remove_keywords),
+            "primary_keywords": copy.deepcopy(primary_keyword_texts if primary_keyword_texts is not None else []),
+            "affinity_updates": copy.deepcopy(affinity_updates),
             "keywords": copy.deepcopy(normalized_keywords),
+            "ignored_refine_count": ignored_refine_count,
+            "ignored_utterance_ids": copy.deepcopy(ignored_utterance_ids),
+            "llm_id_map": copy.deepcopy(demo_consolidate_llm_id_map),
+            "llm_trace": copy.deepcopy(llm_trace),
+            "motion": copy.deepcopy(motion_metrics),
             "bubble_graph": copy.deepcopy(next_graph),
         }
         RT.last_llm_parsed_at = _now_ts()
@@ -14600,21 +21022,112 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
             "[canvas ideation bubble graph]",
             {
                 "meeting_id": normalized_meeting_id,
+                "update_mode": update_mode,
                 "rows": len(rows),
                 "keywords": len(normalized_keywords),
-                "merges": len(merge_keywords),
-                "removes": len(remove_keywords),
+                "renames": max(len(rename_keywords), _safe_nonnegative_int(graph_metrics.get("rename_count"), 0)),
+                "merges": max(len(merge_keywords), _safe_nonnegative_int(graph_metrics.get("merge_count"), 0)),
+                "removes": max(len(remove_keywords), _safe_nonnegative_int(graph_metrics.get("remove_count"), 0)),
+                "moves": graph_metrics.get("move_count", 0),
+                "primary": graph_metrics.get("primary_count", 0),
+                "promotes": graph_metrics.get("promote_count", 0),
+                "demotes": graph_metrics.get("demote_count", 0),
+                "affinity_updates": graph_metrics.get("affinity_update_count", 0),
+                "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
                 "cycle": next_graph.get("update_cycle"),
+                "overlap_resolved": next_graph.get("layout_overlap_resolved_count"),
+                "refined": len(refined_transcripts),
+                "ignored_refine": ignored_refine_count,
+                "input_bubbles": len(existing_keyword_rows),
+                "ignored": len(ignored_utterance_ids),
                 "visible_bubbles": len(
                     [
                         item
                         for item in (next_graph.get("bubbles") or [])
-                        if _normalize_ideation_bubble_state(item.get("display_state")) != "archived"
+                        if _is_ideation_bubble_visible_state(item.get("display_state"))
                     ]
                 ),
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "motion": motion_metrics,
+                "timing": timing_ms,
             },
         )
-        return _response(next_graph, True, warning, signature, next_workspace)
+        _write_demo_consolidate_llm_log(
+            "response_applied",
+            {
+                "reason": "updated",
+                "warning": warning,
+                "elapsed_ms": round((time.perf_counter() - request_started) * 1000),
+                "keyword_count": len(normalized_keywords),
+                "rename_count": max(len(rename_keywords), _safe_nonnegative_int(graph_metrics.get("rename_count"), 0)),
+                "merge_count": max(len(merge_keywords), _safe_nonnegative_int(graph_metrics.get("merge_count"), 0)),
+                "remove_count": max(len(remove_keywords), _safe_nonnegative_int(graph_metrics.get("remove_count"), 0)),
+                "move_count": _safe_nonnegative_int(graph_metrics.get("move_count"), 0),
+                "ignored_refine_count": ignored_refine_count,
+                "ignored_count": len(ignored_utterance_ids),
+                "metrics": graph_metrics,
+                "motion": motion_metrics,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+            },
+        )
+        _write_bubble_debug_event(
+            normalized_meeting_id,
+            "llm_update_applied",
+            {
+                "update_mode": update_mode,
+                "rows": _bubble_debug_compact_rows(rows),
+                "raw_directives": _bubble_debug_compact_directives(parsed),
+                "keywords": normalized_keywords,
+                "rename_keywords": rename_keywords,
+                "merge_keywords": merge_keywords,
+                "remove_keywords": remove_keywords,
+                "primary_keywords": primary_keyword_texts if primary_keyword_texts is not None else [],
+                "affinity_updates": affinity_updates,
+                "refined_count": len(refined_transcripts),
+                "ignored_refine_count": ignored_refine_count,
+                "move_count": graph_metrics.get("move_count", 0),
+                "input_bubble_count": len(existing_keyword_rows),
+                "ignored_count": len(ignored_utterance_ids),
+                "llm_id_map": demo_consolidate_llm_id_map,
+                "llm_trace": llm_trace,
+                "metrics": graph_metrics,
+                "motion": motion_metrics,
+                "timing": timing_ms,
+                "state_counts": _ideation_bubble_state_counts(next_graph),
+                "graph_cycle": next_graph.get("update_cycle"),
+                "graph_bubbles": _bubble_debug_compact_bubbles(next_graph),
+            },
+        )
+        return _response(
+            next_graph,
+            True,
+            warning,
+            signature,
+            next_workspace,
+            reason="updated",
+            refined_transcripts=refined_transcripts,
+            ignored_utterance_ids=ignored_utterance_ids,
+            rename_keywords=rename_keywords,
+            keyword_count=len(normalized_keywords),
+            rename_count=max(len(rename_keywords), _safe_nonnegative_int(graph_metrics.get("rename_count"), 0)),
+            merge_count=max(len(merge_keywords), _safe_nonnegative_int(graph_metrics.get("merge_count"), 0)),
+            remove_count=max(len(remove_keywords), _safe_nonnegative_int(graph_metrics.get("remove_count"), 0)),
+            move_count=_safe_nonnegative_int(graph_metrics.get("move_count"), 0),
+            refine_count=0 if is_demo_balance and update_mode == "consolidate" else len(refined_transcripts),
+            input_bubble_count=len(existing_keyword_rows),
+            primary_count=graph_metrics.get("primary_count", 0),
+            promote_count=graph_metrics.get("promote_count", 0),
+            demote_count=graph_metrics.get("demote_count", 0),
+            affinity_update_count=graph_metrics.get("affinity_update_count", 0),
+            raw_directives=_bubble_debug_compact_directives(parsed),
+            llm_request_payload=demo_consolidate_llm_request_payload,
+            llm_response_payload=copy.deepcopy(parsed) if isinstance(parsed, dict) else {},
+            llm_id_map=demo_consolidate_llm_id_map,
+            llm_trace=llm_trace,
+            ignored_refine_count=ignored_refine_count,
+            timing_ms=timing_ms,
+            processed_count=0 if is_demo_balance and update_mode in {"fast_keywords", "realtime_text_batch"} else len(rows),
+        )
 
 
 @app.get("/api/canvas/personal-notes")
@@ -14728,6 +21241,10 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace = _clone_runtime_workspace_state(normalized_meeting_id, previous_workspace, saved_at)
     workspace["meeting_goal"] = _safe_text(payload.meeting_goal)
     workspace["meeting_goal_context"] = _safe_text(payload.meeting_goal_context)
+    workspace["demo_config"] = _normalize_canvas_demo_config(payload.demo_config)
+    workspace["demo_balance_classification"] = _normalize_canvas_demo_balance_classification(
+        payload.demo_balance_classification
+    )
     workspace["stage"] = "ideation"
     workspace["agenda_overrides"] = _normalize_canvas_agenda_overrides(payload.agenda_overrides)
     workspace["canvas_items"] = _normalize_canvas_workspace_items(payload.canvas_items)
@@ -14739,6 +21256,7 @@ def post_canvas_workspace_state(payload: CanvasWorkspaceStateInput):
     workspace["node_positions"] = _normalize_canvas_node_positions(payload.node_positions)
     workspace["artifact_generation"] = _normalize_canvas_artifact_generation(payload.artifact_generation)
     workspace["ideation_bubble_graph"] = _normalize_canvas_ideation_bubble_graph(payload.ideation_bubble_graph)
+    _ensure_demo_balance_workspace_graph(workspace, saved_at)
     workspace["imported_state"] = (
         copy.deepcopy(payload.imported_state) if isinstance(payload.imported_state, dict) else None
     )
@@ -14808,6 +21326,9 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
                 "updated_at": saved_at,
                 "finished_at": "",
                 "error": "",
+                "phase": _safe_text(payload.phase),
+                "detail": _safe_text(payload.detail),
+                "retryable": bool(payload.retryable),
                 "version": int(current.get("version") or 0),
                 "input_transcript_revision": input_transcript_revision,
             }
@@ -14873,6 +21394,9 @@ def post_canvas_artifact_generation_finish(payload: CanvasArtifactGenerationFini
         _safe_text(payload.user_id),
         saved_at,
         _safe_text(payload.error),
+        _safe_text(payload.phase),
+        _safe_text(payload.detail),
+        bool(payload.retryable),
     )
     generation_map[artifact_key] = generation
     workspace["artifact_generation"] = generation_map
@@ -14941,6 +21465,12 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         workspace["meeting_goal"] = _safe_text(payload.meeting_goal)
     if "meeting_goal_context" in provided_fields:
         workspace["meeting_goal_context"] = _safe_text(payload.meeting_goal_context)
+    if "demo_config" in provided_fields:
+        workspace["demo_config"] = _normalize_canvas_demo_config(payload.demo_config)
+    if "demo_balance_classification" in provided_fields:
+        workspace["demo_balance_classification"] = _normalize_canvas_demo_balance_classification(
+            payload.demo_balance_classification
+        )
     if "stage" in provided_fields:
         workspace["stage"] = "ideation"
     if "agenda_overrides" in provided_fields:
@@ -15063,6 +21593,8 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
     else:
         reset_keys = []
 
+    _ensure_demo_balance_workspace_graph(workspace, saved_at)
+
     with RT.lock:
         RT.canvas_workspace_by_meeting[normalized_meeting_id] = copy.deepcopy(workspace)
 
@@ -15083,6 +21615,68 @@ def post_canvas_workspace_patch(payload: CanvasWorkspacePatchInput):
         },
     )
     return _canvas_workspace_response(workspace)
+
+
+@app.post("/api/canvas/meeting-room-reset")
+def post_canvas_meeting_room_reset(payload: CanvasMeetingRoomResetInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    client = _get_supabase_service_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Supabase service role client is not configured")
+
+    deleted_count = 0
+    try:
+        with _SUPABASE_REQUEST_LOCK:
+            response = (
+                client
+                .table("transcripts")
+                .delete()
+                .eq("meeting_id", normalized_meeting_id)
+                .execute()
+            )
+        deleted_rows = response.data if isinstance(getattr(response, "data", None), list) else []
+        deleted_count = len(deleted_rows)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to delete transcripts: {exc}") from exc
+
+    reset_at = _now_ts()
+    print(
+        "[canvas meeting room reset]",
+        {
+            "meeting_id": normalized_meeting_id,
+            "user_id": _safe_text(payload.user_id),
+            "deleted_transcript_count": deleted_count,
+            "reset_at": reset_at,
+        },
+    )
+    return {
+        "ok": True,
+        "meeting_id": normalized_meeting_id,
+        "deleted_transcript_count": deleted_count,
+        "reset_at": reset_at,
+    }
+
+
+@app.post("/api/canvas/bubble-debug-log")
+def post_canvas_bubble_debug_log(payload: CanvasBubbleDebugLogInput):
+    normalized_meeting_id = _safe_text(payload.meeting_id)
+    if not normalized_meeting_id:
+        raise HTTPException(status_code=400, detail="meeting_id is required")
+
+    event = re.sub(r"[^A-Za-z0-9_.:-]+", "_", _safe_text(payload.event) or "frontend_event")[:80]
+    data = payload.data if isinstance(payload.data, dict) else {}
+    _write_bubble_debug_event(
+        normalized_meeting_id,
+        f"frontend_{event}",
+        {
+            "user_id": _safe_text(payload.user_id)[:120],
+            "data": data,
+        },
+    )
+    return {"ok": True, "meeting_id": normalized_meeting_id}
 
 
 @app.post("/api/canvas/final-report-share")
@@ -15222,6 +21816,7 @@ async def post_transcribe_chunk(
     meeting_goal: str = Form(default=""),
     meeting_goal_context: str = Form(default=""),
     context_pack: str = Form(default=""),
+    defer_refine: str = Form(default="false"),
 ):
     """
     Gateway에서 호출하는 전사 엔드포인트
@@ -15231,49 +21826,78 @@ async def post_transcribe_chunk(
         started_at = time.perf_counter()
         blob = await audio_file.read()
         if not blob:
-            return {"text": "", "language": "ko", "error": "empty audio"}
+            return {"text": "", "language": WHISPER_LANGUAGE, "error": "empty audio"}
         
         suffix = Path(audio_file.filename or "chunk.webm").suffix or ".webm"
+        parsed_context_pack = _parse_stt_context_pack(context_pack)
+        should_defer_refine = _boolify(defer_refine, False)
         print(
             f"[STT] transcribe chunk start model={WHISPER_MODEL_NAME} "
             f"bytes={len(blob)} suffix={suffix} "
-            f"refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
+            f"raw_first={should_defer_refine} refine_goal={bool(_safe_text(meeting_goal))} refine_context={bool(_safe_text(meeting_goal_context))}"
         )
         raw_text = _transcribe_with_whisper(blob, suffix=suffix)
-        parsed_context_pack = _parse_stt_context_pack(context_pack)
-        text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        context_pack_summary = _summarize_stt_context_pack(parsed_context_pack)
+
+        if should_defer_refine:
+            print(
+                f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
+                f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
+                f"raw_chars={len(_safe_text(raw_text))} refine_deferred=true "
+                f"context_pack={context_pack_summary}"
+            )
+            return {
+                "text": _safe_text(raw_text),
+                "raw_text": _safe_text(raw_text),
+                "refined_text": "",
+                "refine_used_llm": False,
+                "refine_deferred": True,
+                "refine_warning": "LLM 보정은 비동기 처리됩니다.",
+                "confidence": None,
+                "corrections": [],
+                "uncertain_terms": [],
+                "context_terms": [],
+                "context_pack_summary": context_pack_summary,
+                "language": WHISPER_LANGUAGE,
+                "elapsed_ms": elapsed_ms,
+                "model": WHISPER_MODEL_NAME,
+            }
+
+        refined_text, refine_used_llm, refine_warning, refine_meta = _refine_transcript_text_with_llm(
             raw_text,
             meeting_goal=meeting_goal,
             meeting_goal_context=meeting_goal_context,
             context_pack=parsed_context_pack,
         )
-        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        total_elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         print(
             f"[STT] transcribed chunk model={WHISPER_MODEL_NAME} "
-            f"bytes={len(blob)} suffix={suffix} elapsed_ms={elapsed_ms} "
-            f"raw_chars={len(_safe_text(raw_text))} refined_chars={len(_safe_text(text))} "
-            f"refine_used_llm={refine_used_llm} context_pack={refine_meta.get('context_pack_summary')}"
+            f"bytes={len(blob)} suffix={suffix} elapsed_ms={total_elapsed_ms} "
+            f"raw_chars={len(_safe_text(raw_text))} refined_chars={len(_safe_text(refined_text))} "
+            f"refine_deferred=false refine_used_llm={refine_used_llm} context_pack={context_pack_summary}"
         )
         
         return {
-            "text": _safe_text(text),
+            "text": _safe_text(refined_text) or _safe_text(raw_text),
             "raw_text": _safe_text(raw_text),
-            "refined_text": _safe_text(text),
+            "refined_text": _safe_text(refined_text),
             "refine_used_llm": refine_used_llm,
+            "refine_deferred": False,
             "refine_warning": refine_warning,
             "confidence": refine_meta.get("confidence"),
             "corrections": refine_meta.get("corrections") or [],
             "uncertain_terms": refine_meta.get("uncertain_terms") or [],
             "context_terms": refine_meta.get("context_terms") or [],
-            "context_pack_summary": refine_meta.get("context_pack_summary") or {},
-            "language": "ko",
-            "elapsed_ms": elapsed_ms,
+            "context_pack_summary": refine_meta.get("context_pack_summary") or context_pack_summary,
+            "language": WHISPER_LANGUAGE,
+            "elapsed_ms": total_elapsed_ms,
             "model": WHISPER_MODEL_NAME,
         }
     except Exception as exc:
         print(f"[STT][backend] transcribe chunk error: {exc}", flush=True)
         return {
             "text": "",
-            "language": "ko",
+            "language": WHISPER_LANGUAGE,
             "error": str(exc)
         }

@@ -24,6 +24,8 @@ import {
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasLocalState,
@@ -57,6 +59,8 @@ type PersonalNoteModel = {
 type SharedWorkspaceSnapshot = {
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig: CanvasDemoConfig;
+  demoBalanceClassification: CanvasDemoBalanceClassification;
   stage: CanvasStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -176,6 +180,8 @@ export function useCanvasPersistence({
     const nextSignatures = buildWorkspaceFieldSignatures({
       meetingGoal: nextMeetingGoal,
       meetingGoalContext: nextMeetingGoalContext,
+      demoConfig: latestSharedWorkspaceRef.current.demoConfig,
+      demoBalanceClassification: latestSharedWorkspaceRef.current.demoBalanceClassification,
       stage,
       agendaOverrides,
       canvasItems,
@@ -322,6 +328,8 @@ export function useCanvasPersistence({
             shared_sync_enabled: true,
             meeting_goal: meetingGoalDraft.trim(),
             meeting_goal_context: meetingGoalContextDraft.trim(),
+            demo_config: latestSharedWorkspaceRef.current.demoConfig,
+            demo_balance_classification: latestSharedWorkspaceRef.current.demoBalanceClassification,
             agenda_overrides: serializeAgendaOverrides(agendaOverrides),
             canvas_items: serializeSharedCanvasItems(canvasItems),
             custom_groups: serializeCustomGroups(customGroups),
@@ -331,6 +339,8 @@ export function useCanvasPersistence({
             shared_sync_enabled: false,
             meeting_goal: meetingGoalDraft.trim(),
             meeting_goal_context: meetingGoalContextDraft.trim(),
+            demo_config: latestSharedWorkspaceRef.current.demoConfig,
+            demo_balance_classification: latestSharedWorkspaceRef.current.demoBalanceClassification,
             agenda_overrides: serializeAgendaOverrides(agendaOverrides),
             canvas_items: serializeSharedCanvasItems(canvasItems),
             custom_groups: serializeCustomGroups(customGroups),

@@ -28,6 +28,11 @@ const PROBLEM_STRUCTURE_BASE_X = 40;
 const PROBLEM_STRUCTURE_BASE_Y = 178;
 const PROBLEM_STRUCTURE_HEADER_OFFSET = 140;
 const PROBLEM_STRUCTURE_CARD_PERIOD = 130;
+const DEMO_PROBLEM_STRUCTURE_COLUMN_WIDTH = 500;
+const DEMO_PROBLEM_STRUCTURE_COLUMN_GAP = 144;
+const DEMO_PROBLEM_STRUCTURE_BASE_X = 96;
+const DEMO_PROBLEM_STRUCTURE_BASE_Y = 118;
+const DEMO_PROBLEM_STRUCTURE_COLUMN_HEIGHT = 560;
 
 function makeProblemStructureEditPresenceKey(
   targetType: CanvasEditPresencePayload["target_type"],
@@ -255,6 +260,8 @@ export function buildProblemStructureCanvasBlueprint(input: {
   onStartProblemStructureGroupEdit: (group: ProblemStructureGroupViewModel) => void;
   onStartProblemStructureNodeEdit: (node: ProblemStructureNodeViewModel) => void;
   onUpdateProblemStructureNodeStatus: (nodeId: string, status: ProblemStructureStatus) => void;
+  demoStructureLayout?: boolean;
+  hideStatusControls?: boolean;
   problemStructureDrag: ProblemStructureDragState | null;
   problemStructureGroupDraftTitle: string;
   problemStructureGroups: ProblemStructureGroupViewModel[];
@@ -284,6 +291,8 @@ export function buildProblemStructureCanvasBlueprint(input: {
     onStartProblemStructureGroupEdit,
     onStartProblemStructureNodeEdit,
     onUpdateProblemStructureNodeStatus,
+    demoStructureLayout = false,
+    hideStatusControls = false,
     problemStructureDrag,
     problemStructureGroupDraftTitle,
     problemStructureGroups,
@@ -334,23 +343,33 @@ export function buildProblemStructureCanvasBlueprint(input: {
       ? remoteEditPresenceByKey[makeProblemStructureEditPresenceKey("problem_structure_group", column.id)] || null
       : null;
     const groupDisplayIndex = columns.slice(0, index).filter((item) => item.id !== UNGROUPED_STRUCTURE_COLUMN_ID).length + 1;
-    const columnHeight = problemStructureColumnHeight(columnNodes.length);
+    const columnWidth = demoStructureLayout ? DEMO_PROBLEM_STRUCTURE_COLUMN_WIDTH : PROBLEM_STRUCTURE_COLUMN_WIDTH;
+    const columnHeight = demoStructureLayout ? DEMO_PROBLEM_STRUCTURE_COLUMN_HEIGHT : problemStructureColumnHeight(columnNodes.length);
+    const columnGap = demoStructureLayout ? DEMO_PROBLEM_STRUCTURE_COLUMN_GAP : PROBLEM_STRUCTURE_COLUMN_GAP;
+    const columnBaseX = demoStructureLayout ? DEMO_PROBLEM_STRUCTURE_BASE_X : PROBLEM_STRUCTURE_BASE_X;
+    const columnBaseY = demoStructureLayout ? DEMO_PROBLEM_STRUCTURE_BASE_Y : PROBLEM_STRUCTURE_BASE_Y;
+    const nodeCardClassName = demoStructureLayout
+      ? `moa-node-card moa-node-enter nodrag nopan relative min-h-[150px] rounded-[9px] border border-[#d7e2ec] bg-[#f7fafe] px-[18px] pb-[42px] pt-[16px] text-[#111] shadow-[0_10px_24px_rgba(16,24,40,0.06)] transition ${
+          isColumnDropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""
+        }`
+      : "";
 
     return {
       id: nodeId,
       position: {
-        x: PROBLEM_STRUCTURE_BASE_X + index * (PROBLEM_STRUCTURE_COLUMN_WIDTH + PROBLEM_STRUCTURE_COLUMN_GAP),
-        y: PROBLEM_STRUCTURE_BASE_Y,
+        x: columnBaseX + index * (columnWidth + columnGap),
+        y: columnBaseY,
       },
       positionSource: "computed",
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
       className: "!border-0 !bg-transparent !p-0 !shadow-none",
-      style: { width: PROBLEM_STRUCTURE_COLUMN_WIDTH, height: columnHeight, padding: 0 },
+      style: { width: columnWidth, height: columnHeight, padding: 0 },
       draggable: false,
       data: {
         contentSignature: buildNodeContentSignature([
           "problem-structure-board",
+          demoStructureLayout,
           column.id,
           column.title,
           isGroupEditing,
@@ -373,10 +392,15 @@ export function buildProblemStructureCanvasBlueprint(input: {
           problemStructureDrag?.mode,
           problemStructureDrag?.overGroupId,
           problemStructureDrag?.overNodeId,
+          hideStatusControls,
         ]),
         label: (
           <section
-            className={`moa-node-board moa-node-enter nopan group/column box-border flex h-full w-full flex-col rounded-[8.442px] border-[0.8px] border-[#cecccc] bg-white px-3 py-[13px] text-left font-['Pretendard','Inter',sans-serif] text-[#111] ${
+            className={`moa-node-board moa-node-enter nopan group/column box-border flex h-full w-full flex-col border-[#cecccc] bg-white text-left font-['Pretendard','Inter',sans-serif] text-[#111] ${
+              demoStructureLayout
+                ? "rounded-[14px] border px-[22px] py-[22px] shadow-[0_18px_42px_rgba(15,23,42,0.08)]"
+                : "rounded-[8.442px] border-[0.8px] px-3 py-[13px]"
+            } ${
               isColumnDropTarget ? "ring-2 ring-[#01a3ff]/35 ring-offset-2" : ""
             }`}
             onDragOver={(event) => onProblemStructureGroupDragOver(event, columnDropGroupId)}
@@ -393,16 +417,28 @@ export function buildProblemStructureCanvasBlueprint(input: {
                     className="moa-node-input nodrag nopan block h-8 w-full rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 text-[14px] font-bold leading-none text-[#111] outline-none"
                   />
                 ) : (
-                  <strong className="block whitespace-normal break-keep text-[14.286px] font-bold leading-[16px] text-[#111]">
+                  <strong
+                    className={`block whitespace-normal break-keep font-bold text-[#111] ${
+                      demoStructureLayout ? "text-[22px] leading-[1.35] tracking-[-0.35px]" : "text-[14.286px] leading-[16px]"
+                    }`}
+                  >
                     {column.title || (isUngrouped ? "미분류" : "구조화 그룹")}
                   </strong>
                 )}
-                <p className="mt-[5px] text-[11.688px] font-normal leading-[16px] text-[#423a3d]">
+                <p
+                  className={`font-normal text-[#423a3d] ${
+                    demoStructureLayout ? "mt-[7px] text-[13px] leading-[18px]" : "mt-[5px] text-[11.688px] leading-[16px]"
+                  }`}
+                >
                   {problemStructureCardsCountLabel(columnNodes.length)}
                 </p>
               </div>
               <div className="flex shrink-0 items-start gap-2">
-                <span className="inline-flex h-[22px] w-[44px] items-center justify-center rounded-full bg-[rgba(161,161,161,0.2)] px-[6px] text-[10px] font-normal leading-[14px] text-[#414141]">
+                <span
+                  className={`inline-flex items-center justify-center rounded-full bg-[rgba(161,161,161,0.2)] font-normal text-[#414141] ${
+                    demoStructureLayout ? "h-[28px] min-w-[58px] px-[10px] text-[12px] leading-[16px]" : "h-[22px] w-[44px] px-[6px] text-[10px] leading-[14px]"
+                  }`}
+                >
                   {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
                 </span>
                 {isGroupEditing ? (
@@ -470,11 +506,21 @@ export function buildProblemStructureCanvasBlueprint(input: {
               </div>
             ) : null}
 
-            <div className="mt-[18px] flex h-[27.273px] w-full items-center justify-center rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-white text-[#4d4d4d]">
+            <div
+              className={`flex w-full items-center justify-center border-[#cecccc] bg-white text-[#4d4d4d] ${
+                demoStructureLayout
+                  ? "mt-[22px] h-[38px] rounded-[9px] border"
+                  : "mt-[18px] h-[27.273px] rounded-[5.195px] border-[0.649px]"
+              }`}
+            >
               <PlusIcon className="h-[11.429px] w-[11.169px]" />
             </div>
 
-            <div className="mt-[9px] flex-1 space-y-[14px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div
+              className={`flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+                demoStructureLayout ? "mt-[16px] space-y-[16px]" : "mt-[9px] space-y-[14px]"
+              }`}
+            >
               {columnNodes.length > 0 ? (
                 columnNodes.map((node) => {
                   const isDraggingNode = problemStructureDrag?.nodeId === node.id;
@@ -494,7 +540,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
                       onDragEnd={onProblemStructureNodeDragEnd}
                       onDragOver={(event) => onProblemStructureNodeDragOver(event, node.id)}
                       onDrop={(event) => onProblemStructureNodeDrop(event, node.id)}
-                      className={`moa-node-card moa-node-enter nodrag nopan relative h-[116.234px] rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-[#f7f7f7] px-[10px] pb-[31px] pt-[10px] text-[#111] transition ${
+                      className={`${nodeCardClassName || "moa-node-card moa-node-enter nodrag nopan relative h-[116.234px] rounded-[5.195px] border-[0.649px] border-[#cecccc] bg-[#f7f7f7] px-[10px] pb-[31px] pt-[10px] text-[#111] transition"} ${
                         isNodeEditing ? "cursor-default" : "cursor-grab active:cursor-grabbing"
                       } ${
                         isNodeDropTarget
@@ -502,21 +548,33 @@ export function buildProblemStructureCanvasBlueprint(input: {
                           : "hover:border-[#01a3ff]/35"
                       } ${isDraggingNode ? "moa-node-dragging opacity-60" : ""} ${isNodeEditing ? "moa-node-editing" : ""}`}
                     >
-                      <div className="mb-[7px] flex h-[18px] items-center justify-between gap-[6px]">
+                      <div
+                        className={`flex items-center justify-between gap-[6px] ${
+                          demoStructureLayout ? "mb-[12px] min-h-[24px]" : "mb-[7px] h-[18px]"
+                        }`}
+                      >
                         <div className="flex min-w-0 items-center gap-[6px]">
                           <span
-                            className={`inline-flex h-[18px] min-w-[36px] items-center justify-center rounded-full border-[0.8px] border-white px-[7px] text-[8px] font-bold leading-[1.4] text-white ${problemStructureDepthTone(
+                            className={`inline-flex items-center justify-center rounded-full border-[0.8px] border-white font-bold leading-[1.4] text-white ${
+                              demoStructureLayout ? "h-[22px] min-w-[46px] px-[9px] text-[10px]" : "h-[18px] min-w-[36px] px-[7px] text-[8px]"
+                            } ${problemStructureDepthTone(
                               node.depth,
                             )}`}
                           >
                             {problemStructureDepthLabel(node.depth)}
                           </span>
-                          <ProblemStructureNodeStatusButton
-                            status={node.status}
-                            onChange={(nextStatus) => onUpdateProblemStructureNodeStatus(node.id, nextStatus)}
-                          />
+                          {hideStatusControls ? null : (
+                            <ProblemStructureNodeStatusButton
+                              status={node.status}
+                              onChange={(nextStatus) => onUpdateProblemStructureNodeStatus(node.id, nextStatus)}
+                            />
+                          )}
                         </div>
-                        <span className="inline-flex h-[18px] min-w-[42px] shrink-0 items-center justify-center rounded-full bg-white px-[7px] text-[8px] font-bold leading-[1.4] text-[#737982] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+                        <span
+                          className={`inline-flex shrink-0 items-center justify-center rounded-full bg-white font-bold leading-[1.4] text-[#737982] shadow-[0_1px_2px_rgba(0,0,0,0.04)] ${
+                            demoStructureLayout ? "h-[22px] min-w-[52px] px-[9px] text-[10px]" : "h-[18px] min-w-[42px] px-[7px] text-[8px]"
+                          }`}
+                        >
                           {problemStructureColumnLabel(isUngrouped, groupDisplayIndex)}
                         </span>
                       </div>
@@ -531,13 +589,23 @@ export function buildProblemStructureCanvasBlueprint(input: {
                           className="moa-node-input nodrag nopan block h-[39px] w-full resize-none rounded-[5px] border border-[#01a3ff]/35 bg-white px-2 py-1 text-[11.688px] font-bold leading-[16px] text-[#111] outline-none"
                         />
                       ) : (
-                        <strong className="block truncate text-[11.688px] font-bold leading-[16px] text-[#111]">
+                        <strong
+                          className={`block whitespace-normal break-keep font-bold text-[#111] ${
+                            demoStructureLayout ? "text-[15px] leading-[21px]" : "truncate text-[11.688px] leading-[16px]"
+                          }`}
+                        >
                           {node.title || "구조화 노드"}
                         </strong>
                       )}
 
                       {node.body ? (
-                        <p className="mt-[5px] line-clamp-2 w-[206px] text-[8.442px] font-normal leading-[12px] text-[#4d4d4d]">
+                        <p
+                          className={`font-normal text-[#4d4d4d] ${
+                            demoStructureLayout
+                              ? "mt-[8px] line-clamp-4 w-full break-keep text-[12px] leading-[18px]"
+                              : "mt-[5px] line-clamp-2 w-[206px] text-[8.442px] leading-[12px]"
+                          }`}
+                        >
                           {node.body}
                         </p>
                       ) : null}
@@ -615,6 +683,7 @@ export function buildProblemStructureCanvasBlueprint(input: {
     layoutSignature: buildNodeContentSignature([
       stage,
       "problem-structure-board",
+      demoStructureLayout,
       ...structureNodes.flatMap((node) => [node.id, node.title, node.body, node.status, node.depth]),
       ...problemStructureGroups.flatMap((group) => [
         group.id,

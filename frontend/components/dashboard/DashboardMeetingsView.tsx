@@ -11,15 +11,20 @@ import {
   isCompletedMeeting,
   matchesStatusFilter,
 } from "./dashboardUtils";
-import type { DashboardMeeting, MeetingStatusFilter } from "./types";
+import type { DashboardMeeting, DashboardMeetingTemplate, MeetingStatusFilter } from "./types";
 
 interface DashboardMeetingsViewProps {
   loading: boolean;
   meetings: DashboardMeeting[];
+  meetingTemplates: DashboardMeetingTemplate[];
+  startingTemplateId?: string | null;
   onCreateMeeting: () => void;
+  onCreateMeetingTemplate: () => void;
   onDeleteMeeting: (meeting: DashboardMeeting) => void;
+  onDeleteMeetingTemplate: (template: DashboardMeetingTemplate) => void;
   onJoinMeeting: (meetingId: string) => void;
   onOpenMeetingResult: (meeting: DashboardMeeting) => void;
+  onStartMeetingTemplate: (template: DashboardMeetingTemplate) => void;
   onSearchQueryChange: (query: string) => void;
   onStatusFilterChange: (filter: MeetingStatusFilter) => void;
   searchQuery: string;
@@ -37,6 +42,7 @@ const statusFilters: Array<{ label: string; value: MeetingStatusFilter }> = [
 const UPCOMING_CARD_SCROLL_STEP = 427;
 const UPCOMING_DRAG_IGNORE_SELECTOR = "button,a,input,textarea,select,[role='button']";
 type DashboardListTransitionPhase = "idle" | "out" | "in";
+type DashboardUpcomingMode = "meetings" | "templates";
 
 function isUpcomingInteractiveTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest(UPCOMING_DRAG_IGNORE_SELECTOR));
@@ -45,10 +51,15 @@ function isUpcomingInteractiveTarget(target: EventTarget | null) {
 export function DashboardMeetingsView({
   loading,
   meetings,
+  meetingTemplates,
+  startingTemplateId = null,
   onCreateMeeting,
+  onCreateMeetingTemplate,
   onDeleteMeeting,
+  onDeleteMeetingTemplate,
   onJoinMeeting,
   onOpenMeetingResult,
+  onStartMeetingTemplate,
   onSearchQueryChange,
   onStatusFilterChange,
   searchQuery,
@@ -56,6 +67,7 @@ export function DashboardMeetingsView({
   deletingMeetingId = null,
 }: DashboardMeetingsViewProps) {
   const upcomingScrollRef = useRef<HTMLDivElement | null>(null);
+  const [upcomingMode, setUpcomingMode] = useState<DashboardUpcomingMode>("meetings");
   const upcomingDragRef = useRef({
     active: false,
     pointerId: -1,
@@ -266,9 +278,20 @@ export function DashboardMeetingsView({
           <span className="moa-dt-main-cta ml-[5px] block whitespace-nowrap text-white">새 회의 만들기</span>
         </button>
 
-        <div className="absolute left-[103.69px] top-[267.03px] flex items-start text-white">
-          <h2 className="text-[20px] font-bold leading-[28px] tracking-[-0.05px]">예정된 회의</h2>
+        <div className="absolute left-[103.69px] top-[267.03px] flex items-center text-white">
+          <h2 className="text-[20px] font-bold leading-[28px] tracking-[-0.05px]">
+            {upcomingMode === "templates" ? "회의 템플릿" : "예정된 회의"}
+          </h2>
           <BellIcon className="ml-[10.31px] mt-[1.97px] h-[23.043px] w-[23.043px] shrink-0 text-white" />
+          <button
+            type="button"
+            onClick={() => setUpcomingMode((current) => (current === "templates" ? "meetings" : "templates"))}
+            className="moa-action-button ml-[14px] inline-flex h-[28px] items-center justify-center rounded-full border border-white/60 bg-white/20 px-[12px] text-white shadow-[0_6px_16px_rgba(5,66,255,0.12)] backdrop-blur transition hover:bg-white/30"
+          >
+            <span className="moa-font-pretendard text-[11px] font-bold leading-none tracking-[-0.028px] text-white">
+              {upcomingMode === "templates" ? "예정된 회의" : "회의 템플릿"}
+            </span>
+          </button>
         </div>
 
         <div
@@ -286,7 +309,20 @@ export function DashboardMeetingsView({
           onWheel={handleUpcomingWheel}
         >
           <div className="flex w-max gap-[35.92px]">
-            {loading ? (
+            {upcomingMode === "templates" ? (
+              <>
+                {meetingTemplates.map((template) => (
+                  <MeetingTemplateCard
+                    key={template.id}
+                    template={template}
+                    starting={startingTemplateId === template.id}
+                    onDeleteTemplate={onDeleteMeetingTemplate}
+                    onStartTemplate={onStartMeetingTemplate}
+                  />
+                ))}
+                <MeetingTemplateAddCard onCreateTemplate={onCreateMeetingTemplate} />
+              </>
+            ) : loading ? (
               <UpcomingSkeleton />
             ) : upcomingMeetings.length === 0 ? (
               <div className="moa-action-card flex h-[191.119px] w-[391.048px] shrink-0 snap-start items-center rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.5)] bg-white px-[21.42px] shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)]">
@@ -553,11 +589,14 @@ function MobileMeetingCard({
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className={classNames("inline-flex h-[24px] items-center rounded-full px-3 text-white", statusClassName)}>
-          <span className="block text-[11px] font-semibold leading-none tracking-[-0.025px] text-white">
-            {getMeetingStatusLabel(meeting.status)}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={classNames("inline-flex h-[24px] items-center rounded-full px-3 text-white", statusClassName)}>
+            <span className="block text-[11px] font-semibold leading-none tracking-[-0.025px] text-white">
+              {getMeetingStatusLabel(meeting.status)}
+            </span>
           </span>
-        </span>
+          <MeetingModeTag meeting={meeting} size="mobile" />
+        </div>
         <div className="relative">
           <button
             type="button"
@@ -660,6 +699,38 @@ function MoreIcon({ className }: { className?: string }) {
   );
 }
 
+function MeetingModeTag({ meeting, size = "desktop" }: { meeting: DashboardMeeting; size?: "desktop" | "mobile" | "upcoming" }) {
+  const demoMode = String(meeting.meeting_mode || "normal").toLowerCase() === "demo_balance";
+  const sizeClassName =
+    size === "mobile"
+      ? "h-[24px] px-2.5"
+      : size === "upcoming"
+        ? "h-[24.5px] px-[9px]"
+        : "h-[25px] px-[8.5px]";
+  const textClassName =
+    size === "mobile"
+      ? "text-[11px] tracking-[-0.025px]"
+      : size === "upcoming"
+        ? "text-[10.5px] tracking-[-0.026px]"
+        : "text-[10.5px] tracking-[-0.026px]";
+
+  return (
+    <span
+      className={classNames(
+        "inline-flex shrink-0 items-center justify-center rounded-full border",
+        sizeClassName,
+        demoMode
+          ? "border-[#b8d9ff] bg-[#eff8ff] text-[#236cf3]"
+          : "border-[#e3e8f1] bg-white text-[#90a1b9]",
+      )}
+    >
+      <span className={classNames("moa-font-pretendard block whitespace-nowrap font-bold leading-none", textClassName)}>
+        {demoMode ? "시연용" : "일반"}
+      </span>
+    </span>
+  );
+}
+
 function UpcomingMeetingCard({
   featured,
   meeting,
@@ -683,6 +754,9 @@ function UpcomingMeetingCard({
       <h3 className="moa-dt-card-title absolute left-[21.42px] top-[15.99px] max-w-[330px] truncate whitespace-nowrap">
         {meeting.title}
       </h3>
+      <div className="absolute left-[21.42px] top-[56px]">
+        <MeetingModeTag meeting={meeting} size="upcoming" />
+      </div>
       <p className="moa-dt-card-date absolute left-[21.42px] top-[127.82px] max-w-[160px] truncate whitespace-nowrap">
         {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
       </p>
@@ -699,6 +773,129 @@ function UpcomingMeetingCard({
       >
         <span className={classNames("moa-dt-card-cta block whitespace-nowrap", featured || tone === "active" ? "moa-dt-card-cta-strong text-white" : "text-[var(--moa-dashboard-outline)]")}>
           {getUpcomingMeetingActionLabel(meeting.status)}
+        </span>
+      </button>
+    </article>
+  );
+}
+
+function MeetingTemplateAddCard({ onCreateTemplate }: { onCreateTemplate: () => void }) {
+  return (
+    <article className="moa-action-card relative h-[191.119px] w-[391.048px] shrink-0 snap-start overflow-hidden rounded-[19.654px] border-[0.949px] border-dashed border-white/70 bg-white/88 shadow-[0.678px_3.389px_8.133px_rgba(138,204,255,0.1)] backdrop-blur">
+      <button
+        type="button"
+        onClick={onCreateTemplate}
+        className="absolute inset-0 flex flex-col items-center justify-center text-[#236cf3] transition hover:bg-[#f4fbff]"
+      >
+        <span className="grid h-[62px] w-[62px] place-items-center rounded-full border border-[#d8efff] bg-white text-[36px] font-light leading-none shadow-[0_14px_30px_rgba(5,66,255,0.1)]">
+          +
+        </span>
+        <span className="mt-[14px] text-[14px] font-bold leading-[1.4] tracking-[-0.035px]">
+          템플릿 추가
+        </span>
+      </button>
+    </article>
+  );
+}
+
+function MeetingTemplateCard({
+  starting,
+  template,
+  onDeleteTemplate,
+  onStartTemplate,
+}: {
+  starting: boolean;
+  template: DashboardMeetingTemplate;
+  onDeleteTemplate: (template: DashboardMeetingTemplate) => void;
+  onStartTemplate: (template: DashboardMeetingTemplate) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <article
+      className="moa-action-card relative h-[191.119px] w-[391.048px] shrink-0 snap-start overflow-hidden rounded-[19.654px] border-[0.949px] border-[rgba(19,127,188,0.45)] bg-white shadow-[21.01px_92.849px_26.431px_rgba(138,204,255,0),13.555px_59.64px_24.398px_rgba(138,204,255,0.01),7.455px_33.209px_20.332px_rgba(138,204,255,0.05),3.389px_14.91px_14.91px_rgba(138,204,255,0.09),0.678px_3.389px_8.133px_rgba(138,204,255,0.1)] transition hover:-translate-y-[1px]"
+      onClick={() => {
+        if (!starting) onStartTemplate(template);
+      }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if ((event.key === "Enter" || event.key === " ") && !starting) {
+          event.preventDefault();
+          onStartTemplate(template);
+        }
+      }}
+    >
+      <div className="absolute left-[21.42px] top-[15.99px] min-w-0">
+        <p className="text-[10.5px] font-bold leading-none tracking-[-0.026px] text-[#236cf3]">시연 템플릿</p>
+        <h3 className="moa-dt-card-title mt-[8px] max-w-[300px] truncate whitespace-nowrap">
+          {template.title}
+        </h3>
+      </div>
+
+      <button
+        type="button"
+        aria-label="템플릿 메뉴"
+        onClick={(event) => {
+          event.stopPropagation();
+          setMenuOpen((open) => !open);
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="moa-action-button absolute right-[15px] top-[14px] grid h-[28px] w-[28px] place-items-center rounded-full border border-[#e5edf6] bg-white text-[#7c8aa3] transition hover:border-[#b8d9ff] hover:text-[#236cf3]"
+      >
+        <MoreIcon className="h-[16px] w-[16px]" />
+      </button>
+
+      {menuOpen ? (
+        <div
+          className="moa-popover-menu absolute right-[15px] top-[46px] z-10 w-[108px] rounded-[14px] border border-[#e5edf6] bg-white p-1 shadow-[0_16px_40px_rgba(15,23,42,0.14)]"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              onDeleteTemplate(template);
+            }}
+            className="moa-action-button flex h-[32px] w-full items-center rounded-[10px] px-3 text-left text-[12px] font-bold tracking-[-0.03px] text-[#d9483b] transition hover:bg-[#fff3f0]"
+          >
+            삭제
+          </button>
+        </div>
+      ) : null}
+
+      <div className="absolute left-[21.42px] right-[21.42px] top-[72px] grid gap-[8px]">
+        <div className="rounded-[12px] border border-[#dbeafe] bg-[#f7fbff] px-[12px] py-[8px]">
+          <p className="truncate text-[11px] font-bold leading-[1.35] tracking-[-0.028px] text-[#236cf3]">
+            A: {template.optionA}
+          </p>
+          <p className="mt-[3px] truncate text-[10.5px] font-semibold leading-[1.35] tracking-[-0.026px] text-[#7b8fa7]">
+            중심 키워드 · {template.optionAKeyword}
+          </p>
+        </div>
+        <div className="rounded-[12px] border border-[#ffe0d5] bg-[#fff8f4] px-[12px] py-[8px]">
+          <p className="truncate text-[11px] font-bold leading-[1.35] tracking-[-0.028px] text-[#e4573a]">
+            B: {template.optionB}
+          </p>
+          <p className="mt-[3px] truncate text-[10.5px] font-semibold leading-[1.35] tracking-[-0.026px] text-[#9b7468]">
+            중심 키워드 · {template.optionBKeyword}
+          </p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        disabled={starting}
+        onClick={(event) => {
+          event.stopPropagation();
+          onStartTemplate(template);
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="moa-action-button moa-dashboard-primary-button absolute left-[247px] top-[145px] inline-flex h-[33.213px] w-[122px] items-center justify-center rounded-[54.896px] text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)] transition hover:brightness-105 disabled:cursor-wait disabled:opacity-70"
+      >
+        <span className="moa-dt-card-cta moa-dt-card-cta-strong block whitespace-nowrap text-white">
+          {starting ? "생성 중" : "시작하기"}
         </span>
       </button>
     </article>
@@ -743,6 +940,9 @@ function MeetingListRow({
         <span className="mx-[12px] h-[19.654px] w-px shrink-0 bg-[var(--moa-row-divider)]" />
         <span className="moa-dt-row-date shrink-0 whitespace-nowrap">
           {formatDashboardCompactDateTime(getMeetingSortDate(meeting))}
+        </span>
+        <span className="ml-[10px] shrink-0">
+          <MeetingModeTag meeting={meeting} />
         </span>
       </button>
 

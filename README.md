@@ -95,7 +95,8 @@ IMMS-AI/
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-2.0-flash
-WHISPER_MODEL=large
+WHISPER_MODEL=turbo
+WHISPER_LANGUAGE=ko
 
 # Ports
 BACKEND_PORT=8000

@@ -32,7 +32,13 @@ export const CanvasStageEmptyOverlay = memo(function CanvasStageEmptyOverlay({
   );
 });
 
-export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinitionPreparingOverlay({ exiting = false }: { exiting?: boolean }) {
+export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinitionPreparingOverlay({
+  exiting = false,
+  detail = "",
+}: {
+  exiting?: boolean;
+  detail?: string;
+}) {
   return (
     <div className="moa-popover-backdrop absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]" data-exiting={exiting}>
       <div className="moa-popover-panel w-[min(440px,90%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_24px_60px_rgba(15,23,42,0.12)]" data-exiting={exiting}>
@@ -46,14 +52,20 @@ export const ProblemDefinitionPreparingOverlay = memo(function ProblemDefinition
           문제정의 단계를 준비하고 있습니다
         </h3>
         <p className="mt-3 text-base leading-7 text-slate-500">
-          아이디어 단계의 STT 발화를 바탕으로 큰 분류를 만드는 중입니다.
+          {detail || "아이디어 단계의 STT 발화를 바탕으로 큰 분류를 만드는 중입니다."}
         </p>
       </div>
     </div>
   );
 });
 
-export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendingOverlay({ exiting = false }: { exiting?: boolean }) {
+export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendingOverlay({
+  exiting = false,
+  detail = "",
+}: {
+  exiting?: boolean;
+  detail?: string;
+}) {
   return (
     <div className="moa-popover-backdrop absolute inset-0 z-[6] flex items-center justify-center bg-white/78 backdrop-blur-[2px]" data-exiting={exiting}>
       <div className="moa-popover-panel w-[min(520px,92%)] rounded-[28px] border border-slate-200 bg-white px-8 py-7 text-center shadow-[0_28px_70px_rgba(15,23,42,0.12)]" data-exiting={exiting}>
@@ -82,7 +94,7 @@ export const SummaryDocumentPendingOverlay = memo(function SummaryDocumentPendin
           요약 문서를 생성하고 있습니다
         </h3>
         <p className="mt-3 text-base leading-7 text-slate-500">
-          2단계 구조화의 모든 그룹과 회의 흐름을 바탕으로 문서 초안을 작성하는 중입니다.
+          {detail || "2단계 구조화의 모든 그룹과 회의 흐름을 바탕으로 문서 초안을 작성하는 중입니다."}
         </p>
       </div>
     </div>

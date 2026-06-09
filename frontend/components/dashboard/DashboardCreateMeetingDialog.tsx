@@ -2,24 +2,52 @@ import { useEffect, useId } from "react";
 import { useMoaPresence } from "@/components/moa-ui/useMoaPresence";
 
 interface DashboardCreateMeetingDialogProps {
+  demoMode: boolean;
+  demoOptionA: string;
+  demoOptionAKeyword: string;
+  demoOptionB: string;
+  demoOptionBKeyword: string;
   meetingTitle: string;
   onClose: () => void;
   onCreate: () => void;
+  onDemoModeChange: (enabled: boolean) => void;
+  onDemoOptionAChange: (value: string) => void;
+  onDemoOptionAKeywordChange: (value: string) => void;
+  onDemoOptionBChange: (value: string) => void;
+  onDemoOptionBKeywordChange: (value: string) => void;
   onMeetingTitleChange: (title: string) => void;
   open: boolean;
 }
 
 export function DashboardCreateMeetingDialog({
+  demoMode,
+  demoOptionA,
+  demoOptionAKeyword,
+  demoOptionB,
+  demoOptionBKeyword,
   meetingTitle,
   onClose,
   onCreate,
+  onDemoModeChange,
+  onDemoOptionAChange,
+  onDemoOptionAKeywordChange,
+  onDemoOptionBChange,
+  onDemoOptionBKeywordChange,
   onMeetingTitleChange,
   open,
 }: DashboardCreateMeetingDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const inputId = useId();
+  const optionAId = useId();
+  const optionAKeywordId = useId();
+  const optionBId = useId();
+  const optionBKeywordId = useId();
   const presence = useMoaPresence(open, 320);
+  const canSubmit = Boolean(
+    meetingTitle.trim() &&
+      (!demoMode || (demoOptionA.trim() && demoOptionAKeyword.trim() && demoOptionB.trim() && demoOptionBKeyword.trim())),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -78,7 +106,7 @@ export function DashboardCreateMeetingDialog({
         data-exiting={presence.isExiting}
         onSubmit={(event) => {
           event.preventDefault();
-          if (meetingTitle.trim()) onCreate();
+          if (canSubmit) onCreate();
         }}
       >
         <div className="px-5 pb-[8px] pt-6 lg:px-[24px] lg:pt-[24px]">
@@ -88,12 +116,12 @@ export function DashboardCreateMeetingDialog({
               새 회의 만들기
             </h2>
             <p className="text-[14px] font-medium leading-[1.4] tracking-[-0.035px] text-[#7c7c7c]">
-              회의 제목을 입력하면 바로 회의를 만들 수 있습니다.
+              회의 제목을 입력하면 바로 회의를 만들 수 있습니다. 시연용 모드는 A/B 토론에 맞춰 빠르게 동작합니다.
             </p>
           </div>
         </div>
 
-        <div className="px-5 pb-[28px] pt-[10px] lg:px-[24px] lg:pt-[8px]">
+        <div className="space-y-[16px] px-5 pb-[28px] pt-[10px] lg:px-[24px] lg:pt-[8px]">
           <label htmlFor={inputId} className="mb-[6px] block text-[12px] font-bold leading-[1.4] tracking-[-0.03px] text-[#434343]">
             회의 제목
           </label>
@@ -106,6 +134,89 @@ export function DashboardCreateMeetingDialog({
             className="h-[50px] w-full rounded-[16px] border border-[#e5e7eb] bg-white px-[16px] text-[14px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.45)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)] lg:h-[44px] lg:rounded-[12px] lg:px-[14px] lg:text-[12px] lg:font-normal"
             autoFocus
           />
+
+          <div className="rounded-[16px] border border-[#e4efff] bg-[#f7fbff] p-[14px]">
+            <label className="flex cursor-pointer items-center justify-between gap-4">
+              <span className="min-w-0">
+                <span className="block text-[13px] font-bold leading-[1.4] tracking-[-0.033px] text-[#1a2035]">
+                  시연용 밸런스 게임
+                </span>
+                <span className="mt-[3px] block text-[11px] font-medium leading-[1.45] tracking-[-0.028px] text-[#7c8aa3]">
+                  2~4분 시연에 맞춰 버블과 요약 판정을 빠르게 생성합니다.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={demoMode}
+                onChange={(event) => onDemoModeChange(event.target.checked)}
+                className="h-[18px] w-[18px] shrink-0 accent-[#0542ff]"
+              />
+            </label>
+
+            {demoMode ? (
+              <div className="mt-[14px] grid gap-[10px]">
+                <div className="grid gap-[10px] lg:grid-cols-2">
+                  <div>
+                  <label htmlFor={optionAId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                    A 선택지
+                  </label>
+                  <input
+                    id={optionAId}
+                    type="text"
+                    value={demoOptionA}
+                    onChange={(event) => onDemoOptionAChange(event.target.value)}
+                    placeholder="예) 평생 커피 금지"
+                    className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                  />
+                  </div>
+                  <div>
+                    <label htmlFor={optionAKeywordId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      A 중심 키워드
+                    </label>
+                    <input
+                      id={optionAKeywordId}
+                      type="text"
+                      value={demoOptionAKeyword}
+                      onChange={(event) => onDemoOptionAKeywordChange(event.target.value)}
+                      placeholder="예) 커피"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-[10px] lg:grid-cols-2">
+                  <div>
+                    <label htmlFor={optionBId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      B 선택지
+                    </label>
+                    <input
+                      id={optionBId}
+                      type="text"
+                      value={demoOptionB}
+                      onChange={(event) => onDemoOptionBChange(event.target.value)}
+                      placeholder="예) 평생 라면 금지"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={optionBKeywordId} className="mb-[5px] block text-[11px] font-bold leading-[1.4] tracking-[-0.028px] text-[#236cf3]">
+                      B 중심 키워드
+                    </label>
+                    <input
+                      id={optionBKeywordId}
+                      type="text"
+                      value={demoOptionBKeyword}
+                      onChange={(event) => onDemoOptionBKeywordChange(event.target.value)}
+                      placeholder="예) 라면"
+                      className="h-[40px] w-full rounded-[12px] border border-[#dbeafe] bg-white px-[13px] text-[12px] font-semibold leading-[1.4] tracking-[-0.03px] text-[#1a2035] outline-none transition placeholder:text-[rgba(26,32,53,0.42)] focus:border-[#01a3ff] focus:shadow-[0_0_0_3px_rgba(1,163,255,0.1)]"
+                    />
+                  </div>
+                </div>
+                <p className="rounded-[12px] bg-white px-[12px] py-[9px] text-[11px] font-semibold leading-[1.45] tracking-[-0.028px] text-[#6b7a90]">
+                  참가자는 발화할 때 <span className="text-[#0542ff]">A 또는 B를 먼저 말하고</span> 이유를 설명해야 유효 의견으로 집계됩니다.
+                </p>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex h-[80px] items-center justify-end gap-[8px] border-t border-[#f0f0f0] px-5 pb-[env(safe-area-inset-bottom)] lg:h-[72px] lg:px-[24px] lg:pb-0">
@@ -118,7 +229,7 @@ export function DashboardCreateMeetingDialog({
           </button>
           <button
             type="submit"
-            disabled={!meetingTitle.trim()}
+            disabled={!canSubmit}
             className="inline-flex h-[44px] min-w-[132px] items-center justify-center gap-[7px] rounded-full border border-[#e2faff] bg-[linear-gradient(126deg,#2cb1fe_25%,#0542ff_82%)] px-[20px] text-white shadow-[0_3px_8px_rgba(5,66,255,0.14)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:border-[#ececec] disabled:bg-none disabled:bg-[#d8d8d8] disabled:shadow-none lg:h-[37px] lg:min-w-[123px] lg:px-[18px]"
           >
             <span className="block text-[14px] font-bold leading-[1.4] tracking-[-0.035px] text-white">회의 만들기</span>

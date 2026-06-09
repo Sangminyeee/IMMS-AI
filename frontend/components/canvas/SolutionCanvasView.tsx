@@ -36,6 +36,9 @@ type SolutionCanvasViewProps = {
   pending: boolean;
   generationStatus: CanvasArtifactGenerationStatus;
   generationError: string;
+  generationDetail?: string;
+  generationPhase?: string;
+  generationRetryable?: boolean;
   saving: boolean;
   onToggleEvidence: (groupId: string) => void;
   onSetEditMode: (editMode: boolean) => void;
@@ -66,6 +69,9 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
   pending,
   generationStatus,
   generationError,
+  generationDetail,
+  generationPhase,
+  generationRetryable,
   saving,
   onToggleEvidence,
   onSetEditMode,
@@ -106,6 +112,9 @@ export const SolutionCanvasView = memo(function SolutionCanvasView({
         pending={pending}
         generationStatus={generationStatus}
         generationError={generationError}
+        generationDetail={generationDetail}
+        generationPhase={generationPhase}
+        generationRetryable={generationRetryable}
         saving={saving}
         eligibleGroupCount={groups.length}
         presentation={presentation}
