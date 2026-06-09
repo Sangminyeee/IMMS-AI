@@ -1738,6 +1738,31 @@ async def request_ideation_bubble_graph_update(
 
     demo_config = normalize_demo_config(workspace.get("demo_config"))
     demo_balance_mode = is_demo_balance_config(demo_config)
+    workspace_stage = str(workspace.get("stage") or workspace.get("canvas_stage") or "ideation")
+    if demo_balance_mode and workspace_stage != "ideation":
+        async with state.setdefault("ideation_bubble_lock", asyncio.Lock()):
+            state["demo_local_fast_queue"] = []
+            state["demo_consolidation_queue"] = []
+            state["demo_local_fast_task"] = None
+            state["demo_consolidation_task"] = None
+        print(
+            "[Bubble][gateway] demo ideation graph skipped reason=workspace_stage_not_ideation",
+            {
+                "meeting_id": meeting_id,
+                "workspace_stage": workspace_stage,
+                "update_mode": update_mode,
+            },
+            flush=True,
+        )
+        await send_bubble_graph_debug(
+            meeting_id,
+            "skipped",
+            mode="demo_balance",
+            update_mode=update_mode,
+            reason="workspace_stage_not_ideation",
+            workspace_stage=workspace_stage,
+        )
+        return "no_change"
     pause_key = _ideation_bubble_pause_key(demo_balance_mode, update_mode)
     paused_until = float(state.get(pause_key) or 0.0)
     if paused_until > time.monotonic():

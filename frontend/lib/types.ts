@@ -184,7 +184,17 @@ export interface CanvasProblemDiscussionItem {
 export interface CanvasProblemTaxonomyResponse {
   ok: boolean;
   used_llm: boolean;
+  retryable?: boolean;
   warning?: string;
+  llm_error?: {
+    stage?: string;
+    model?: string;
+    thinking_level?: string;
+    http_status?: number;
+    error_type?: string;
+    error_preview?: string;
+    elapsed_ms?: number | null;
+  };
   generated_at: string;
   groups: CanvasProblemDefinitionGroup[];
   problem_structure?: CanvasProblemStructureState;
@@ -366,6 +376,9 @@ export interface CanvasArtifactGenerationState {
   updated_at?: string;
   finished_at?: string;
   error?: string;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
   version?: number;
   input_transcript_revision?: number;
 }
@@ -548,6 +561,14 @@ export interface CanvasDemoBalanceOpinion {
   text?: string;
 }
 
+export interface CanvasDemoBalanceMainOpinion {
+  id?: string;
+  title?: string;
+  text?: string;
+  keywords?: string[];
+  evidence_utterance_ids?: string[];
+}
+
 export interface CanvasDemoBalanceClassification {
   version?: number;
   mode?: "demo_balance" | string;
@@ -563,6 +584,10 @@ export interface CanvasDemoBalanceClassification {
     option_a_summary?: string;
     option_b_summary?: string;
     unclassified_summary?: string;
+  };
+  main_opinions?: {
+    a?: CanvasDemoBalanceMainOpinion[];
+    b?: CanvasDemoBalanceMainOpinion[];
   };
 }
 
@@ -750,7 +775,17 @@ export interface CanvasSummaryStructuredDocument {
 export interface CanvasSummaryDocumentResponse {
   ok: boolean;
   used_llm: boolean;
+  retryable?: boolean;
   warning?: string;
+  llm_error?: {
+    stage?: string;
+    model?: string;
+    thinking_level?: string;
+    http_status?: number;
+    error_type?: string;
+    error_preview?: string;
+    elapsed_ms?: number | null;
+  };
   generated_at: string;
   source_signature: string;
   markdown: string;

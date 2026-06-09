@@ -22,6 +22,9 @@ export type CanvasHeaderViewState = {
   problemDefinitionStagePending: boolean;
   isProblemDefinitionExploreStage: boolean;
   ideationBubbleDebugEnabled: boolean;
+  summaryDocumentGenerationDetail?: string;
+  summaryDocumentGenerationPhase?: string;
+  summaryDocumentGenerationRetryable?: boolean;
 };
 
 export type CanvasHeaderMeetingGoalState = {

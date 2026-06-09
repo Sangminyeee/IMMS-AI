@@ -65,6 +65,9 @@ type SolutionFinalDocumentPanelProps = {
   pending: boolean;
   generationStatus: CanvasArtifactGenerationStatus;
   generationError: string;
+  generationDetail?: string;
+  generationPhase?: string;
+  generationRetryable?: boolean;
   saving: boolean;
   eligibleGroupCount: number;
   presentation: SolutionPresentationModel;
@@ -1018,6 +1021,9 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   pending,
   generationStatus,
   generationError,
+  generationDetail,
+  generationPhase,
+  generationRetryable,
   saving,
   eligibleGroupCount,
   presentation,
@@ -1041,6 +1047,7 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
   const remoteSummaryEditor = remoteSummaryEditPresence?.updated_by || "다른 사용자";
   const editDisabled = pending || saving || Boolean(remoteSummaryEditPresence && !editMode);
   const generationFailed = generationStatus === "failed";
+  const generationStatusDetail = generationDetail || (pending ? "요약 문서를 생성하고 있습니다." : "");
 
   return (
     <section ref={paneRef} className="min-h-0 overflow-y-auto bg-white px-[30px] pb-[38px] pt-[42px]">
@@ -1110,10 +1117,19 @@ export const SolutionFinalDocumentPanel = memo(function SolutionFinalDocumentPan
           </p>
         ) : null}
 
+        {pending && generationStatusDetail ? (
+          <p className="mt-4 rounded-[8px] border border-[#d5e5ff] bg-[#f5f9ff] px-3 py-2 text-[11px] font-semibold leading-5 text-[#236cf3]">
+            {generationStatusDetail}
+            {generationPhase ? <span className="ml-1 text-[#6b8fb8]">({generationPhase})</span> : null}
+          </p>
+        ) : null}
+
         {generationFailed ? (
           <p className="mt-4 rounded-[8px] border border-[#fecaca] bg-[#fff5f5] px-3 py-2 text-[11px] font-semibold leading-5 text-[#dc2626]">
-            요약 문서 생성에 실패했습니다. 다시 생성 버튼을 눌러 재시도할 수 있습니다.
-            {generationError ? ` (${generationError})` : ""}
+            {generationRetryable
+              ? "요약 문서 생성이 완료되지 않았습니다. 다시 생성 버튼으로 재시도할 수 있습니다."
+              : "요약 문서 생성에 실패했습니다. 다시 생성 버튼을 눌러 재시도할 수 있습니다."}
+            {generationDetail ? ` ${generationDetail}` : generationError ? ` ${generationError}` : ""}
           </p>
         ) : null}
 

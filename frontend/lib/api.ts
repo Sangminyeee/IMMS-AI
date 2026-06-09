@@ -360,6 +360,9 @@ export async function startCanvasArtifactGeneration(payload: {
   artifact_key: CanvasArtifactGenerationKey;
   user_id?: string;
   force?: boolean;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
 }): Promise<{
   ok: boolean;
   acquired: boolean;
@@ -380,6 +383,9 @@ export async function finishCanvasArtifactGeneration(payload: {
   generation_id?: string;
   status: "ready" | "failed";
   error?: string;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
   problem_structure?: CanvasWorkspacePatchRequest["problem_structure"];
 }): Promise<{
   ok: boolean;

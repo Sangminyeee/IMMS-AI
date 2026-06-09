@@ -87,6 +87,9 @@ export type CanvasSurfaceSolutionState = {
   summaryDocumentPending: boolean;
   summaryDocumentGenerationStatus: CanvasArtifactGenerationStatus;
   summaryDocumentGenerationError: string;
+  summaryDocumentGenerationDetail?: string;
+  summaryDocumentGenerationPhase?: string;
+  summaryDocumentGenerationRetryable?: boolean;
   summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
 };
@@ -98,6 +101,9 @@ export type CanvasSurfaceProblemState = {
   problemDefinitionStagePending: boolean;
   problemDefinitionGenerationStatus: CanvasArtifactGenerationStatus;
   problemDefinitionGenerationError: string;
+  problemDefinitionGenerationDetail?: string;
+  problemDefinitionGenerationPhase?: string;
+  problemDefinitionGenerationRetryable?: boolean;
   problemStructureSetupOpen: boolean;
   problemStructureDraftMethod: ProblemStructureMethod;
   problemStructureDraftMode: ProblemDefinitionMode;
@@ -267,6 +273,9 @@ export const CanvasSurface = memo(function CanvasSurface({
     summaryDocumentPending,
     summaryDocumentGenerationStatus,
     summaryDocumentGenerationError,
+    summaryDocumentGenerationDetail,
+    summaryDocumentGenerationPhase,
+    summaryDocumentGenerationRetryable,
     summaryDocumentSaving,
     solutionRightPaneRef,
   } = solution;
@@ -277,6 +286,7 @@ export const CanvasSurface = memo(function CanvasSurface({
     problemDefinitionStagePending,
     problemDefinitionGenerationStatus,
     problemDefinitionGenerationError,
+    problemDefinitionGenerationDetail,
     problemStructureSetupOpen,
     problemStructureDraftMethod,
     problemStructureDraftMode,
@@ -487,6 +497,9 @@ export const CanvasSurface = memo(function CanvasSurface({
           pending={snapshotSolution.summaryDocumentPending}
           generationStatus={snapshotSolution.summaryDocumentGenerationStatus}
           generationError={snapshotSolution.summaryDocumentGenerationError}
+          generationDetail={snapshotSolution.summaryDocumentGenerationDetail}
+          generationPhase={snapshotSolution.summaryDocumentGenerationPhase}
+          generationRetryable={snapshotSolution.summaryDocumentGenerationRetryable}
           saving={snapshotSolution.summaryDocumentSaving}
           onToggleEvidence={onToggleSummaryEvidence}
           onSetEditMode={onSetSummaryDocumentEditMode}
@@ -570,7 +583,10 @@ export const CanvasSurface = memo(function CanvasSurface({
       ) : null}
 
       {problemGenerationPresence.shouldRender ? (
-        <ProblemDefinitionPreparingOverlay exiting={problemGenerationPresence.isExiting} />
+        <ProblemDefinitionPreparingOverlay
+          exiting={problemGenerationPresence.isExiting}
+          detail={problemDefinitionGenerationDetail}
+        />
       ) : null}
 
       {problemStructureSetupPresence.shouldRender ? (
@@ -597,7 +613,10 @@ export const CanvasSurface = memo(function CanvasSurface({
       ) : null}
 
       {summaryGenerationPresence.shouldRender ? (
-        <SummaryDocumentPendingOverlay exiting={summaryGenerationPresence.isExiting} />
+        <SummaryDocumentPendingOverlay
+          exiting={summaryGenerationPresence.isExiting}
+          detail={summaryDocumentGenerationDetail}
+        />
       ) : null}
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}

@@ -34,7 +34,7 @@ load_dotenv(ROOT / ".env", override=False)
 load_dotenv(ROOT / "gateway" / ".env", override=False)
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "turbo").strip() or "turbo"
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "ko").strip() or "ko"
-GEMINI_DEFAULT_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+GEMINI_DEFAULT_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite"
 GEMINI_FAST_MODEL_NAME = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.1-flash-lite").strip() or GEMINI_DEFAULT_MODEL_NAME
 GEMINI_FAST_STAGE_NAMES = tuple(
     stage.strip()
@@ -44,6 +44,11 @@ GEMINI_FAST_STAGE_NAMES = tuple(
     ).split(",")
     if stage.strip()
 )
+GEMINI_FORCE_DEFAULT_STAGE_NAMES = {
+    "canvas_demo_balance_problem_summary",
+    "canvas_demo_balance_summary_document",
+    "canvas_demo_balance_summary_conclusion",
+}
 GEMINI_FAST_STAGE_PREFIXES = tuple(
     prefix.strip()
     for prefix in os.environ.get("GEMINI_FAST_STAGE_PREFIXES", "").split(",")
@@ -613,6 +618,214 @@ def _is_demo_balance_config(raw: Any) -> bool:
     return bool(config.get("enabled")) and config.get("mode") == "demo_balance"
 
 
+def _normalize_demo_balance_main_opinions(raw: Any) -> dict[str, list[dict[str, Any]]]:
+    source = raw if isinstance(raw, dict) else {}
+    output: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for choice, aliases in {
+        "a": ("a", "option_a", "optionA", "option_a_opinions", "optionAOpinions"),
+        "b": ("b", "option_b", "optionB", "option_b_opinions", "optionBOpinions"),
+    }.items():
+        raw_items: Any = []
+        for key in aliases:
+            if isinstance(source.get(key), list):
+                raw_items = source.get(key)
+                break
+        normalized_items: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_items or []):
+            if isinstance(item, str):
+                text = _safe_text(item)
+                title = text
+                keywords: list[str] = []
+                evidence_ids: list[str] = []
+            elif isinstance(item, dict):
+                text = _safe_text(item.get("text") or item.get("body") or item.get("summary") or item.get("reason_summary"))
+                title = _safe_text(item.get("title") or item.get("label") or text)
+                keywords = _dedup_preserve(
+                    [_truncate_text(_safe_text(keyword), 40) for keyword in (item.get("keywords") or []) if _safe_text(keyword)],
+                    limit=6,
+                )
+                evidence_ids = _dedup_preserve(
+                    [
+                        _safe_text(utterance_id)
+                        for utterance_id in (
+                            item.get("evidence_utterance_ids")
+                            or item.get("evidenceUtteranceIds")
+                            or item.get("utterance_ids")
+                            or item.get("utteranceIds")
+                            or []
+                        )
+                        if _safe_text(utterance_id)
+                    ],
+                    limit=40,
+                )
+            else:
+                continue
+            if not text and not title:
+                continue
+            normalized_items.append(
+                {
+                    "id": _safe_text(item.get("id")) if isinstance(item, dict) else f"demo-main-{choice}-{index + 1}",
+                    "title": _truncate_text(title or text, 80),
+                    "text": _truncate_text(text or title, 220),
+                    "keywords": keywords,
+                    "evidence_utterance_ids": evidence_ids,
+                }
+            )
+            if len(normalized_items) >= 8:
+                break
+        output[choice] = normalized_items
+    return output
+
+
+DEMO_BALANCE_CARD_FILLER_WORDS = {
+    "아니",
+    "근데",
+    "그냥",
+    "너무",
+    "약간",
+    "진짜",
+    "뭐",
+    "그쵸",
+    "그렇죠",
+    "때문",
+    "때문에",
+    "음",
+    "어",
+    "저는",
+    "제가",
+}
+
+
+def _demo_balance_clean_card_phrase(raw: Any) -> str:
+    text = re.sub(r"\s+", " ", _safe_text(raw)).strip()
+    if not text:
+        return ""
+    text = re.sub(r"[\"'“”‘’`]", "", text)
+    text = re.sub(r"\b([ABab])\s*(선택|고름|고를게|갈게|쪽|번)?\b", "", text).strip()
+    words = [word for word in text.split(" ") if word]
+    compact_words: list[str] = []
+    previous = ""
+    for word in words:
+        normalized = re.sub(r"[^\w가-힣]", "", word).lower()
+        if not normalized or normalized in DEMO_BALANCE_CARD_FILLER_WORDS:
+            continue
+        if normalized == previous:
+            continue
+        compact_words.append(word.strip(" ,.!?;:·"))
+        previous = normalized
+    compact = " ".join(word for word in compact_words if word)
+    compact = re.sub(r"\s+", " ", compact).strip(" ,.!?;:·")
+    return _truncate_text(compact, 96)
+
+
+def _demo_balance_choice_option_label(choice: str, demo_config: dict[str, Any]) -> str:
+    normalized_choice = _safe_text(choice).lower()
+    if normalized_choice == "a":
+        return _safe_text(demo_config.get("option_a"), "A")
+    if normalized_choice == "b":
+        return _safe_text(demo_config.get("option_b"), "B")
+    return ""
+
+
+def _demo_balance_card_summary_text(raw: Any, choice: str = "", demo_config: dict[str, Any] | None = None) -> str:
+    normalized_demo_config = _normalize_canvas_demo_config(demo_config or {})
+    compact = _demo_balance_clean_card_phrase(raw)
+    if not compact:
+        return "선택 근거를 짧게 정리할 추가 발화가 필요합니다."
+    option_label = _demo_balance_choice_option_label(choice, normalized_demo_config)
+    if option_label:
+        return _truncate_text(f"{option_label}을 선택한 근거로 {compact}을 중심으로 의견이 정리되었습니다.", 180)
+    return _truncate_text(f"{compact}을 중심으로 의견이 정리되었습니다.", 180)
+
+
+def _demo_balance_card_summary_title(
+    raw: Any,
+    choice: str = "",
+    demo_config: dict[str, Any] | None = None,
+    index: int = 1,
+) -> str:
+    option_label = _demo_balance_choice_option_label(choice, _normalize_canvas_demo_config(demo_config or {}))
+    if option_label:
+        return _truncate_text(f"{option_label} 선택 근거 {max(1, index)}", 56)
+    compact = _demo_balance_clean_card_phrase(raw)
+    return _truncate_text(compact or f"대표 의견 {max(1, index)}", 56)
+
+
+def _demo_balance_text_needs_card_summarization(raw: Any) -> bool:
+    text = _safe_text(raw)
+    if len(text) > 90:
+        return True
+    normalized = re.sub(r"[^\w가-힣\s]", " ", text).lower()
+    words = [word for word in normalized.split() if word]
+    if any(word in DEMO_BALANCE_CARD_FILLER_WORDS for word in words):
+        return True
+    return any(words[index] == words[index - 1] for index in range(1, len(words)))
+
+
+def _sanitize_demo_balance_main_opinion_cards(
+    main_opinions: dict[str, list[dict[str, Any]]],
+    demo_config: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    sanitized: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    for choice in ("a", "b"):
+        for index, item in enumerate(main_opinions.get(choice) or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            raw_text = _safe_text(item.get("text") or item.get("title"))
+            raw_title = _safe_text(item.get("title"))
+            next_text = (
+                _demo_balance_card_summary_text(raw_text, choice, demo_config)
+                if _demo_balance_text_needs_card_summarization(raw_text)
+                else _truncate_text(raw_text, 220)
+            )
+            next_title = raw_title
+            if not next_title or next_title == raw_text or len(next_title) > 42 or _demo_balance_text_needs_card_summarization(next_title):
+                next_title = _demo_balance_card_summary_title(raw_text, choice, demo_config, index)
+            sanitized[choice].append(
+                {
+                    **item,
+                    "title": _truncate_text(next_title, 80),
+                    "text": _truncate_text(next_text, 220),
+                }
+            )
+    return sanitized
+
+
+def _build_demo_balance_main_opinions_from_opinions(
+    opinions: list[dict[str, Any]],
+    *,
+    limit_per_choice: int = 6,
+    demo_config: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    output: dict[str, list[dict[str, Any]]] = {"a": [], "b": []}
+    normalized_demo_config = _normalize_canvas_demo_config(demo_config or {})
+    for choice in ("a", "b"):
+        seen_texts: set[str] = set()
+        for opinion in opinions:
+            if not opinion.get("valid") or opinion.get("choice") != choice:
+                continue
+            text = _safe_text(opinion.get("text") or opinion.get("reason_summary"))
+            if not text:
+                continue
+            summary_text = _demo_balance_card_summary_text(text, choice, normalized_demo_config)
+            text_key = _safe_text(re.sub(r"\s+", " ", summary_text).lower())
+            if text_key in seen_texts:
+                continue
+            seen_texts.add(text_key)
+            output[choice].append(
+                {
+                    "id": f"demo-main-{choice}-{len(output[choice]) + 1}",
+                    "title": _demo_balance_card_summary_title(text, choice, normalized_demo_config, len(output[choice]) + 1),
+                    "text": _truncate_text(summary_text, 220),
+                    "keywords": opinion.get("keywords") if isinstance(opinion.get("keywords"), list) else [],
+                    "evidence_utterance_ids": [_safe_text(opinion.get("utterance_id"))],
+                }
+            )
+            if len(output[choice]) >= limit_per_choice:
+                break
+    return output
+
+
 def _normalize_canvas_demo_balance_classification(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {
@@ -627,6 +840,7 @@ def _normalize_canvas_demo_balance_classification(raw: Any) -> dict[str, Any]:
             "unclassified_count": 0,
             "opinions": [],
             "summary": {},
+            "main_opinions": {"a": [], "b": []},
         }
 
     opinions: list[dict[str, Any]] = []
@@ -675,6 +889,9 @@ def _normalize_canvas_demo_balance_classification(raw: Any) -> dict[str, Any]:
             "option_b_summary": _truncate_text(_safe_text(summary.get("option_b_summary") or summary.get("optionBSummary")), 420),
             "unclassified_summary": _truncate_text(_safe_text(summary.get("unclassified_summary") or summary.get("unclassifiedSummary")), 420),
         },
+        "main_opinions": _normalize_demo_balance_main_opinions(
+            raw.get("main_opinions") or raw.get("mainOpinions") or {}
+        ),
     }
 
 
@@ -1940,6 +2157,22 @@ def _get_canvas_llm_inflight_entry(
     return entry if isinstance(entry, dict) else None
 
 
+def _get_canvas_llm_request_lock(
+    rt: "RuntimeStore",
+    meeting_id: str,
+    cache_key: str,
+) -> threading.Lock:
+    lock_key = f"{_safe_text(meeting_id)}:{_safe_text(cache_key)}"
+    if not lock_key.strip(":"):
+        lock_key = "global"
+    with rt.lock:
+        request_lock = rt.canvas_llm_request_locks_by_key.get(lock_key)
+        if request_lock is None:
+            request_lock = threading.Lock()
+            rt.canvas_llm_request_locks_by_key[lock_key] = request_lock
+        return request_lock
+
+
 def _run_canvas_llm_cached_request(
     rt: "RuntimeStore",
     meeting_id: str,
@@ -2021,8 +2254,9 @@ def _run_canvas_llm_cached_request(
                 raise RuntimeError(wait_error)
             continue
 
+        request_lock = _get_canvas_llm_request_lock(rt, normalized_meeting_id, normalized_cache_key)
         try:
-            with rt.canvas_llm_request_lock:
+            with request_lock:
                 result = compute()
         except Exception as exc:
             with rt.lock:
@@ -2043,6 +2277,7 @@ def _run_canvas_llm_cached_request(
                 isinstance(inflight, dict)
                 and _safe_text(inflight.get("signature")) == normalized_signature
                 and inflight.get("event") is wait_event
+                and not (isinstance(result, dict) and result.get("ok") is False)
             )
             if should_cache_result:
                 meeting_entries.pop(normalized_cache_key, None)
@@ -2955,6 +3190,9 @@ class CanvasArtifactGenerationEntryInput(BaseModel):
     updated_at: str = ""
     finished_at: str = ""
     error: str = ""
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
     version: int = 0
     input_transcript_revision: int = 0
 
@@ -3017,6 +3255,9 @@ class CanvasArtifactGenerationStartInput(BaseModel):
     artifact_key: str = ""
     user_id: str = ""
     force: bool = False
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
 
 
 class CanvasArtifactGenerationFinishInput(BaseModel):
@@ -3026,6 +3267,9 @@ class CanvasArtifactGenerationFinishInput(BaseModel):
     generation_id: str = ""
     status: str = "ready"
     error: str = ""
+    phase: str = ""
+    detail: str = ""
+    retryable: bool = False
     problem_structure: CanvasWorkspaceProblemStructureInput | None = None
 
 
@@ -3046,6 +3290,7 @@ class RuntimeStore:
     lock: threading.Lock = field(default_factory=threading.Lock)
     llm_io_lock: threading.Lock = field(default_factory=threading.Lock)
     canvas_llm_request_lock: threading.Lock = field(default_factory=threading.Lock)
+    canvas_llm_request_locks_by_key: dict[str, threading.Lock] = field(default_factory=dict)
     meeting_goal: str = ""
     window_size: int = 12
     transcript: list[dict[str, str]] = field(default_factory=list)
@@ -3131,6 +3376,7 @@ class RuntimeStore:
         self.canvas_last_placement = {}
         self.canvas_workspace_by_meeting = {}
         self.canvas_artifact_generation_locks_by_meeting = {}
+        self.canvas_llm_request_locks_by_key = {}
         self.canvas_llm_inflight_by_meeting = {}
         self.canvas_idea_jobs_by_meeting = {}
         self.canvas_problem_jobs_by_meeting = {}
@@ -3188,6 +3434,8 @@ def _append_llm_io_log(rt: RuntimeStore, direction: str, stage: str, payload: An
 
 def _stage_uses_fast_llm(stage: str) -> bool:
     normalized_stage = _safe_text(stage)
+    if normalized_stage in GEMINI_FORCE_DEFAULT_STAGE_NAMES:
+        return False
     return normalized_stage in GEMINI_FAST_STAGE_NAMES or any(
         normalized_stage.startswith(prefix) for prefix in GEMINI_FAST_STAGE_PREFIXES
     )
@@ -3204,9 +3452,54 @@ def _llm_cache_route_salt() -> dict[str, Any]:
         "default_model": GEMINI_DEFAULT_MODEL_NAME,
         "fast_model": GEMINI_FAST_MODEL_NAME,
         "fast_stages": list(GEMINI_FAST_STAGE_NAMES),
+        "force_default_stages": sorted(GEMINI_FORCE_DEFAULT_STAGE_NAMES),
         "fast_stage_prefixes": list(GEMINI_FAST_STAGE_PREFIXES),
         "default_thinking_level": GEMINI_DEFAULT_THINKING_LEVEL,
         "fast_thinking_level": GEMINI_FAST_THINKING_LEVEL,
+    }
+
+
+def _is_llm_temporarily_unavailable_error(exc: Exception) -> bool:
+    text = _safe_text(exc).lower()
+    return "503" in text or "unavailable" in text or "high demand" in text
+
+
+def _demo_llm_retryable_warning(action_label: str, exc: Exception | None = None) -> str:
+    if exc is not None and _is_llm_temporarily_unavailable_error(exc):
+        return f"{action_label} 모델 응답이 지연되었습니다. 잠시 후 다시 생성해 주세요."
+    return f"{action_label} 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요."
+
+
+def _build_llm_error_payload(
+    *,
+    stage: str,
+    error_type: str,
+    error_preview: Any,
+    client: Any = None,
+    elapsed_ms: int | None = None,
+) -> dict[str, Any]:
+    route_model, route_thinking_level = _llm_route_for_stage(stage)
+    diagnostics: dict[str, Any] = {}
+    if client is not None and hasattr(client, "status"):
+        try:
+            status_payload = client.status()
+            diagnostics = status_payload if isinstance(status_payload, dict) else {}
+        except Exception:
+            diagnostics = {}
+    preview = _safe_text(error_preview or diagnostics.get("last_error"))
+    status = _safe_nonnegative_int(diagnostics.get("last_http_status"), 0)
+    if status <= 0:
+        match = re.search(r"\bHTTP\s+(\d{3})\b", preview, flags=re.IGNORECASE)
+        if match:
+            status = _safe_nonnegative_int(match.group(1), 0)
+    return {
+        "stage": _safe_text(stage),
+        "model": _safe_text(diagnostics.get("last_model") or route_model),
+        "thinking_level": _safe_text(route_thinking_level),
+        "http_status": status,
+        "error_type": _safe_text(error_type),
+        "error_preview": _truncate_text(preview, 700),
+        "elapsed_ms": elapsed_ms,
     }
 
 
@@ -3217,8 +3510,10 @@ def _call_llm_json(
     stage: str,
     temperature: float,
     max_tokens: int,
+    allow_default_model_retry: bool = False,
 ) -> dict[str, Any]:
     model_name, thinking_level = _llm_route_for_stage(stage)
+    used_model_name = model_name
     _append_llm_io_log(
         rt,
         direction="request",
@@ -3241,13 +3536,82 @@ def _call_llm_json(
             thinking_level=thinking_level,
         )
     except Exception as exc:
-        _append_llm_io_log(rt, direction="error", stage=stage, payload=str(exc), meta={})
-        raise
+        _append_llm_io_log(rt, direction="error", stage=stage, payload=str(exc), meta={"model": model_name})
+        if (
+            allow_default_model_retry
+            and model_name != GEMINI_DEFAULT_MODEL_NAME
+            and _is_llm_temporarily_unavailable_error(exc)
+        ):
+            retry_started_at = time.perf_counter()
+            print(
+                "[LLM default model retry]",
+                {
+                    "stage": stage,
+                    "reason": _truncate_text(str(exc), 280),
+                    "first_model": model_name,
+                    "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                    "prompt_chars": len(prompt),
+                    "max_tokens": max_tokens,
+                },
+            )
+            _append_llm_io_log(
+                rt,
+                direction="request",
+                stage=f"{stage}.default_retry",
+                payload=prompt,
+                meta={
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "prompt_chars": len(prompt),
+                    "model": GEMINI_DEFAULT_MODEL_NAME,
+                    "thinking_level": GEMINI_DEFAULT_THINKING_LEVEL,
+                    "fallback_from": model_name,
+                },
+            )
+            try:
+                parsed = client.generate_json(
+                    prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    model_override=GEMINI_DEFAULT_MODEL_NAME,
+                    thinking_level=GEMINI_DEFAULT_THINKING_LEVEL,
+                )
+                used_model_name = GEMINI_DEFAULT_MODEL_NAME
+                print(
+                    "[LLM default model retry success]",
+                    {
+                        "stage": stage,
+                        "first_model": model_name,
+                        "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                        "elapsed_ms": int((time.perf_counter() - retry_started_at) * 1000),
+                    },
+                )
+            except Exception as retry_exc:
+                _append_llm_io_log(
+                    rt,
+                    direction="error",
+                    stage=f"{stage}.default_retry",
+                    payload=str(retry_exc),
+                    meta={"model": GEMINI_DEFAULT_MODEL_NAME, "fallback_from": model_name},
+                )
+                print(
+                    "[LLM default model retry failed]",
+                    {
+                        "stage": stage,
+                        "first_model": model_name,
+                        "fallback_model": GEMINI_DEFAULT_MODEL_NAME,
+                        "elapsed_ms": int((time.perf_counter() - retry_started_at) * 1000),
+                        "error": _truncate_text(str(retry_exc), 420),
+                    },
+                )
+                raise retry_exc
+        else:
+            raise
     try:
         payload = json.dumps(parsed, ensure_ascii=False)
     except Exception:
         payload = str(parsed)
-    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={"model": model_name})
+    _append_llm_io_log(rt, direction="response", stage=stage, payload=payload, meta={"model": used_model_name})
     return parsed
 
 
@@ -3977,11 +4341,28 @@ def _build_demo_balance_classification_local(
                 "choice": choice,
                 "valid": valid,
                 "confidence": 0.65 if valid else 0.25,
-                "reason_summary": _truncate_text(text, 180),
+                "reason_summary": _demo_balance_card_summary_text(text, choice, demo_config) if valid else _truncate_text(text, 180),
                 "keywords": [],
                 "text": _truncate_text(text, 360),
             }
         )
+
+    main_opinions = {"a": [], "b": []}
+    for choice in ("a", "b"):
+        for opinion in [item for item in opinions if item.get("valid") and item.get("choice") == choice][:6]:
+            text = _safe_text(opinion.get("text") or opinion.get("reason_summary"))
+            if not text:
+                continue
+            next_index = len(main_opinions[choice]) + 1
+            main_opinions[choice].append(
+                {
+                    "id": f"demo-main-{choice}-{next_index}",
+                    "title": _demo_balance_card_summary_title(text, choice, demo_config, next_index),
+                    "text": _truncate_text(_demo_balance_card_summary_text(text, choice, demo_config), 220),
+                    "keywords": [],
+                    "evidence_utterance_ids": [_safe_text(opinion.get("utterance_id"))],
+                }
+            )
 
     return _normalize_canvas_demo_balance_classification(
         {
@@ -3997,6 +4378,7 @@ def _build_demo_balance_classification_local(
                 "option_b_summary": "",
                 "unclassified_summary": "",
             },
+            "main_opinions": main_opinions,
         }
     )
 
@@ -4008,24 +4390,27 @@ def _build_demo_balance_classification_prompt(
     demo_config = _normalize_canvas_demo_config(payload.demo_config)
     rows = context.get("rows") if isinstance(context.get("rows"), list) else _select_problem_taxonomy_rows(payload)
     input_payload = {
-        "meeting_topic": _safe_text(payload.meeting_topic),
-        "demo_config": demo_config,
-        "context_policy": {
-            "valid_opinion": "발화 안에서 A 또는 B 선택이 명시되거나 선택지명만 명확하게 지지될 때만 유효 의견이다.",
-            "unclassified": "A/B가 없거나 양쪽을 동시에 말하거나 단순 맞장구/잡담이면 unclassified로 둔다.",
-            "classification_unit": "각 STT 발화 1개를 독립 의견 후보로 분류한다.",
-        },
-        "overview_summaries": context.get("overview_summaries") or [],
-        "chunk_summaries": context.get("chunk_summaries") or [],
-        "raw_utterances": _problem_taxonomy_prompt_rows(rows[:160], 420),
+        "option_a": demo_config.get("option_a", "A"),
+        "option_b": demo_config.get("option_b", "B"),
+        "utterances": [
+            {
+                "id": _safe_text(row.get("id")),
+                "text": _truncate_text(_safe_text(row.get("text")), 260),
+            }
+            for row in rows[:120]
+            if _safe_text(row.get("id")) and _safe_text(row.get("text"))
+        ],
     }
     return (
-        "너는 3분 내외 A/B 밸런스 게임 회의의 전체 STT를 분류하는 AI 판정 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
+        "너는 3분 내외 A/B 밸런스 게임 회의의 문제정의 카드를 만드는 AI 판정 보조자다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
-        "- 전체 STT 발화를 A 의견, B 의견, 미분류로 분류한다.\n"
-        "- 사용자가 입력한 선택지명을 기준으로 동의어/말뭉개짐을 보정하되, 없는 선택을 억지로 만들지 않는다.\n"
-        "- 선택이 명확한 발화만 valid=true로 둔다.\n"
-        "- reason_summary는 해당 발화가 왜 그 선택으로 분류됐는지보다 실제 의견 내용을 짧게 정리한다.\n"
+        "- 전체 STT를 A 의견과 B 의견 중심으로 빠르게 정리한다.\n"
+        "- 문제정의 화면에는 A/B 카드 2개만 들어간다. 별도 1단계/2단계 구조화는 만들지 않는다.\n"
+        "- 각 utterance는 A/B/미분류 중 하나로 분류하되, A/B 유효 의견은 모두 opinions에 남긴다.\n"
+        "- main_opinions는 화면 카드에 보여줄 대표 의견만 3~6개로 압축한다.\n"
+        "- reason_summary와 main_opinions의 text는 STT 말투를 문장으로 다듬되 새로운 사실을 만들지 않는다.\n"
+        "- main_opinions는 원문 발화를 복사하지 말고, 짧은 요약 카드 문장으로 다시 쓴다.\n"
+        "- 감탄사, 말버릇, 반복어, '저는/제가/그냥/근데/아니' 같은 구어체 시작 표현은 제거한다.\n"
         "- 인명은 keywords에 넣지 않는다.\n"
         "- 입력에 없는 투표 결과, 참가자 수, 사실을 만들지 않는다.\n\n"
         "[입력 JSON]\n"
@@ -4035,13 +4420,21 @@ def _build_demo_balance_classification_prompt(
         '  "opinions": [\n'
         '    {"utterance_id":"입력 id","choice":"a|b|unclassified","valid":true,"confidence":0.0,"reason_summary":"실제 의견 요약","keywords":["핵심 명사"]}\n'
         "  ],\n"
-        '  "summary": {"option_a_summary":"A 의견 묶음 요약","option_b_summary":"B 의견 묶음 요약","unclassified_summary":"미분류 의견 요약"}\n'
+        '  "summary": {"option_a_summary":"A 의견 전체 요약","option_b_summary":"B 의견 전체 요약","unclassified_summary":"미분류 참고 요약"},\n'
+        '  "main_opinions": {\n'
+        '    "a": [{"title":"대표 의견 제목","text":"카드에 표시할 짧은 요약","keywords":["키워드"],"evidence_utterance_ids":["입력 id"]}],\n'
+        '    "b": [{"title":"대표 의견 제목","text":"카드에 표시할 짧은 요약","keywords":["키워드"],"evidence_utterance_ids":["입력 id"]}]\n'
+        "  }\n"
         "}\n\n"
         "[규칙]\n"
-        "- opinions는 입력 raw_utterances의 id를 그대로 사용한다.\n"
+        "- opinions는 입력 utterances의 id를 그대로 사용한다.\n"
         "- choice가 a/b이면 valid=true, unclassified이면 valid=false다.\n"
         "- confidence는 0~1 숫자다. 선택이 직접 언급되면 0.8 이상, 선택지명만 명확하면 0.6~0.8, 애매하면 unclassified다.\n"
         "- reason_summary는 12~60자 정도로 짧고 구체적으로 쓴다.\n"
+        "- main_opinions.a/b는 각각 최대 6개다. 비슷한 의견은 하나로 합친다.\n"
+        "- main_opinions.title은 10~24자 논점 제목이다. 원문 첫 문장을 그대로 쓰지 않는다.\n"
+        "- main_opinions.text는 30~80자 요약문이다. 원문을 따옴표처럼 그대로 옮기지 않는다.\n"
+        "- main_opinions의 evidence_utterance_ids에는 근거가 된 입력 id를 1개 이상 넣는다.\n"
         "- keywords는 명사 중심 0~4개만 쓴다. 사람 이름은 제외한다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
@@ -4092,6 +4485,13 @@ def _normalize_demo_balance_llm_classification(
             }
         )
 
+    main_opinions = _normalize_demo_balance_main_opinions(parsed.get("main_opinions") or parsed.get("mainOpinions") or {})
+    if not main_opinions["a"] and not main_opinions["b"]:
+        main_opinions = _normalize_demo_balance_main_opinions(fallback.get("main_opinions") or {})
+    if not main_opinions["a"] and not main_opinions["b"]:
+        main_opinions = _build_demo_balance_main_opinions_from_opinions(opinions, demo_config=demo_config)
+    main_opinions = _sanitize_demo_balance_main_opinion_cards(main_opinions, demo_config)
+
     return _normalize_canvas_demo_balance_classification(
         {
             "version": 1,
@@ -4102,6 +4502,7 @@ def _normalize_demo_balance_llm_classification(
             "source_signature": fallback.get("source_signature", ""),
             "opinions": opinions,
             "summary": parsed.get("summary") if isinstance(parsed.get("summary"), dict) else fallback.get("summary", {}),
+            "main_opinions": main_opinions,
         }
     )
 
@@ -4119,12 +4520,33 @@ def _demo_balance_opinion_group(
         and ((choice in {"a", "b"} and opinion.get("valid") and opinion.get("choice") == choice) or (choice == "unclassified" and not opinion.get("valid")))
     ]
     group_id = f"demo-balance-{choice}"
-    status = "final" if choice in {"a", "b"} and opinions else ("review" if opinions else "draft")
+    status = "final" if choice in {"a", "b"} else ("review" if opinions else "draft")
+    main_opinions = _normalize_demo_balance_main_opinions(classification.get("main_opinions")).get(choice, [])
+    if choice in {"a", "b"} and not main_opinions:
+        main_opinions = _build_demo_balance_main_opinions_from_opinions(
+            opinions,
+            demo_config={
+                "enabled": True,
+                "mode": "demo_balance",
+                "option_a": classification.get("option_a"),
+                "option_b": classification.get("option_b"),
+            },
+        ).get(choice, [])
     source_summary_items = [
-        _truncate_text(_safe_text(opinion.get("reason_summary") or opinion.get("text")), 160)
-        for opinion in opinions[:12]
-        if _safe_text(opinion.get("reason_summary") or opinion.get("text"))
+        _truncate_text(_safe_text(item.get("text") or item.get("title")), 160)
+        for item in main_opinions
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
     ]
+    if not source_summary_items:
+        source_summary_items = [
+            _truncate_text(_safe_text(opinion.get("reason_summary") or opinion.get("text")), 160)
+            for opinion in opinions[:12]
+            if _safe_text(opinion.get("reason_summary") or opinion.get("text"))
+        ]
+    summary = classification.get("summary") if isinstance(classification.get("summary"), dict) else {}
+    choice_summary = _safe_text(
+        summary.get("option_a_summary" if choice == "a" else "option_b_summary" if choice == "b" else "unclassified_summary")
+    )
     return {
         "group_id": group_id,
         "parent_group_id": "",
@@ -4136,12 +4558,13 @@ def _demo_balance_opinion_group(
         "agenda_titles": [],
         "ideas": [
             {
-                "id": _safe_text(opinion.get("utterance_id")) or f"{group_id}-idea-{index + 1}",
+                "id": _safe_text(item.get("id")) or f"{group_id}-idea-{index + 1}",
                 "kind": "utterance",
-                "title": f"{label} {index + 1}",
-                "body": _truncate_text(_safe_text(opinion.get("reason_summary") or opinion.get("text")), 180),
+                "title": _safe_text(item.get("title")) or f"{label} {index + 1}",
+                "body": _truncate_text(_safe_text(item.get("text") or item.get("title")), 180),
             }
-            for index, opinion in enumerate(opinions[:24])
+            for index, item in enumerate(main_opinions[:8])
+            if isinstance(item, dict)
         ],
         "discussion_items": [],
         "linked_group_ids": [],
@@ -4151,7 +4574,7 @@ def _demo_balance_opinion_group(
             if _safe_text(opinion.get("utterance_id"))
         ],
         "source_summary_items": source_summary_items,
-        "conclusion": (
+        "conclusion": choice_summary or (
             f"{title}에 대한 유효 의견 {len(opinions)}개가 정리되었습니다."
             if choice in {"a", "b"} and opinions
             else ("A/B 선택이 명확하지 않은 참고 발화입니다." if opinions else f"{title} 의견은 아직 충분하지 않습니다.")
@@ -4172,8 +4595,6 @@ def _build_demo_balance_problem_groups(
         _demo_balance_opinion_group(classification, "a", "A 의견", f"A. {option_a}"),
         _demo_balance_opinion_group(classification, "b", "B 의견", f"B. {option_b}"),
     ]
-    if _safe_nonnegative_int(classification.get("unclassified_count")) > 0:
-        groups.append(_demo_balance_opinion_group(classification, "unclassified", "미분류 의견", "미분류 의견"))
     return groups
 
 
@@ -4188,7 +4609,6 @@ def _build_demo_balance_problem_structure(
     for group_id, title in (
         ("demo-balance-a", group_by_id.get("demo-balance-a", {}).get("topic", "A 의견")),
         ("demo-balance-b", group_by_id.get("demo-balance-b", {}).get("topic", "B 의견")),
-        ("demo-balance-unclassified", "미분류 의견"),
     ):
         group = group_by_id.get(group_id)
         if not group:
@@ -4222,7 +4642,7 @@ def _build_demo_balance_problem_structure(
 
     return _normalize_canvas_problem_structure_state(
         {
-            "phase": "explore",
+            "phase": "structure",
             "method": "affinity",
             "mode": "ai",
             "revision": int(time.time() * 1000),
@@ -4236,46 +4656,118 @@ def _build_demo_balance_problem_structure(
 
 
 def _build_demo_balance_problem_taxonomy_result(payload: ProblemTaxonomyGenerateInput) -> dict[str, Any]:
+    started_at = time.perf_counter()
     rows = _select_problem_taxonomy_rows(payload)
     fallback = _build_demo_balance_classification_local(payload, rows)
     classification = fallback
     used_llm = False
     warning = ""
+    failed = False
+    retryable = False
+    llm_error: dict[str, Any] = {}
+    llm_ms = 0
+    prompt_chars = 0
 
     client, llm_ready, llm_note = _ensure_llm_ready(RT)
     if llm_ready and client is not None and rows:
         try:
-            taxonomy_context, context_warning = _build_problem_taxonomy_context(RT, payload, client, llm_ready)
-            if context_warning:
-                warning = context_warning
+            taxonomy_context = {
+                "rows": rows,
+                "total_utterance_count": len(rows),
+                "included_utterance_count": len(rows),
+            }
+            prompt = _build_demo_balance_classification_prompt(payload, taxonomy_context)
+            prompt_chars = len(prompt)
+            llm_started_at = time.perf_counter()
             parsed = _call_llm_json(
                 RT,
                 client,
-                prompt=_build_demo_balance_classification_prompt(payload, taxonomy_context),
-                stage="canvas_demo_balance_classification",
+                prompt=prompt,
+                stage="canvas_demo_balance_problem_summary",
                 temperature=0.12,
-                max_tokens=3200,
+                max_tokens=1800,
             )
+            llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
             classification = _normalize_demo_balance_llm_classification(parsed, payload, rows, fallback)
             used_llm = True
             RT.last_llm_parsed_json = {
-                "stage": "canvas_demo_balance_classification",
+                "stage": "canvas_demo_balance_problem_summary",
                 "classification": copy.deepcopy(classification),
             }
             RT.last_llm_parsed_at = _now_ts()
         except Exception as exc:
-            warning = f"시연용 A/B 분류 LLM 생성 실패: {exc}"
+            llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+            llm_error = _build_llm_error_payload(
+                stage="canvas_demo_balance_problem_summary",
+                error_type=type(exc).__name__,
+                error_preview=repr(exc),
+                client=client,
+                elapsed_ms=llm_ms,
+            )
+            print(
+                "[canvas demo balance problem summary llm failed]",
+                {
+                    "meeting_id": _safe_text(payload.meeting_id),
+                    "prompt_chars": prompt_chars,
+                    "elapsed_ms": llm_ms,
+                    "llm_error": llm_error,
+                },
+                flush=True,
+            )
+            failed = True
+            retryable = True
+            warning = _demo_llm_retryable_warning("문제정의", exc)
     elif not rows:
         warning = "A/B 의견을 분류할 STT 발화가 아직 없습니다."
     else:
-        warning = llm_note or "LLM 미연결 상태로 로컬 A/B 분류를 사용했습니다."
+        failed = True
+        retryable = True
+        warning = llm_note or "문제정의 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요."
+        llm_error = _build_llm_error_payload(
+            stage="canvas_demo_balance_problem_summary",
+            error_type="llm_not_ready",
+            error_preview=llm_note or "LLM client is not ready",
+            client=client,
+            elapsed_ms=0,
+        )
 
     groups = _build_demo_balance_problem_groups(classification)
     problem_structure = _build_demo_balance_problem_structure(classification, groups)
+    print(
+        "[canvas demo balance problem summary]",
+        {
+            "meeting_id": _safe_text(payload.meeting_id),
+            "rows_count": len(rows),
+            "prompt_chars": prompt_chars,
+            "used_llm": used_llm,
+            "llm_ms": llm_ms,
+            "total_ms": int((time.perf_counter() - started_at) * 1000),
+            "valid_a": _safe_nonnegative_int(classification.get("valid_a_count")),
+            "valid_b": _safe_nonnegative_int(classification.get("valid_b_count")),
+            "unclassified": _safe_nonnegative_int(classification.get("unclassified_count")),
+            "group_count": len(groups),
+            "failed": failed,
+            "retryable": retryable,
+        },
+    )
+    if failed:
+        return {
+            "ok": False,
+            "used_llm": False,
+            "retryable": retryable,
+            "warning": warning,
+            "llm_error": llm_error,
+            "generated_at": _now_ts(),
+            "groups": [],
+            "problem_structure": _normalize_canvas_problem_structure_state({}),
+            "demo_balance_classification": _normalize_canvas_demo_balance_classification({}),
+        }
     return {
         "ok": True,
         "used_llm": used_llm,
+        "retryable": False,
         "warning": warning,
+        "llm_error": llm_error,
         "generated_at": _now_ts(),
         "groups": groups,
         "problem_structure": problem_structure,
@@ -11733,6 +12225,101 @@ def _summary_document_blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
     return "\n\n".join(chunk for chunk in chunks if _safe_text(chunk)).strip()
 
 
+def _build_demo_balance_structured_from_blocks(
+    classification: dict[str, Any],
+    document_blocks: list[dict[str, Any]],
+    fallback: dict[str, Any],
+    report_meta: Any = None,
+) -> dict[str, Any]:
+    base = _normalize_summary_structured_document({}, fallback)
+    meta = report_meta if isinstance(report_meta, dict) else {}
+    first_heading = ""
+    first_paragraph = ""
+    bullets: list[str] = []
+    for block in document_blocks or []:
+        if not isinstance(block, dict):
+            continue
+        block_type = _safe_text(block.get("type"))
+        if block_type == "heading" and not first_heading:
+            first_heading = _safe_text(block.get("text"))
+        elif block_type == "paragraph" and not first_paragraph:
+            first_paragraph = _safe_text(block.get("text"))
+        elif block_type == "bullets":
+            bullets.extend(_safe_text(item) for item in block.get("items") or [] if _safe_text(item))
+
+    verdict = _safe_text(meta.get("verdict")) or "최종 판정"
+    summary = _safe_text(meta.get("summary")) or first_paragraph or _safe_text(base.get("key_summary"))
+    option_a = _safe_text(classification.get("option_a"), "A")
+    option_b = _safe_text(classification.get("option_b"), "B")
+    main_opinions = _normalize_demo_balance_main_opinions(classification.get("main_opinions"))
+    a_items = [
+        _safe_text(item.get("text") or item.get("title"))
+        for item in main_opinions.get("a", [])
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
+    ][:6]
+    b_items = [
+        _safe_text(item.get("text") or item.get("title"))
+        for item in main_opinions.get("b", [])
+        if isinstance(item, dict) and _safe_text(item.get("text") or item.get("title"))
+    ][:6]
+    conclusion_bullets = bullets[:8] or ([summary] if summary else [])
+    return _normalize_summary_structured_document(
+        {
+            **base,
+            "meeting_overview": _safe_text(base.get("meeting_overview"))
+            or f"{option_a}와 {option_b}를 비교한 밸런스 게임입니다.",
+            "key_summary": summary,
+            "idea_groups": [
+                {"group_id": "demo-balance-a", "title": f"A. {option_a}", "items": a_items},
+                {"group_id": "demo-balance-b", "title": f"B. {option_b}", "items": b_items},
+            ],
+            "discussion_flows": [
+                {
+                    "group_id": "demo-balance",
+                    "title": "A/B 의견 비교",
+                    "opinions": [
+                        {"label": f"A. {option_a}", "text": "; ".join(a_items[:3])},
+                        {"label": f"B. {option_b}", "text": "; ".join(b_items[:3])},
+                    ],
+                    "conclusion": verdict,
+                }
+            ],
+            "flow_sections": [
+                {
+                    "section_id": "demo-balance-flow",
+                    "group_id": "demo-balance",
+                    "title": "A/B 선택지 비교",
+                    "time_range": "",
+                    "trigger": "참가자들이 A/B 중 하나를 선택하고 이유를 제시함",
+                    "narrative": summary,
+                    "key_points": conclusion_bullets[:5],
+                    "opinions": [
+                        {"label": f"A. {option_a}", "text": "; ".join(a_items[:3])},
+                        {"label": f"B. {option_b}", "text": "; ".join(b_items[:3])},
+                    ],
+                    "settlement": verdict,
+                    "open_questions": [],
+                }
+            ],
+            "pending_items": [],
+            "conclusion": {
+                "title": first_heading or "최종 판정",
+                "summary": summary,
+                "groups": [
+                    {
+                        "group_id": "winner",
+                        "title": verdict,
+                        "status": "final",
+                        "status_label": "확정",
+                        "bullets": conclusion_bullets,
+                    }
+                ],
+            },
+        },
+        fallback,
+    )
+
+
 def _build_summary_document_structured(
     meeting_topic: str,
     groups: list[dict[str, Any]],
@@ -12072,63 +12659,45 @@ def _build_demo_balance_summary_prompt(
         context.get("demo_balance_classification") or payload.demo_balance_classification
     )
     rows = context.get("rows") if isinstance(context.get("rows"), list) else []
-    overview_summaries = context.get("overview_summaries") if isinstance(context.get("overview_summaries"), list) else []
-    chunk_summaries = context.get("chunk_summaries") if isinstance(context.get("chunk_summaries"), list) else []
+    opinions = [
+        opinion
+        for opinion in (demo_balance_classification.get("opinions") or [])
+        if isinstance(opinion, dict)
+    ]
+    valid_a_opinions = [opinion for opinion in opinions if opinion.get("valid") and opinion.get("choice") == "a"]
+    valid_b_opinions = [opinion for opinion in opinions if opinion.get("valid") and opinion.get("choice") == "b"]
+    unclassified_opinions = [opinion for opinion in opinions if not opinion.get("valid") or opinion.get("choice") not in {"a", "b"}]
     input_payload = {
         "meeting_topic": _safe_text(payload.meeting_topic),
         "demo_config": demo_config,
-        "demo_balance_classification": demo_balance_classification,
         "mode": "demo_balance",
         "source_policy": {
             "valid_opinion_rule": "demo_balance_classification의 valid=true 의견만 유효 의견으로 집계한다.",
-            "unclassified_rule": "demo_balance_classification의 unclassified 의견은 참고 의견으로 분리한다.",
-            "winner_rule": "최종 판정은 유효 의견 비율, 반복 근거, 설득력 matrix를 함께 보고 A 우세/B 우세/무승부 중 하나로 판단한다.",
+            "unclassified_rule": "미분류는 참고 의견으로만 다루고 A/B 유효 비율에는 넣지 않는다.",
+            "winner_rule": "판정은 유효 의견 수, 반복 근거, 근거의 설득력을 함께 보고 A 우세/B 우세/무승부 중 하나로 판단한다.",
         },
-        "structure_groups": [
-            {
-                "group_id": group.get("group_id"),
-                "title": group.get("title"),
-                "status": group.get("status"),
-                "nodes": [
-                    {
-                        "title": node.get("title"),
-                        "body": node.get("body"),
-                    }
-                    for node in group.get("nodes") or []
-                    if isinstance(node, dict)
-                ][:60],
-                "source_summary_items": group.get("source_summary_items", [])[:12],
-            }
-            for group in groups
-        ],
-        "transcript_context": {
-            "total_utterance_count": int(context.get("total_utterance_count") or len(rows)),
-            "included_raw_utterance_count": int(context.get("included_utterance_count") or len(rows)),
-            "overview_summaries": overview_summaries,
-            "chunk_summaries": chunk_summaries,
-            "raw_utterances_for_nuance_only": _problem_taxonomy_prompt_rows(rows[:80], 360),
+        "classification": {
+            "option_a": demo_balance_classification.get("option_a"),
+            "option_b": demo_balance_classification.get("option_b"),
+            "valid_a_count": demo_balance_classification.get("valid_a_count"),
+            "valid_b_count": demo_balance_classification.get("valid_b_count"),
+            "unclassified_count": demo_balance_classification.get("unclassified_count"),
+            "summary": demo_balance_classification.get("summary"),
+            "main_opinions": demo_balance_classification.get("main_opinions"),
+            "valid_a_opinions": valid_a_opinions,
+            "valid_b_opinions": valid_b_opinions,
+            "unclassified_opinions": unclassified_opinions[:24],
         },
+        "raw_utterances_for_reference": _problem_taxonomy_prompt_rows(rows[:80], 220) if not opinions else [],
         "current_structured": current_structured or {},
-        "evidence_hints": [
-            {
-                "group_id": section.get("group_id"),
-                "evidence_summaries": [
-                    _truncate_text(item.get("text"), 140)
-                    for item in section.get("evidence") or []
-                    if isinstance(item, dict) and _safe_text(item.get("text"))
-                ][:10],
-            }
-            for section in sections
-        ],
     }
     title_hint = "최종 판정 문서" if conclusion_only else "시연 토론 요약 및 판정 리포트"
     return (
         "너는 3분 내외의 A/B 밸런스 게임 토론을 정리하고 판정하는 AI 심판이다. 출력은 JSON 하나만 반환한다.\n\n"
         "[목표]\n"
         f"- 오른쪽 문서 편집기에 들어갈 {title_hint}를 만든다.\n"
-        "- 문제정의 진입 시 생성된 demo_balance_classification을 기준으로 각 선택지의 주요 의견을 정리한다.\n"
-        "- demo_balance_classification의 valid=true 발화만 유효 의견으로 집계한다.\n"
-        "- 유효 의견 비율, 각 선택지의 핵심 근거, 설득력 matrix를 만들고 이번 세션의 승자를 판정한다.\n"
+        "- classification의 A/B 유효 의견 전체를 기준으로 각 선택지의 주요 근거를 정리한다.\n"
+        "- 유효 의견 비율, A/B 핵심 근거, 설득력 Matrix, 최종 판정만 간결하게 만든다.\n"
         "- 무승부가 가능하다. 근거의 질과 비율이 비슷하면 무승부로 판단한다.\n"
         "- 입력에 없는 사실, 참가자 수, 명시되지 않은 투표 결과를 발명하지 않는다.\n"
         "- 화자명, timestamp, 긴 원문 인용은 넣지 않는다.\n\n"
@@ -12136,7 +12705,6 @@ def _build_demo_balance_summary_prompt(
         f"{json.dumps(input_payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "[출력 JSON 스키마]\n"
         "{\n"
-        '  "markdown": "# A vs B 판정 리포트\\n...",\n'
         '  "document_blocks": [\n'
         '    {"id":"heading-demo-report","type":"heading","level":1,"text":"A vs B 판정 리포트"},\n'
         '    {"id":"paragraph-demo-summary","type":"paragraph","text":"이번 세션의 핵심 판정을 1~2문장으로 요약"},\n'
@@ -12145,26 +12713,17 @@ def _build_demo_balance_summary_prompt(
         '    {"id":"heading-winner","type":"heading","level":2,"text":"최종 판정"},\n'
         '    {"id":"bullets-winner","type":"bullets","items":["A 우세/B 우세/무승부 중 하나와 이유"]}\n'
         "  ],\n"
-        '  "structured": {\n'
-        '    "meeting_overview": "밸런스 게임 개요",\n'
-        '    "key_summary": "최종 판정 요약",\n'
-        '    "idea_groups": [{"group_id":"option-a","title":"A 의견","items":["핵심 의견"]},{"group_id":"option-b","title":"B 의견","items":["핵심 의견"]}],\n'
-        '    "discussion_flows": [{"group_id":"demo-balance","title":"A/B 토론 흐름","opinions":[{"label":"A","text":"..."},{"label":"B","text":"..."}],"conclusion":"..."}],\n'
-        '    "flow_sections": [{"section_id":"demo-balance-flow","group_id":"demo-balance","title":"선택지 비교","trigger":"A/B 선택과 이유 공유","narrative":"...", "key_points":["..."],"opinions":[{"label":"A","text":"..."},{"label":"B","text":"..."}],"settlement":"A 우세/B 우세/무승부","open_questions":[]}],\n'
-        '    "pending_items": [],\n'
-        '    "conclusion": {"title":"최종 판정","summary":"판정 요약","groups":[{"group_id":"winner","title":"이번 세션 판정","status":"final","status_label":"확정","bullets":["판정 이유"]}]}\n'
-        "  },\n"
-        '  "conclusion": {"title":"최종 판정","summary":"판정 요약","groups":[{"group_id":"winner","title":"이번 세션 판정","status":"final","status_label":"확정","bullets":["판정 이유"]}]}\n'
+        '  "report_meta": {"verdict":"A 우세|B 우세|무승부","summary":"판정 요약 1문장","option_a_ratio":"0%","option_b_ratio":"0%"}\n'
         "}\n\n"
         "[작성 규칙]\n"
         "- document_blocks의 첫 블록은 heading level 1, 두 번째 블록은 paragraph다.\n"
         "- 표는 가능한 한 짧게 쓴다. 셀 하나에 여러 문장을 넣지 않는다.\n"
-        "- 유효 의견 비율 표에는 A, B, 미분류/무효를 넣는다. 비율은 유효 의견 기준으로 계산하되, 미분류는 별도 행으로 표시한다.\n"
+        "- 유효 의견 비율 표에는 A, B, 미분류/무효를 넣는다. A/B 비율은 valid_a_count + valid_b_count 기준으로 계산하고, 미분류는 별도 행으로 표시한다.\n"
         "- 설득력 Matrix 기준은 근거 명확성, 현실성, 일관성, 공감 가능성, 반박 대응력 중 회의에 맞는 4~5개를 사용한다.\n"
         "- 점수는 1~5점 숫자로 쓰고, 총점만으로 승자를 정하지 말고 발화 근거를 함께 본다.\n"
         "- 최종 판정은 'A 우세', 'B 우세', '무승부' 중 하나를 명확히 쓴다.\n"
-        "- raw_utterances_for_nuance_only는 누락된 뉘앙스 보강용이다. 유효 의견 비율은 demo_balance_classification을 우선한다.\n"
-        "- A/B가 명시되지 않은 발화를 억지로 추론해 유효 의견에 넣지 않는다.\n"
+        "- A/B가 명시되지 않은 발화를 억지로 유효 의견에 넣지 않는다.\n"
+        "- document_blocks는 4~7개 정도로 짧게 만든다.\n"
         "- 불필요한 설명 없이 JSON만 반환한다."
     )
 
@@ -15350,6 +15909,9 @@ def _normalize_canvas_artifact_generation(raw: Any) -> dict[str, dict[str, Any]]
             "updated_at": _safe_text(raw_value.get("updated_at")),
             "finished_at": _safe_text(raw_value.get("finished_at")),
             "error": _safe_text(raw_value.get("error")),
+            "phase": _safe_text(raw_value.get("phase")),
+            "detail": _safe_text(raw_value.get("detail")),
+            "retryable": bool(raw_value.get("retryable")),
             "version": version,
             "input_transcript_revision": _safe_nonnegative_int(raw_value.get("input_transcript_revision")),
         }
@@ -15445,6 +16007,9 @@ def _finish_canvas_artifact_generation_entry(
     requested_by: str,
     saved_at: str,
     error: str = "",
+    phase: str = "",
+    detail: str = "",
+    retryable: bool = False,
 ) -> dict[str, Any]:
     previous_version = _safe_nonnegative_int(current.get("version"))
     next_version = previous_version + 1 if status == "ready" else previous_version
@@ -15457,6 +16022,9 @@ def _finish_canvas_artifact_generation_entry(
         "updated_at": saved_at,
         "finished_at": saved_at,
         "error": error if status == "failed" else "",
+        "phase": _safe_text(phase) if status == "failed" else "",
+        "detail": _safe_text(detail) if status == "failed" else "",
+        "retryable": bool(retryable) if status == "failed" else False,
         "version": next_version,
         "input_transcript_revision": _safe_nonnegative_int(current.get("input_transcript_revision")),
     }
@@ -17770,7 +18338,7 @@ def post_canvas_problem_taxonomy(payload: ProblemTaxonomyGenerateInput):
             "payload": signature_payload,
             "utterance_snapshot_signature": _canvas_llm_signature(snapshot_rows),
             "conclusion_policy": "section_body_compression_v1",
-            "taxonomy_policy": "demo_balance_full_classification_v1"
+            "taxonomy_policy": "demo_balance_direct_ab_summary_v2"
             if _is_demo_balance_config(payload.demo_config)
             else "outline_reveal_v6",
         }
@@ -18037,6 +18605,7 @@ def post_canvas_problem_structure(payload: ProblemStructureGenerateInput):
 def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
     workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id) if normalized_meeting_id else {}
+    demo_balance_mode = _is_demo_balance_config(payload.demo_config)
     groups = _summary_document_groups(payload, workspace)
     source_signature = _summary_document_source_signature(groups)
     demo_balance_classification = _normalize_canvas_demo_balance_classification(
@@ -18044,7 +18613,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     )
     signature = _canvas_llm_signature(
         {
-            "version": 7,
+            "version": "demo_balance_document_blocks_v3" if demo_balance_mode else 7,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "demo_config": _normalize_canvas_demo_config(payload.demo_config),
             "demo_balance_classification": demo_balance_classification,
@@ -18054,6 +18623,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
     )
 
     def _compute() -> dict[str, Any]:
+        started_at = time.perf_counter()
         rows = _resolve_problem_taxonomy_utterance_rows(normalized_meeting_id, [])
         sections = _summary_document_sections(groups, rows)
         fallback_markdown = _build_summary_document_local_markdown(payload.meeting_topic, groups)
@@ -18063,6 +18633,9 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
         document_blocks = fallback_document_blocks
         used_llm = False
         warning = ""
+        llm_error: dict[str, Any] = {}
+        prompt_chars = 0
+        llm_ms = 0
 
         if not groups:
             return {
@@ -18090,50 +18663,80 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
         }
         if llm_ready:
             try:
-                taxonomy_payload = ProblemTaxonomyGenerateInput(
-                    meeting_id=normalized_meeting_id,
-                    meeting_topic=_safe_text(payload.meeting_topic),
-                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
-                    max_groups=6,
-                )
-                taxonomy_context, context_warning = _build_problem_taxonomy_context(
-                    RT,
-                    taxonomy_payload,
-                    client,
-                    llm_ready,
-                )
-                taxonomy_context["demo_balance_classification"] = demo_balance_classification
-                if context_warning:
-                    warning = context_warning
+                if demo_balance_mode:
+                    taxonomy_context = {
+                        "rows": rows,
+                        "chunk_summaries": [],
+                        "overview_summaries": [],
+                        "total_utterance_count": len(rows),
+                        "included_utterance_count": len(rows),
+                        "included_chunk_summary_count": 0,
+                        "overview_summary_count": 0,
+                        "demo_balance_classification": demo_balance_classification,
+                    }
+                else:
+                    taxonomy_payload = ProblemTaxonomyGenerateInput(
+                        meeting_id=normalized_meeting_id,
+                        meeting_topic=_safe_text(payload.meeting_topic),
+                        refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                        max_groups=6,
+                    )
+                    taxonomy_context, context_warning = _build_problem_taxonomy_context(
+                        RT,
+                        taxonomy_payload,
+                        client,
+                        llm_ready,
+                    )
+                    taxonomy_context["demo_balance_classification"] = demo_balance_classification
+                    if context_warning:
+                        warning = context_warning
             except Exception as exc:
                 warning = f"요약 문서용 chunk context 생성 실패: {exc}"
 
         markdown = fallback_markdown
         if llm_ready and client is not None:
             try:
+                prompt = _build_summary_document_prompt(payload, groups, sections, taxonomy_context)
+                prompt_chars = len(prompt)
+                llm_started_at = time.perf_counter()
                 parsed = _call_llm_json(
                     RT,
                     client,
-                    prompt=_build_summary_document_prompt(payload, groups, sections, taxonomy_context),
-                    stage="canvas_summary_document",
+                    prompt=prompt,
+                    stage="canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
                     temperature=0.18,
-                    max_tokens=3600,
+                    max_tokens=1800 if demo_balance_mode else 3600,
                 )
-                markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
-                structured = _normalize_summary_structured_document(
-                    parsed.get("structured") if isinstance(parsed, dict) else {},
-                    fallback_structured,
-                )
-                document_blocks = _normalize_summary_document_blocks(
-                    parsed.get("document_blocks") if isinstance(parsed, dict) else [],
-                    structured,
-                    markdown,
-                )
-                if not markdown:
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
+                if demo_balance_mode:
+                    document_blocks = _normalize_summary_document_blocks(
+                        parsed.get("document_blocks") if isinstance(parsed, dict) else [],
+                        fallback_structured,
+                        "",
+                    )
                     markdown = _summary_document_blocks_to_markdown(document_blocks)
+                    structured = _build_demo_balance_structured_from_blocks(
+                        demo_balance_classification,
+                        document_blocks,
+                        fallback_structured,
+                        parsed.get("report_meta") if isinstance(parsed, dict) else {},
+                    )
+                else:
+                    markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
+                    structured = _normalize_summary_structured_document(
+                        parsed.get("structured") if isinstance(parsed, dict) else {},
+                        fallback_structured,
+                    )
+                    document_blocks = _normalize_summary_document_blocks(
+                        parsed.get("document_blocks") if isinstance(parsed, dict) else [],
+                        structured,
+                        markdown,
+                    )
+                    if not markdown:
+                        markdown = _summary_document_blocks_to_markdown(document_blocks)
                 used_llm = True
                 RT.last_llm_parsed_json = {
-                    "stage": "canvas_summary_document",
+                    "stage": "canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
                     "source_signature": source_signature,
                     "markdown": markdown,
                     "document_blocks": document_blocks,
@@ -18141,14 +18744,85 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
                 }
                 RT.last_llm_parsed_at = _now_ts()
             except Exception as exc:
-                warning = f"{warning} 요약 문서 LLM 생성 실패: {exc}".strip()
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_document" if demo_balance_mode else "canvas_summary_document",
+                    error_type=type(exc).__name__,
+                    error_preview=repr(exc),
+                    client=client,
+                    elapsed_ms=llm_ms,
+                )
+                if demo_balance_mode:
+                    print(
+                        "[canvas demo balance summary document llm failed]",
+                        {
+                            "meeting_id": normalized_meeting_id,
+                            "prompt_chars": prompt_chars,
+                            "elapsed_ms": llm_ms,
+                            "llm_error": llm_error,
+                        },
+                        flush=True,
+                    )
+                    warning = _demo_llm_retryable_warning("요약 문서", exc)
+                    return {
+                        "ok": False,
+                        "used_llm": False,
+                        "retryable": True,
+                        "warning": warning,
+                        "llm_error": llm_error,
+                        "generated_at": _now_ts(),
+                        "source_signature": source_signature,
+                        "markdown": "",
+                        "document_blocks": [],
+                        "sections": sections,
+                        "structured": fallback_structured,
+                    }
+                else:
+                    warning = f"{warning} 요약 문서 LLM 생성 실패: {exc}".strip()
         elif not warning:
             warning = llm_note or "LLM 미연결 상태로 로컬 요약 문서를 만들었습니다."
+            if demo_balance_mode:
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_document",
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM client is not ready",
+                    client=client,
+                    elapsed_ms=0,
+                )
+                return {
+                    "ok": False,
+                    "used_llm": False,
+                    "retryable": True,
+                    "warning": "요약 문서 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요.",
+                    "llm_error": llm_error,
+                    "generated_at": _now_ts(),
+                    "source_signature": source_signature,
+                    "markdown": "",
+                    "document_blocks": [],
+                    "sections": sections,
+                    "structured": fallback_structured,
+                }
+
+        if demo_balance_mode:
+            print(
+                "[canvas demo balance summary document]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows_count": len(rows),
+                    "prompt_chars": prompt_chars,
+                    "used_llm": used_llm,
+                    "llm_ms": llm_ms,
+                    "total_ms": int((time.perf_counter() - started_at) * 1000),
+                    "document_blocks": len(document_blocks),
+                },
+            )
 
         return {
             "ok": True,
             "used_llm": used_llm,
+            "retryable": False,
             "warning": warning,
+            "llm_error": llm_error,
             "generated_at": _now_ts(),
             "source_signature": source_signature,
             "markdown": markdown,
@@ -18170,6 +18844,7 @@ def post_canvas_summary_document(payload: SummaryDocumentGenerateInput):
 def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     normalized_meeting_id = _safe_text(payload.meeting_id)
     workspace = _warm_canvas_workspace_cache(RT, normalized_meeting_id) if normalized_meeting_id else {}
+    demo_balance_mode = _is_demo_balance_config(payload.demo_config)
     groups = _summary_document_groups(payload, workspace)
     source_signature = _summary_document_source_signature(groups)
     demo_balance_classification = _normalize_canvas_demo_balance_classification(
@@ -18191,7 +18866,7 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     )
     signature = _canvas_llm_signature(
         {
-            "version": 8,
+            "version": "demo_balance_conclusion_blocks_v3" if demo_balance_mode else 8,
             "meeting_topic": _safe_text(payload.meeting_topic),
             "demo_config": _normalize_canvas_demo_config(payload.demo_config),
             "demo_balance_classification": demo_balance_classification,
@@ -18204,6 +18879,7 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
     )
 
     def _compute() -> dict[str, Any]:
+        started_at = time.perf_counter()
         rows = signature_rows
         sections = _summary_document_sections(groups, rows)
         fallback_structured = _build_summary_document_structured(payload.meeting_topic, groups, sections)
@@ -18221,6 +18897,9 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
         markdown = fallback_markdown
         used_llm = False
         warning = ""
+        llm_error: dict[str, Any] = {}
+        prompt_chars = 0
+        llm_ms = 0
 
         if not groups:
             return {
@@ -18248,49 +18927,79 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
         }
         if llm_ready:
             try:
-                taxonomy_payload = ProblemTaxonomyGenerateInput(
-                    meeting_id=normalized_meeting_id,
-                    meeting_topic=_safe_text(payload.meeting_topic),
-                    refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
-                    max_groups=6,
-                )
-                transcript_context, context_warning = _build_problem_taxonomy_context(
-                    RT,
-                    taxonomy_payload,
-                    client,
-                    llm_ready,
-                )
-                transcript_context["demo_balance_classification"] = demo_balance_classification
-                if context_warning:
-                    warning = context_warning
+                if demo_balance_mode:
+                    transcript_context = {
+                        "rows": rows,
+                        "chunk_summaries": [],
+                        "overview_summaries": [],
+                        "total_utterance_count": len(rows),
+                        "included_utterance_count": len(rows),
+                        "included_chunk_summary_count": 0,
+                        "overview_summary_count": 0,
+                        "demo_balance_classification": demo_balance_classification,
+                    }
+                else:
+                    taxonomy_payload = ProblemTaxonomyGenerateInput(
+                        meeting_id=normalized_meeting_id,
+                        meeting_topic=_safe_text(payload.meeting_topic),
+                        refresh_chunk_summaries=bool(payload.refresh_chunk_summaries),
+                        max_groups=6,
+                    )
+                    transcript_context, context_warning = _build_problem_taxonomy_context(
+                        RT,
+                        taxonomy_payload,
+                        client,
+                        llm_ready,
+                    )
+                    transcript_context["demo_balance_classification"] = demo_balance_classification
+                    if context_warning:
+                        warning = context_warning
             except Exception as exc:
                 warning = f"결론 문서용 전체 전사 context 생성 실패: {exc}"
 
         if llm_ready and client is not None:
             try:
+                prompt = _build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context)
+                prompt_chars = len(prompt)
+                llm_started_at = time.perf_counter()
                 parsed = _call_llm_json(
                     RT,
                     client,
-                    prompt=_build_summary_conclusion_prompt(payload, groups, sections, base_structured, transcript_context),
-                    stage="canvas_summary_conclusion",
+                    prompt=prompt,
+                    stage="canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
                     temperature=0.16,
-                    max_tokens=5200,
+                    max_tokens=1800 if demo_balance_mode else 5200,
                 )
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000)
                 if isinstance(parsed, dict):
-                    parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
-                    parsed_conclusion = parsed.get("conclusion") if isinstance(parsed.get("conclusion"), dict) else {}
-                    structured_source = parsed_structured if parsed_structured else {"conclusion": parsed_conclusion}
-                    normalized_structured = _normalize_summary_structured_document(structured_source, base_structured)
-                    structured = {
-                        **base_structured,
-                        "conclusion": normalized_structured.get("conclusion") or base_structured.get("conclusion", {}),
-                    }
-                    markdown = _normalize_summary_document_markdown(parsed, "")
-                    document_blocks = _normalize_summary_document_blocks(
-                        parsed.get("document_blocks"),
-                        structured,
-                        markdown,
-                    )
+                    if demo_balance_mode:
+                        document_blocks = _normalize_summary_document_blocks(
+                            parsed.get("document_blocks"),
+                            base_structured,
+                            "",
+                        )
+                        markdown = _summary_document_blocks_to_markdown(document_blocks)
+                        structured = _build_demo_balance_structured_from_blocks(
+                            demo_balance_classification,
+                            document_blocks,
+                            base_structured,
+                            parsed.get("report_meta"),
+                        )
+                    else:
+                        parsed_structured = parsed.get("structured") if isinstance(parsed.get("structured"), dict) else {}
+                        parsed_conclusion = parsed.get("conclusion") if isinstance(parsed.get("conclusion"), dict) else {}
+                        structured_source = parsed_structured if parsed_structured else {"conclusion": parsed_conclusion}
+                        normalized_structured = _normalize_summary_structured_document(structured_source, base_structured)
+                        structured = {
+                            **base_structured,
+                            "conclusion": normalized_structured.get("conclusion") or base_structured.get("conclusion", {}),
+                        }
+                        markdown = _normalize_summary_document_markdown(parsed, "")
+                        document_blocks = _normalize_summary_document_blocks(
+                            parsed.get("document_blocks"),
+                            structured,
+                            markdown,
+                        )
                 else:
                     markdown = _normalize_summary_document_markdown(parsed, fallback_markdown)
                     document_blocks = _normalize_summary_document_blocks([], structured, markdown)
@@ -18298,7 +19007,7 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
                     markdown = _summary_document_blocks_to_markdown(document_blocks)
                 used_llm = True
                 RT.last_llm_parsed_json = {
-                    "stage": "canvas_summary_conclusion",
+                    "stage": "canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
                     "source_signature": source_signature,
                     "markdown": markdown,
                     "document_blocks": document_blocks,
@@ -18306,14 +19015,85 @@ def post_canvas_summary_conclusion(payload: SummaryConclusionGenerateInput):
                 }
                 RT.last_llm_parsed_at = _now_ts()
             except Exception as exc:
-                warning = f"결론 문서 LLM 생성 실패: {exc}"
+                llm_ms = int((time.perf_counter() - llm_started_at) * 1000) if "llm_started_at" in locals() else 0
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_conclusion" if demo_balance_mode else "canvas_summary_conclusion",
+                    error_type=type(exc).__name__,
+                    error_preview=repr(exc),
+                    client=client,
+                    elapsed_ms=llm_ms,
+                )
+                if demo_balance_mode:
+                    print(
+                        "[canvas demo balance summary conclusion llm failed]",
+                        {
+                            "meeting_id": normalized_meeting_id,
+                            "prompt_chars": prompt_chars,
+                            "elapsed_ms": llm_ms,
+                            "llm_error": llm_error,
+                        },
+                        flush=True,
+                    )
+                    warning = _demo_llm_retryable_warning("결론 문서", exc)
+                    return {
+                        "ok": False,
+                        "used_llm": False,
+                        "retryable": True,
+                        "warning": warning,
+                        "llm_error": llm_error,
+                        "generated_at": _now_ts(),
+                        "source_signature": source_signature,
+                        "markdown": "",
+                        "document_blocks": [],
+                        "sections": sections,
+                        "structured": structured,
+                    }
+                else:
+                    warning = f"결론 문서 LLM 생성 실패: {exc}"
         else:
             warning = llm_note or "LLM 미연결 상태로 기존 결론 문서를 유지했습니다."
+            if demo_balance_mode:
+                llm_error = _build_llm_error_payload(
+                    stage="canvas_demo_balance_summary_conclusion",
+                    error_type="llm_not_ready",
+                    error_preview=llm_note or "LLM client is not ready",
+                    client=client,
+                    elapsed_ms=0,
+                )
+                return {
+                    "ok": False,
+                    "used_llm": False,
+                    "retryable": True,
+                    "warning": "결론 문서 모델 연결이 준비되지 않았습니다. 다시 생성해 주세요.",
+                    "llm_error": llm_error,
+                    "generated_at": _now_ts(),
+                    "source_signature": source_signature,
+                    "markdown": "",
+                    "document_blocks": [],
+                    "sections": sections,
+                    "structured": structured,
+                }
+
+        if demo_balance_mode:
+            print(
+                "[canvas demo balance summary conclusion]",
+                {
+                    "meeting_id": normalized_meeting_id,
+                    "rows_count": len(rows),
+                    "prompt_chars": prompt_chars,
+                    "used_llm": used_llm,
+                    "llm_ms": llm_ms,
+                    "total_ms": int((time.perf_counter() - started_at) * 1000),
+                    "document_blocks": len(document_blocks),
+                },
+            )
 
         return {
             "ok": True,
             "used_llm": used_llm,
+            "retryable": False,
             "warning": warning,
+            "llm_error": llm_error,
             "generated_at": _now_ts(),
             "source_signature": source_signature,
             "markdown": markdown,
@@ -19039,7 +19819,8 @@ def post_canvas_ideation_bubble_graph_update(payload: IdeationBubbleGraphUpdateI
         )
 
     lock_wait_started = time.perf_counter()
-    with RT.canvas_llm_request_lock:
+    request_lock = _get_canvas_llm_request_lock(RT, normalized_meeting_id, "ideation_bubble_graph_update")
+    with request_lock:
         lock_wait_ms = round((time.perf_counter() - lock_wait_started) * 1000)
         if lock_wait_ms > 100:
             print(
@@ -19729,6 +20510,9 @@ def post_canvas_artifact_generation_start(payload: CanvasArtifactGenerationStart
                 "updated_at": saved_at,
                 "finished_at": "",
                 "error": "",
+                "phase": _safe_text(payload.phase),
+                "detail": _safe_text(payload.detail),
+                "retryable": bool(payload.retryable),
                 "version": int(current.get("version") or 0),
                 "input_transcript_revision": input_transcript_revision,
             }
@@ -19794,6 +20578,9 @@ def post_canvas_artifact_generation_finish(payload: CanvasArtifactGenerationFini
         _safe_text(payload.user_id),
         saved_at,
         _safe_text(payload.error),
+        _safe_text(payload.phase),
+        _safe_text(payload.detail),
+        bool(payload.retryable),
     )
     generation_map[artifact_key] = generation
     workspace["artifact_generation"] = generation_map

@@ -791,6 +791,12 @@ function CurrentStagePanel({
         ? problem.problemDefinitionGenerationError
         : problem.problemStructureGenerationError
       : "";
+  const currentGenerationDetail =
+    stage === "problem-definition" && problem.problemDefinitionStagePending
+      ? problem.problemDefinitionGenerationDetail || "문제정의 생성 중"
+      : stage === "solution" && header.view.summaryDocumentGenerationDetail
+        ? header.view.summaryDocumentGenerationDetail
+        : "";
 
   let title = stageLabel(stage, problemDefinitionPhase, isDemoBalance);
   let description = (
@@ -855,8 +861,14 @@ function CurrentStagePanel({
       };
     }
   } else if (isProblemStructure) {
-    title = "문제정의 · 2단계";
-    description = (
+    title = isDemoBalance ? "문제정의" : "문제정의 · 2단계";
+    description = isDemoBalance ? (
+      <>
+        A/B 선택 의견을 카드로 확인하고,
+        <br />
+        요약 및 판정 리포트로 이동합니다.
+      </>
+    ) : (
       <>
         구조화된 문제 묶음을 검토하고,
         <br />
@@ -882,7 +894,7 @@ function CurrentStagePanel({
     onButtonClick = header.handlers.onEndMeetingClick;
   }
 
-  const regenerateProblemDefinitionButton = isProblemExplore ? (
+  const regenerateProblemDefinitionButton = isProblemExplore || (isDemoBalance && isProblemStructure) ? (
     <button
       type="button"
       onClick={() => {
@@ -947,6 +959,11 @@ function CurrentStagePanel({
           <p className="moa-state-callout mt-[10px] rounded-[10px] border border-[#fecaca] bg-[#fff5f5] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#dc2626]">
             생성에 실패했습니다. 다시 생성 버튼으로 재시도할 수 있습니다.
             {currentProblemError ? ` (${currentProblemError})` : ""}
+          </p>
+        ) : null}
+        {currentGenerationDetail ? (
+          <p className="moa-state-callout mt-[10px] rounded-[10px] border border-[#d5e5ff] bg-[#f5f9ff] px-[10px] py-[8px] text-[10px] font-semibold leading-[1.45] text-[#236cf3]">
+            {currentGenerationDetail}
           </p>
         ) : null}
         {buttonLabel && onButtonClick ? (

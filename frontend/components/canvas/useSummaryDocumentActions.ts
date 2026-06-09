@@ -85,16 +85,27 @@ type UseSummaryDocumentActionsOptions = {
   startSharedArtifactGeneration: (
     artifactKey: CanvasArtifactGenerationKey,
     force?: boolean,
+    meta?: { phase?: string; detail?: string; retryable?: boolean },
   ) => Promise<{
     acquired: boolean;
     generation: CanvasArtifactGenerationState;
     artifactGeneration: CanvasArtifactGenerationMap;
   }>;
+  updateSharedArtifactGenerationPhase: (
+    artifactKey: CanvasArtifactGenerationKey,
+    generationId: string,
+    phase: string,
+    detail: string,
+    options?: { notify?: boolean; retryable?: boolean },
+  ) => CanvasArtifactGenerationMap | null;
   commitSharedSummaryDocumentGeneration: (
     payload: {
       generationId: string;
       status: "ready" | "failed";
       error?: string;
+      phase?: string;
+      detail?: string;
+      retryable?: boolean;
     },
   ) => Promise<{
     applied: boolean;
@@ -105,6 +116,7 @@ type UseSummaryDocumentActionsOptions = {
     status: "ready" | "failed",
     generationId?: string,
     error?: string,
+    meta?: { phase?: string; detail?: string; retryable?: boolean },
   ) => CanvasArtifactGenerationMap;
   summaryDocumentDraftBlocks: CanvasSummaryDocumentBlock[];
   summaryDocumentDraftDirty: boolean;
@@ -143,6 +155,7 @@ export function useSummaryDocumentActions({
   setLocalEditPresenceTarget,
   sharedSyncEnabled,
   startSharedArtifactGeneration,
+  updateSharedArtifactGenerationPhase,
   commitSharedSummaryDocumentGeneration,
   finishSharedArtifactGeneration,
   summaryDocumentDraftBlocks,
@@ -312,12 +325,23 @@ export function useSummaryDocumentActions({
       setBusy(true);
       let generationId = "";
       try {
-        const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
+        const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false, {
+          phase: "preparing-report-input",
+          detail: "요약 입력 정리 중",
+        });
         generationId = generationStart.generation.generation_id || "";
         if (!generationStart.acquired) {
           setActivityMessage("요약 및 정리 문서 생성 요청이 이미 진행 중입니다. 완료되면 자동으로 반영됩니다.");
           return;
         }
+
+        updateSharedArtifactGenerationPhase(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          generationId,
+          "writing-verdict-report",
+          "판정 리포트 작성 중",
+          { notify: true },
+        );
 
         const result = await generateCanvasSummaryDocument({
           meeting_id: meetingId,
@@ -342,6 +366,25 @@ export function useSummaryDocumentActions({
             depth: node.depth,
           })),
         });
+        if (result.ok === false) {
+          console.error("[SummaryDocument] generation failed", {
+            reason: result.warning || "server_returned_not_ok",
+            meetingId,
+            generationId,
+            retryable: result.retryable,
+            usedLlm: result.used_llm,
+            llmError: result.llm_error,
+            documentBlockCount: result.document_blocks?.length || 0,
+            demoBalanceMode: demoConfig?.mode === "demo_balance",
+          });
+          throw new Error(result.warning || "요약 문서 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요.");
+        }
+        updateSharedArtifactGenerationPhase(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          generationId,
+          "building-document-blocks",
+          "문서 블록 구성 중",
+        );
         const currentGenerationId =
           latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
         if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -359,6 +402,12 @@ export function useSummaryDocumentActions({
             result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
           structured: result.structured,
         });
+        updateSharedArtifactGenerationPhase(
+          SUMMARY_DOCUMENT_ARTIFACT,
+          generationId,
+          "syncing-result",
+          "요약 결과 동기화 중",
+        );
         const readyCommit = await commitSharedSummaryDocumentGeneration({
           generationId,
           status: "ready",
@@ -406,6 +455,15 @@ export function useSummaryDocumentActions({
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        console.error("[SummaryDocument] generation exception", {
+          reason: message,
+          meetingId,
+          generationId,
+          demoBalanceMode: demoConfig?.mode === "demo_balance",
+          phase: latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.phase || "",
+          detail: latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.detail || "",
+          error,
+        });
         const currentGenerationId =
           latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
         if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -417,6 +475,9 @@ export function useSummaryDocumentActions({
             generationId,
             status: "failed",
             error: message,
+            phase: "failed",
+            detail: "요약 문서 생성에 실패했습니다.",
+            retryable: true,
           });
         } catch (commitError) {
           const failedArtifactGeneration = finishSharedArtifactGeneration(
@@ -424,6 +485,11 @@ export function useSummaryDocumentActions({
             "failed",
             generationId,
             message,
+            {
+              phase: "failed",
+              detail: "요약 문서 생성에 실패했습니다.",
+              retryable: true,
+            },
           );
           if (meetingId) {
             void saveCanvasWorkspacePatch({
@@ -473,6 +539,7 @@ export function useSummaryDocumentActions({
       sharedSyncEnabled,
       summaryDocumentPending,
       startSharedArtifactGeneration,
+      updateSharedArtifactGenerationPhase,
       finishSharedArtifactGeneration,
     ],
   );
@@ -590,12 +657,23 @@ export function useSummaryDocumentActions({
     setBusy(true);
     let generationId = "";
     try {
-      const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false);
+      const generationStart = await startSharedArtifactGeneration(SUMMARY_DOCUMENT_ARTIFACT, false, {
+        phase: "preparing-report-input",
+        detail: "요약 입력 정리 중",
+      });
       generationId = generationStart.generation.generation_id || "";
       if (!generationStart.acquired) {
         setActivityMessage("결론 문서 재생성 요청이 이미 진행 중입니다. 완료되면 자동으로 반영됩니다.");
         return;
       }
+
+      updateSharedArtifactGenerationPhase(
+        SUMMARY_DOCUMENT_ARTIFACT,
+        generationId,
+        "writing-verdict-report",
+        "판정 리포트 작성 중",
+        { notify: true },
+      );
 
       const result = await generateCanvasSummaryConclusion({
         meeting_id: meetingId,
@@ -622,6 +700,25 @@ export function useSummaryDocumentActions({
           depth: node.depth,
         })),
       });
+      if (result.ok === false) {
+        console.error("[SummaryConclusion] regeneration failed", {
+          reason: result.warning || "server_returned_not_ok",
+          meetingId,
+          generationId,
+          retryable: result.retryable,
+          usedLlm: result.used_llm,
+          llmError: result.llm_error,
+          documentBlockCount: result.document_blocks?.length || 0,
+          demoBalanceMode: demoConfig?.mode === "demo_balance",
+        });
+        throw new Error(result.warning || "결론 문서 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요.");
+      }
+      updateSharedArtifactGenerationPhase(
+        SUMMARY_DOCUMENT_ARTIFACT,
+        generationId,
+        "building-document-blocks",
+        "문서 블록 구성 중",
+      );
       const currentGenerationId =
         latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
       if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -639,6 +736,12 @@ export function useSummaryDocumentActions({
           result.source_signature || buildSummaryDocumentSourceSignature(eligibleGroups, problemStructureNodes),
         structured: result.structured || finalSummaryDocument.structured,
       });
+      updateSharedArtifactGenerationPhase(
+        SUMMARY_DOCUMENT_ARTIFACT,
+        generationId,
+        "syncing-result",
+        "요약 결과 동기화 중",
+      );
       const readyCommit = await commitSharedSummaryDocumentGeneration({
         generationId,
         status: "ready",
@@ -680,6 +783,15 @@ export function useSummaryDocumentActions({
       setActivityMessage(result.warning || (options?.refreshCache ? "요약 캐시를 새로 만들고 결론 문서를 다시 생성했습니다." : "결론 문서를 다시 생성했습니다."));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[SummaryConclusion] regeneration exception", {
+        reason: message,
+        meetingId,
+        generationId,
+        demoBalanceMode: demoConfig?.mode === "demo_balance",
+        phase: latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.phase || "",
+        detail: latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.detail || "",
+        error,
+      });
       const currentGenerationId =
         latestSharedWorkspaceRef.current.artifactGeneration?.[SUMMARY_DOCUMENT_ARTIFACT]?.generation_id || "";
       if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -691,6 +803,9 @@ export function useSummaryDocumentActions({
           generationId,
           status: "failed",
           error: message,
+          phase: "failed",
+          detail: "결론 문서 생성에 실패했습니다.",
+          retryable: true,
         });
       } catch (commitError) {
         const failedArtifactGeneration = finishSharedArtifactGeneration(
@@ -698,6 +813,11 @@ export function useSummaryDocumentActions({
           "failed",
           generationId,
           message,
+          {
+            phase: "failed",
+            detail: "결론 문서 생성에 실패했습니다.",
+            retryable: true,
+          },
         );
         if (meetingId) {
           void saveCanvasWorkspacePatch({
@@ -743,6 +863,7 @@ export function useSummaryDocumentActions({
     setSummaryDocumentPending,
     sharedSyncEnabled,
     startSharedArtifactGeneration,
+    updateSharedArtifactGenerationPhase,
     finishSharedArtifactGeneration,
     summaryDocumentPending,
   ]);

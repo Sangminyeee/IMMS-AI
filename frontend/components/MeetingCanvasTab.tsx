@@ -1956,12 +1956,19 @@ export default function MeetingCanvasTab({
   );
 
   const startSharedArtifactGeneration = useCallback(
-    async (artifactKey: CanvasArtifactGenerationKey, force = false) => {
+    async (
+      artifactKey: CanvasArtifactGenerationKey,
+      force = false,
+      meta?: { phase?: string; detail?: string; retryable?: boolean },
+    ) => {
       const result = await startCanvasArtifactGeneration({
         meeting_id: meetingId,
         artifact_key: artifactKey,
         user_id: userEmail || userId,
         force,
+        phase: meta?.phase || "",
+        detail: meta?.detail || "",
+        retryable: Boolean(meta?.retryable),
       });
       const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
         result.workspace?.artifact_generation ||
@@ -1998,7 +2005,13 @@ export default function MeetingCanvasTab({
   );
 
   const finishSharedArtifactGeneration = useCallback(
-    (artifactKey: CanvasArtifactGenerationKey, status: "ready" | "failed", generationId?: string, error?: string) => {
+    (
+      artifactKey: CanvasArtifactGenerationKey,
+      status: "ready" | "failed",
+      generationId?: string,
+      error?: string,
+      meta?: { phase?: string; detail?: string; retryable?: boolean },
+    ) => {
       const current = latestSharedWorkspaceRef.current.artifactGeneration?.[artifactKey] || artifactGeneration[artifactKey];
       const now = new Date().toISOString();
       return applyArtifactGenerationState({
@@ -2010,10 +2023,52 @@ export default function MeetingCanvasTab({
         updated_at: now,
         finished_at: now,
         error: status === "failed" ? (error || "생성 실패") : "",
+        phase: status === "failed" ? (meta?.phase || current?.phase || "") : "",
+        detail: status === "failed" ? (meta?.detail || current?.detail || "") : "",
+        retryable: status === "failed" ? Boolean(meta?.retryable || current?.retryable) : false,
         version: status === "ready" ? Number(current?.version || 0) + 1 : Number(current?.version || 0),
       });
     },
     [applyArtifactGenerationState, artifactGeneration, latestSharedWorkspaceRef],
+  );
+
+  const updateSharedArtifactGenerationPhase = useCallback(
+    (
+      artifactKey: CanvasArtifactGenerationKey,
+      generationId: string,
+      phase: string,
+      detail: string,
+      options?: { notify?: boolean; retryable?: boolean },
+    ) => {
+      const current = latestSharedWorkspaceRef.current.artifactGeneration?.[artifactKey] || artifactGeneration[artifactKey];
+      if (!current || normalizeArtifactGenerationStatus(current.status) !== "generating") return null;
+      if (generationId && current.generation_id && current.generation_id !== generationId) return null;
+      const now = new Date().toISOString();
+      const nextGeneration: CanvasArtifactGenerationState = {
+        ...current,
+        artifact_key: artifactKey,
+        status: "generating",
+        generation_id: generationId || current.generation_id || "",
+        updated_at: now,
+        phase,
+        detail,
+        retryable: Boolean(options?.retryable),
+      };
+      const nextArtifactGeneration = applyArtifactGenerationState(nextGeneration);
+      if (meetingId) {
+        void saveCanvasWorkspacePatch({
+          meeting_id: meetingId,
+          artifact_generation: nextArtifactGeneration,
+        }).catch((error) => {
+          console.error("Failed to save artifact generation phase:", error);
+        });
+      }
+      if (options?.notify) {
+        setActivityMessage(detail || phase);
+      }
+      return nextArtifactGeneration;
+    },
+    [applyArtifactGenerationState, artifactGeneration, latestSharedWorkspaceRef, meetingId, setActivityMessage],
   );
 
   const commitSharedProblemDefinitionGeneration = useCallback(
@@ -2021,6 +2076,9 @@ export default function MeetingCanvasTab({
       generationId: string;
       status: "ready" | "failed";
       error?: string;
+      phase?: string;
+      detail?: string;
+      retryable?: boolean;
     }) => {
       const result = await finishCanvasArtifactGeneration({
         meeting_id: meetingId,
@@ -2029,6 +2087,9 @@ export default function MeetingCanvasTab({
         generation_id: payload.generationId,
         status: payload.status,
         error: payload.error || "",
+        phase: payload.phase || "",
+        detail: payload.detail || "",
+        retryable: Boolean(payload.retryable),
       });
       const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
         result.workspace?.artifact_generation ||
@@ -2068,6 +2129,9 @@ export default function MeetingCanvasTab({
       generationId: string;
       status: "ready" | "failed";
       error?: string;
+      phase?: string;
+      detail?: string;
+      retryable?: boolean;
     }) => {
       const result = await finishCanvasArtifactGeneration({
         meeting_id: meetingId,
@@ -2076,6 +2140,9 @@ export default function MeetingCanvasTab({
         generation_id: payload.generationId,
         status: payload.status,
         error: payload.error || "",
+        phase: payload.phase || "",
+        detail: payload.detail || "",
+        retryable: Boolean(payload.retryable),
       });
       const nextArtifactGeneration = normalizeCanvasArtifactGeneration(
         result.workspace?.artifact_generation ||
@@ -2608,6 +2675,12 @@ export default function MeetingCanvasTab({
   const problemDefinitionGenerationError = problemDefinitionArtifactGeneration?.error || "";
   const problemStructureGenerationError = problemStructureArtifactGeneration?.error || "";
   const summaryDocumentGenerationError = summaryArtifactGeneration?.error || "";
+  const problemDefinitionGenerationDetail = problemDefinitionArtifactGeneration?.detail || "";
+  const problemDefinitionGenerationPhase = problemDefinitionArtifactGeneration?.phase || "";
+  const problemDefinitionGenerationRetryable = Boolean(problemDefinitionArtifactGeneration?.retryable);
+  const summaryDocumentGenerationDetail = summaryArtifactGeneration?.detail || "";
+  const summaryDocumentGenerationPhase = summaryArtifactGeneration?.phase || "";
+  const summaryDocumentGenerationRetryable = Boolean(summaryArtifactGeneration?.retryable);
   const sharedProblemDefinitionGenerating = isCanvasArtifactGenerating(
     artifactGeneration,
     PROBLEM_DEFINITION_STEP1_ARTIFACT,
@@ -2781,6 +2854,8 @@ export default function MeetingCanvasTab({
           onStartProblemStructureGroupEdit: handleStartProblemStructureGroupEdit,
           onStartProblemStructureNodeEdit: handleStartProblemStructureNodeEdit,
           onUpdateProblemStructureNodeStatus: handleUpdateProblemStructureNodeStatus,
+          demoStructureLayout: demoBalanceMode,
+          hideStatusControls: demoBalanceMode,
           problemStructureDrag,
           problemStructureGroupDraftTitle,
           problemStructureGroups,
@@ -3028,6 +3103,7 @@ export default function MeetingCanvasTab({
     setStage,
     sharedSyncEnabled,
     startSharedArtifactGeneration,
+    updateSharedArtifactGenerationPhase,
     commitSharedProblemDefinitionGeneration,
     finishSharedArtifactGeneration,
     transcripts,
@@ -3074,6 +3150,7 @@ export default function MeetingCanvasTab({
     setLocalEditPresenceTarget,
     sharedSyncEnabled,
     startSharedArtifactGeneration,
+    updateSharedArtifactGenerationPhase,
     commitSharedSummaryDocumentGeneration,
     finishSharedArtifactGeneration,
     summaryDocumentDraftBlocks,
@@ -4041,6 +4118,9 @@ export default function MeetingCanvasTab({
       problemDefinitionStagePending: effectiveProblemDefinitionStagePending,
       isProblemDefinitionExploreStage,
       ideationBubbleDebugEnabled,
+      summaryDocumentGenerationDetail,
+      summaryDocumentGenerationPhase,
+      summaryDocumentGenerationRetryable,
     },
     meetingGoal: {
       meetingGoalDraft,
@@ -4110,6 +4190,9 @@ export default function MeetingCanvasTab({
       summaryDocumentPending: effectiveSummaryDocumentPending,
       summaryDocumentGenerationStatus,
       summaryDocumentGenerationError,
+      summaryDocumentGenerationDetail,
+      summaryDocumentGenerationPhase,
+      summaryDocumentGenerationRetryable,
       summaryDocumentSaving,
       solutionRightPaneRef,
     },
@@ -4120,6 +4203,9 @@ export default function MeetingCanvasTab({
       problemDefinitionStagePending: effectiveProblemDefinitionStagePending,
       problemDefinitionGenerationStatus,
       problemDefinitionGenerationError,
+      problemDefinitionGenerationDetail,
+      problemDefinitionGenerationPhase,
+      problemDefinitionGenerationRetryable,
       problemStructureSetupOpen,
       problemStructureDraftMethod,
       problemStructureDraftMode,
