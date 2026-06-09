@@ -131,6 +131,8 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph, demoBal
       orbitRing: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : undefined,
       orbitAngle: Number.isFinite(Number(bubble.orbit_angle)) ? Number(bubble.orbit_angle) : undefined,
       orbitRadius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
+      orbitOrderKey: Number.isFinite(Number(bubble.orbit_order_key)) ? Number(bubble.orbit_order_key) : undefined,
+      orbitSlotIndex: Number.isFinite(Number(bubble.orbit_slot_index)) ? Number(bubble.orbit_slot_index) : undefined,
       activity,
       opacity: Number.isFinite(opacity) ? clampNumber(opacity, 0, 1) : undefined,
       displayState: bubble.display_state || "active",

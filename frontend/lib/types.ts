@@ -834,6 +834,8 @@ export interface CanvasIdeationBubbleGraphBubble {
   orbit_ring?: number;
   orbit_angle?: number;
   orbit_radius?: number;
+  orbit_order_key?: number;
+  orbit_slot_index?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;

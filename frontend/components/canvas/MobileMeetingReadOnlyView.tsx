@@ -747,8 +747,9 @@ export const MobileMeetingReadOnlyView = memo(function MobileMeetingReadOnlyView
         debugGrowthById: {},
         layoutRevision: 0,
         stage: "ideation",
+        demoBalanceMode,
       }).nodeDescriptors as Node[],
-    [ideationBubbleVisuals],
+    [demoBalanceMode, ideationBubbleVisuals],
   );
   const problemExploreItems = useMemo(() => buildProblemExploreList(problemGroups), [problemGroups]);
   const ideationNodeSignature = ideationNodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}`).join("|");

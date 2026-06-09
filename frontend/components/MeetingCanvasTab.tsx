@@ -51,6 +51,7 @@ import {
   CANVAS_IDEATION_BUBBLE_PLANE_HEIGHT,
   CANVAS_IDEATION_BUBBLE_PLANE_WIDTH,
   buildStableIdeationBubbleVisuals,
+  getIdeationBubbleArcMotionSettleDelayMs,
   getIdeationBubbleEnterSettleDelayMs,
   settleEnteringIdeationBubbleVisuals,
   type IdeationBubbleLayoutAnchor,
@@ -1290,6 +1291,10 @@ export default function MeetingCanvasTab({
             x: bubble.layoutX,
             y: bubble.layoutY,
             size: bubble.layoutSize,
+            ring: bubble.orbitRing,
+            slot: bubble.orbitSlotIndex,
+            order: bubble.orbitOrderKey,
+            angle: bubble.orbitAngle,
           },
         })),
       },
@@ -1304,15 +1309,25 @@ export default function MeetingCanvasTab({
     userId,
   ]);
   useEffect(() => {
-    if (!ideationBubbleVisuals.some((bubble) => bubble.entering)) {
+    const enteringIds = new Set(ideationBubbleVisuals.filter((bubble) => bubble.entering).map((bubble) => bubble.id));
+    const arcMotionIds = new Set(ideationBubbleVisuals.filter((bubble) => bubble.arcMotion).map((bubble) => bubble.id));
+    if (enteringIds.size === 0 && arcMotionIds.size === 0) {
       return undefined;
     }
 
-    const settleTimer = window.setTimeout(() => {
-      setIdeationBubbleVisuals((current) => settleEnteringIdeationBubbleVisuals(current));
-    }, getIdeationBubbleEnterSettleDelayMs());
+    const timers: number[] = [];
+    if (enteringIds.size > 0) {
+      timers.push(window.setTimeout(() => {
+        setIdeationBubbleVisuals((current) => settleEnteringIdeationBubbleVisuals(current, enteringIds));
+      }, getIdeationBubbleEnterSettleDelayMs()));
+    }
+    if (arcMotionIds.size > 0) {
+      timers.push(window.setTimeout(() => {
+        setIdeationBubbleVisuals((current) => settleEnteringIdeationBubbleVisuals(current, arcMotionIds));
+      }, getIdeationBubbleArcMotionSettleDelayMs()));
+    }
 
-    return () => window.clearTimeout(settleTimer);
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [ideationBubbleVisuals]);
   const ideationBubbleVisualIdSignature = useMemo(
     () => ideationBubbleVisuals.map((bubble) => bubble.id).join("|"),
@@ -1344,6 +1359,17 @@ export default function MeetingCanvasTab({
           size: Math.round(bubble.size),
           opacity: Number(bubble.opacity.toFixed(3)),
           entering: Boolean(bubble.entering),
+          arc_motion: Boolean(bubble.arcMotion),
+          arc_key: bubble.arcMotionPath?.key,
+          arc_previous_angle: bubble.arcMotionPath?.previousAngle,
+          arc_next_angle: bubble.arcMotionPath?.nextAngle,
+          demo_motion_type: bubble.demoMotionType,
+          demo_previous_angle: bubble.demoPreviousAngle,
+          demo_next_angle: bubble.demoNextAngle,
+          ring: bubble.orbitRing,
+          slot: bubble.orbitSlotIndex,
+          order: bubble.orbitOrderKey,
+          angle: bubble.orbitAngle,
         })),
       },
     });
@@ -2812,9 +2838,11 @@ export default function MeetingCanvasTab({
       debugGrowthById: ideationBubbleDebugGrowthById,
       layoutRevision: ideationBubbleLayoutRevision,
       stage,
+      demoBalanceMode,
     });
   }, [
     stage,
+    demoBalanceMode,
     ideationBubbleVisuals,
     ideationBubbleDebugGrowthById,
     ideationBubbleLayoutRevision,

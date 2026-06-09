@@ -394,6 +394,8 @@ export function createDemoBalanceAnchoredIdeationBubbleGraph(
       archive_reason: "",
       lifecycle_state: "active",
       role: anchor.role,
+      orbit_order_key: 0,
+      orbit_slot_index: 0,
     })),
   };
 }
@@ -448,6 +450,8 @@ export function normalizeIdeationBubbleGraphForWorkspace(
           orbit_ring: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : 0,
           orbit_angle: Number.isFinite(Number(bubble.orbit_angle)) ? Number(bubble.orbit_angle) : undefined,
           orbit_radius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
+          orbit_order_key: Number.isFinite(Number(bubble.orbit_order_key)) ? Number(bubble.orbit_order_key) : undefined,
+          orbit_slot_index: Number.isFinite(Number(bubble.orbit_slot_index)) ? Number(bubble.orbit_slot_index) : undefined,
         }))
       : [],
     processed_utterance_ids: Array.isArray(graph.processed_utterance_ids)

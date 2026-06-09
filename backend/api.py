@@ -292,6 +292,10 @@ def _bubble_debug_compact_bubbles(graph: dict[str, Any], limit: int = _BUBBLE_DE
                 "affinity_score": _safe_float(bubble.get("affinity_score"), 0.0),
                 "emphasis": _safe_text(bubble.get("emphasis")),
                 "anchor_id": _safe_text(bubble.get("anchor_id")),
+                "orbit_center_id": _safe_text(bubble.get("orbit_center_id")),
+                "orbit_ring": _safe_nonnegative_int(bubble.get("orbit_ring"), 0),
+                "orbit_slot_index": _safe_nonnegative_int(bubble.get("orbit_slot_index"), 0),
+                "orbit_order_key": _safe_float(bubble.get("orbit_order_key"), 0.0),
                 "durable": bool(bubble.get("durable")),
                 "x": _safe_float(bubble.get("x"), 0.0),
                 "y": _safe_float(bubble.get("y"), 0.0),
@@ -7381,6 +7385,8 @@ def _apply_demo_balance_affinity_updates(
         if update.get("reason"):
             bubble["affinity_reason"] = _safe_text(update.get("reason"))
         if previous != (_safe_text(bubble.get("choice_affinity")), _safe_text(bubble.get("anchor_id"))):
+            bubble["orbit_order_key"] = None
+            bubble["orbit_slot_index"] = None
             changed += 1
     return changed
 
@@ -8211,6 +8217,16 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
         raw_orbit_ring = item.get("orbit_ring") if item.get("orbit_ring") is not None else item.get("orbitRing")
         raw_orbit_angle = item.get("orbit_angle") if item.get("orbit_angle") is not None else item.get("orbitAngle")
         raw_orbit_radius = item.get("orbit_radius") if item.get("orbit_radius") is not None else item.get("orbitRadius")
+        raw_orbit_order_key = (
+            item.get("orbit_order_key")
+            if item.get("orbit_order_key") is not None
+            else item.get("orbitOrderKey")
+        )
+        raw_orbit_slot_index = (
+            item.get("orbit_slot_index")
+            if item.get("orbit_slot_index") is not None
+            else item.get("orbitSlotIndex")
+        )
         bubbles.append(
             {
                 "id": bubble_id,
@@ -8240,6 +8256,8 @@ def _normalize_canvas_ideation_bubble_graph(raw: Any) -> dict[str, Any]:
                 "orbit_ring": _safe_nonnegative_int(raw_orbit_ring, 0) if raw_orbit_ring is not None else 0,
                 "orbit_angle": _safe_float(raw_orbit_angle, 0.0) if raw_orbit_angle is not None else None,
                 "orbit_radius": _safe_float(raw_orbit_radius, 0.0) if raw_orbit_radius is not None else None,
+                "orbit_order_key": _safe_float(raw_orbit_order_key, 0.0) if raw_orbit_order_key is not None else None,
+                "orbit_slot_index": _safe_nonnegative_int(raw_orbit_slot_index, 0) if raw_orbit_slot_index is not None else None,
                 "display_state": display_state,
                 "layout_zone": _normalize_ideation_bubble_layout_zone(
                     item.get("layout_zone") or item.get("layoutZone")
@@ -8482,6 +8500,8 @@ def _ensure_demo_balance_anchor_bubbles(graph: dict[str, Any], demo_config: dict
                 "archive_reason": "",
                 "lifecycle_state": "active",
                 "role": "center",
+                "orbit_order_key": 0.0,
+                "orbit_slot_index": 0,
             }
             graph.setdefault("bubbles", []).append(bubble)
             existing_by_id[bubble_id] = bubble
@@ -8505,6 +8525,8 @@ def _ensure_demo_balance_anchor_bubbles(graph: dict[str, Any], demo_config: dict
             "affinity_score": 1.0,
             "durable": True,
             "emphasis": desired_emphasis,
+            "orbit_order_key": 0.0,
+            "orbit_slot_index": 0,
         }.items():
             if bubble.get(key) != value:
                 bubble[key] = value
@@ -9507,6 +9529,104 @@ def _ideation_bubble_orbit_rings(center_size: int, cluster_size: int, total_clus
     return rings
 
 
+def _is_demo_balance_orbit_cluster(cluster: list[dict[str, Any]]) -> bool:
+    return any(
+        _safe_text(bubble.get("id")) in {DEMO_BALANCE_ANCHOR_A_ID, DEMO_BALANCE_ANCHOR_B_ID}
+        for bubble in cluster
+        if isinstance(bubble, dict)
+    )
+
+
+def _demo_balance_orbit_order_key(bubble: dict[str, Any], cycle: int, fallback_index: int) -> float:
+    raw_order = bubble.get("orbit_order_key")
+    if _ideation_bubble_has_number(raw_order) and float(raw_order) > 0:
+        return float(raw_order)
+
+    first_seen_cycle = _safe_nonnegative_int(bubble.get("first_seen_cycle"), 0)
+    if first_seen_cycle > 0:
+        return float(first_seen_cycle * 1000 + fallback_index)
+
+    last_seen_cycle = _safe_nonnegative_int(bubble.get("last_seen_cycle"), 0)
+    if last_seen_cycle > 0:
+        return float(last_seen_cycle * 1000 + fallback_index)
+
+    created = _safe_text(bubble.get("first_seen_at"))
+    if created:
+        try:
+            return float(max(1, int(_stable_short_id(created), 16) % 1000000))
+        except Exception:
+            return float(cycle * 1000 + fallback_index)
+
+    return float(max(1, cycle * 1000 + fallback_index))
+
+
+def _demo_balance_reassign_orbit_orders(
+    cluster: list[dict[str, Any]],
+    cycle: int,
+    center_id: str,
+) -> None:
+    target_affinity = "a" if center_id == DEMO_BALANCE_ANCHOR_A_ID else "b"
+    next_order = max(
+        [
+            _safe_float(bubble.get("orbit_order_key"), 0.0)
+            for bubble in cluster
+            if isinstance(bubble, dict) and _safe_float(bubble.get("orbit_order_key"), 0.0) > 0
+        ]
+        or [float(cycle * 1000)]
+    )
+    for index, bubble in enumerate(cluster):
+        if not isinstance(bubble, dict) or _safe_text(bubble.get("id")) == center_id:
+            continue
+        previous_anchor_id = _safe_text(bubble.get("anchor_id"))
+        previous_affinity = _safe_text(bubble.get("choice_affinity")).lower()
+        moved_orbit = (
+            previous_anchor_id
+            and previous_anchor_id != center_id
+        ) or (
+            previous_affinity in DEMO_BALANCE_DISPLAY_AFFINITIES
+            and previous_affinity != target_affinity
+        )
+        if moved_orbit or not _ideation_bubble_has_number(bubble.get("orbit_order_key")) or _safe_float(bubble.get("orbit_order_key"), 0.0) <= 0:
+            next_order = max(
+                next_order + 1,
+                _demo_balance_orbit_order_key(bubble, cycle, index),
+            )
+            bubble["orbit_order_key"] = round(next_order, 4)
+        else:
+            bubble["orbit_order_key"] = round(_safe_float(bubble.get("orbit_order_key"), next_order), 4)
+
+
+def _demo_balance_orbit_ring_for_slot(slot_index: int) -> int:
+    if slot_index < 8:
+        return 1
+    if slot_index < 20:
+        return 2
+    return 3 + max(0, slot_index - 20) // 16
+
+
+def _demo_balance_orbit_ring_capacity_limit(ring: int) -> int:
+    if ring <= 1:
+        return 8
+    if ring == 2:
+        return 12
+    return 16
+
+
+def _demo_balance_orbit_ring_start_index(ring: int) -> int:
+    if ring <= 1:
+        return 0
+    if ring == 2:
+        return 8
+    return 20 + max(0, ring - 3) * 16
+
+
+def _demo_balance_orbit_ring_slot_count(ring: int, total: int) -> int:
+    start_index = _demo_balance_orbit_ring_start_index(ring)
+    if total <= start_index:
+        return 0
+    return min(_demo_balance_orbit_ring_capacity_limit(ring), total - start_index)
+
+
 def _relax_ideation_bubble_orbit_placements(
     placements: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
@@ -9589,16 +9709,32 @@ def _place_ideation_bubble_orbit_cluster(
 ) -> dict[str, Any]:
     anchor = _ideation_bubble_cluster_anchor(cluster)
     center_id = _safe_text(anchor.get("id"))
-    sorted_bubbles = sorted(
-        cluster,
-        key=lambda bubble: (
-            0 if _safe_text(bubble.get("id")) == center_id else 1,
-            -_safe_nonnegative_int(bubble.get("count"), 1),
-            -_safe_float(bubble.get("importance"), 0.0),
-            -_safe_float(bubble.get("activity"), 0.0),
-            _safe_text(bubble.get("label")),
-        ),
-    )
+    is_demo_cluster = _is_demo_balance_orbit_cluster(cluster)
+    if is_demo_cluster:
+        _demo_balance_reassign_orbit_orders(
+            cluster,
+            _safe_nonnegative_int(graph.get("update_cycle"), 0),
+            center_id,
+        )
+        sorted_bubbles = sorted(
+            cluster,
+            key=lambda bubble: (
+                0 if _safe_text(bubble.get("id")) == center_id else 1,
+                _safe_float(bubble.get("orbit_order_key"), 0.0),
+                _safe_text(bubble.get("id")),
+            ),
+        )
+    else:
+        sorted_bubbles = sorted(
+            cluster,
+            key=lambda bubble: (
+                0 if _safe_text(bubble.get("id")) == center_id else 1,
+                -_safe_nonnegative_int(bubble.get("count"), 1),
+                -_safe_float(bubble.get("importance"), 0.0),
+                -_safe_float(bubble.get("activity"), 0.0),
+                _safe_text(bubble.get("label")),
+            ),
+        )
 
     for bubble in sorted_bubbles:
         role = _ideation_bubble_orbit_role(bubble, center_id)
@@ -9608,6 +9744,36 @@ def _place_ideation_bubble_orbit_cluster(
     center = sorted_bubbles[0]
     center_size = max(1, _safe_nonnegative_int(center.get("size"), 140))
     rings = _ideation_bubble_orbit_rings(center_size, len(sorted_bubbles), total_clusters)
+    if is_demo_cluster:
+        satellite_sizes = [
+            max(1, _safe_nonnegative_int(bubble.get("size"), 64))
+            for bubble in sorted_bubbles[1:]
+        ]
+
+        def demo_min_radius(slot_count: int, max_satellite_size: int) -> float:
+            safe_slot_count = max(2, slot_count)
+            chord_radius = (max_satellite_size + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP + 8) / max(
+                0.2,
+                2 * math.sin(math.pi / safe_slot_count),
+            )
+            anchor_radius = center_size / 2 + max_satellite_size / 2 + IDEATION_BUBBLE_GRAPH_LAYOUT_BUBBLE_GAP + 10
+            return max(anchor_radius, chord_radius)
+
+        demo_rings: list[float] = []
+        ring_index = 1
+        while _demo_balance_orbit_ring_start_index(ring_index) < len(satellite_sizes):
+            ring_start_index = _demo_balance_orbit_ring_start_index(ring_index)
+            ring_slot_count = _demo_balance_orbit_ring_slot_count(ring_index, len(satellite_sizes))
+            ring_sizes = satellite_sizes[ring_start_index:ring_start_index + ring_slot_count]
+            max_ring_size = max(ring_sizes or [64])
+            previous_radius = demo_rings[-1] if demo_rings else 0.0
+            base_radius = rings[min(ring_index - 1, len(rings) - 1)] if rings else 0.0
+            min_gap_radius = previous_radius + (104 if ring_index > 1 else 0)
+            demo_rings.append(
+                round(max(base_radius, min_gap_radius, demo_min_radius(ring_slot_count, max_ring_size)), 2)
+            )
+            ring_index += 1
+        rings = demo_rings or rings
     orbit_radius = max(rings or [center_size / 2]) + 54
     desired_x, desired_y = _ideation_bubble_orbit_desired_center(cluster_index, total_clusters)
     desired_x, desired_y = _clamp_ideation_bubble_orbit_center(desired_x, desired_y, orbit_radius)
@@ -9643,15 +9809,40 @@ def _place_ideation_bubble_orbit_cluster(
     satellites = sorted_bubbles[1:]
     slot_count = max(6, len(satellites) + 2)
     golden_angle = math.pi * (3 - math.sqrt(5))
-    base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
+    if is_demo_cluster:
+        base_angle = -math.pi / 2
+    else:
+        base_angle = _ideation_bubble_seed_ratio(cluster_id, 83) * math.pi * 2
     for index, bubble in enumerate(satellites):
         bubble_id = _safe_text(bubble.get("id"))
         size = max(1, _safe_nonnegative_int(bubble.get("size"), 64))
         role = _normalize_ideation_bubble_role(bubble.get("role"))
-        preferred_ring_index = 1 if index < max(4, math.ceil(slot_count * 0.56)) else 2
-        if role == "dot" and len(rings) > 1:
+        preferred_ring_index = _demo_balance_orbit_ring_for_slot(index) if is_demo_cluster else 1 if index < max(4, math.ceil(slot_count * 0.56)) else 2
+        if not is_demo_cluster and role == "dot" and len(rings) > 1:
             preferred_ring_index = 2
         radius = rings[min(preferred_ring_index - 1, len(rings) - 1)]
+        if is_demo_cluster:
+            ring_start_index = _demo_balance_orbit_ring_start_index(preferred_ring_index)
+            ring_slot_index = max(0, index - ring_start_index)
+            ring_slot_count = max(1, _demo_balance_orbit_ring_slot_count(preferred_ring_index, len(satellites)))
+            ring_angle_step = math.pi * 2 / max(1, ring_slot_count)
+            angle = base_angle + ring_slot_index * ring_angle_step
+            raw_x = center_x + math.cos(angle) * radius - size / 2
+            raw_y = center_y + math.sin(angle) * radius - size / 2
+            candidate_x, candidate_y = _clamp_ideation_bubble_layout_xy(raw_x, raw_y, size)
+            placements.append(
+                {
+                    "bubble": bubble,
+                    "x": candidate_x,
+                    "y": candidate_y,
+                    "size": size,
+                    "orbit_ring": preferred_ring_index,
+                    "orbit_angle": angle,
+                    "orbit_radius": radius,
+                    "orbit_slot_index": ring_slot_index,
+                }
+            )
+            continue
         seed_jitter = (_ideation_bubble_seed_ratio(f"{bubble_id}:{cluster_id}", 89) - 0.5) * 0.34
         angle = base_angle + index * (math.pi * 2 / slot_count) + seed_jitter
         chosen: dict[str, Any] | None = None
@@ -9696,7 +9887,10 @@ def _place_ideation_bubble_orbit_cluster(
         placements.append(chosen or fallback_candidate or candidate)
 
     bubble_ids: list[str] = []
-    placements, overlap_resolved_count = _relax_ideation_bubble_orbit_placements(placements)
+    if is_demo_cluster:
+        overlap_resolved_count = 0
+    else:
+        placements, overlap_resolved_count = _relax_ideation_bubble_orbit_placements(placements)
     for placement in placements:
         bubble = placement.get("bubble")
         if not isinstance(bubble, dict):
@@ -9716,6 +9910,7 @@ def _place_ideation_bubble_orbit_cluster(
         bubble["local_y"] = round(y - center_y, 2)
         bubble["orbit_center_id"] = center_id if bubble_id != center_id else ""
         bubble["orbit_ring"] = _safe_nonnegative_int(placement.get("orbit_ring"), 0)
+        bubble["orbit_slot_index"] = _safe_nonnegative_int(placement.get("orbit_slot_index"), 0)
         if bubble_id != center_id:
             dx = x + size / 2 - center_x
             dy = y + size / 2 - center_y
@@ -9724,6 +9919,8 @@ def _place_ideation_bubble_orbit_cluster(
         else:
             bubble["orbit_angle"] = 0.0
             bubble["orbit_radius"] = 0.0
+            bubble["orbit_order_key"] = 0.0
+            bubble["orbit_slot_index"] = 0
 
     return {
         "id": cluster_id,
