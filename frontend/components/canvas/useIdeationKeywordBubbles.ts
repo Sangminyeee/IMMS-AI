@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { updateCanvasIdeationBubbleGraph } from "@/lib/api";
-import type { CanvasIdeationBubbleGraph } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import { normalizeCanvasDemoConfig, isDemoBalanceConfig } from "@/lib/demoMode";
+import type { CanvasDemoConfig, CanvasIdeationBubbleGraph } from "@/lib/types";
 import { buildIdeationKeywordBubbles, type IdeationKeywordBubble } from "@/components/canvas/CanvasIdeationBubbles";
 import { createEmptyIdeationBubbleGraph, normalizeIdeationBubbleGraphForWorkspace } from "@/components/canvas/canvasWorkspaceSerialization";
 
@@ -24,15 +24,8 @@ type IdeationKeywordUtterance = {
   timestamp: string;
 };
 
-type IdeationKeywordDebugPayload = Record<string, unknown>;
-
-const IDEATION_KEYWORD_BATCH_SIZE = 4;
-const IDEATION_KEYWORD_CONTEXT_CACHE_MAX_UTTERANCES = 180;
-const IDEATION_KEYWORD_CONTEXT_CACHE_MAX_CHARS = 18_000;
 const IDEATION_KEYWORD_MAX_TOTAL_BUBBLES = 16;
-const IDEATION_KEYWORD_IDLE_FLUSH_MS = 10_000;
-const IDEATION_KEYWORD_MAX_WINDOW_MS = 25_000;
-const IDEATION_KEYWORD_MAX_KEYWORDS = 3;
+const DEMO_BALANCE_KEYWORD_MAX_TOTAL_BUBBLES = 32;
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -45,15 +38,6 @@ function stripLeadingTimestamp(text: string) {
       "",
     )
     .trim();
-}
-
-function logIdeationKeywordDebugGroup(title: string, payload: IdeationKeywordDebugPayload) {
-  const timestamp = new Date().toISOString();
-  console.groupCollapsed(`[Bubble][Debug] ${title} · ${timestamp}`);
-  Object.entries(payload).forEach(([key, value]) => {
-    console.info(key, value);
-  });
-  console.groupEnd();
 }
 
 function buildIdeationKeywordUtterances(transcripts: IdeationTranscript[]): IdeationKeywordUtterance[] {
@@ -83,42 +67,35 @@ function normalizeIdeationKeywordBubbleKind(value: unknown): IdeationKeywordBubb
   return "topic";
 }
 
-function buildIdeationKeywordContextCache(
-  utterances: IdeationKeywordUtterance[],
-  requestUtterances: IdeationKeywordUtterance[],
-) {
-  const firstRequestId = requestUtterances[0]?.id || "";
-  const firstRequestIndex = firstRequestId ? utterances.findIndex((row) => row.id === firstRequestId) : -1;
-  if (firstRequestIndex <= 0) return "";
-
-  const contextRows = utterances
-    .slice(0, firstRequestIndex)
-    .slice(-IDEATION_KEYWORD_CONTEXT_CACHE_MAX_UTTERANCES);
-  const contextText = contextRows
-    .map((row, index) => {
-      const speaker = row.speaker || "참가자";
-      const timestamp = row.timestamp ? ` ${row.timestamp}` : "";
-      return `${index + 1}. ${speaker}${timestamp}: ${row.text}`;
-    })
-    .join("\n");
-
-  if (contextText.length <= IDEATION_KEYWORD_CONTEXT_CACHE_MAX_CHARS) return contextText;
-  return contextText.slice(contextText.length - IDEATION_KEYWORD_CONTEXT_CACHE_MAX_CHARS);
-}
-
 function deferStateUpdate(update: () => void) {
   window.queueMicrotask(update);
 }
 
-function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): IdeationKeywordBubble[] {
+function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph, demoBalanceMode = false): IdeationKeywordBubble[] {
   const normalizedGraph = normalizeIdeationBubbleGraphForWorkspace(graph);
-  const visibleBubbles = normalizedGraph.bubbles
-    .filter((bubble) => bubble.display_state !== "archived")
-    .slice(0, IDEATION_KEYWORD_MAX_TOTAL_BUBBLES);
-  const labelById = new Map(visibleBubbles.map((bubble) => [bubble.id, bubble.label] as const));
+  const maxVisibleBubbles = demoBalanceMode ? DEMO_BALANCE_KEYWORD_MAX_TOTAL_BUBBLES : IDEATION_KEYWORD_MAX_TOTAL_BUBBLES;
+  const isDemoHiddenNeutralBubble = (bubble: (typeof normalizedGraph.bubbles)[number]) => (
+    demoBalanceMode
+    && (
+      bubble.id === "demo-balance-anchor-neutral"
+      || bubble.choice_affinity === "neutral"
+      || bubble.label === "미분류"
+      || bubble.canonical_label === "미분류"
+    )
+  );
+  const activeBubbles = normalizedGraph.bubbles
+    .filter((bubble) => !isDemoHiddenNeutralBubble(bubble) && bubble.display_state !== "archived" && bubble.display_state !== "exiting")
+    .slice(0, maxVisibleBubbles);
+  const exitingBubbles = normalizedGraph.bubbles
+    .filter((bubble) => !isDemoHiddenNeutralBubble(bubble) && bubble.display_state === "exiting")
+    .slice(0, demoBalanceMode ? 12 : 4);
+  const visibleBubbles = [...activeBubbles, ...exitingBubbles];
+  const displayLabelForBubble = (bubble: (typeof visibleBubbles)[number]) => bubble.canonical_label || bubble.label;
+  const labelById = new Map(visibleBubbles.map((bubble) => [bubble.id, displayLabelForBubble(bubble)] as const));
   const maxCount = Math.max(1, ...visibleBubbles.map((bubble) => Number(bubble.count || 1)));
 
   return visibleBubbles.map((bubble) => {
+    const displayLabel = displayLabelForBubble(bubble);
     const kind = normalizeIdeationKeywordBubbleKind(bubble.kind);
     const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
     const activity = clampNumber(Number(bubble.activity ?? (bubble.display_state === "dimmed" ? 0.22 : 0.72)), 0, 1);
@@ -130,12 +107,14 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
     const layoutSize = Number(bubble.size);
     return {
       id: bubble.id,
-      text: bubble.label,
+      text: displayLabel,
+      canonicalLabel: bubble.canonical_label || "",
+      aliases: Array.isArray(bubble.aliases) ? bubble.aliases : [],
       count: Math.max(1, Number(bubble.count || 1)),
       weight: Math.max(1, Number(bubble.count || 1)) / maxCount,
       related: (bubble.related_ids || [])
         .map((id) => labelById.get(id) || "")
-        .filter((label) => label && label !== bubble.label)
+        .filter((label) => label && label !== displayLabel)
         .slice(0, 6),
       kind: bubble.off_topic || kind === "off_topic" ? "off_topic" : kind,
       importance: clampNumber(Number(bubble.importance ?? 0.6), 0, 1),
@@ -143,54 +122,69 @@ function graphToIdeationKeywordBubbles(graph: CanvasIdeationBubbleGraph): Ideati
       offTopic: Boolean(bubble.off_topic || kind === "off_topic"),
       offTopicReason: bubble.off_topic_reason || "",
       anchorText: labelById.get(bubble.anchor_id || "") || "",
+      choiceAffinity: bubble.choice_affinity === "a" || bubble.choice_affinity === "b" ? bubble.choice_affinity : undefined,
       layoutX: Number.isFinite(layoutX) ? layoutX : undefined,
       layoutY: Number.isFinite(layoutY) ? layoutY : undefined,
       layoutSize: Number.isFinite(layoutSize) && layoutSize > 0 ? layoutSize : undefined,
       clusterId: bubble.cluster_id || "",
+      role: bubble.role || "satellite",
+      orbitCenterId: bubble.orbit_center_id || "",
+      orbitRing: Number.isFinite(Number(bubble.orbit_ring)) ? Number(bubble.orbit_ring) : undefined,
+      orbitAngle: Number.isFinite(Number(bubble.orbit_angle)) ? Number(bubble.orbit_angle) : undefined,
+      orbitRadius: Number.isFinite(Number(bubble.orbit_radius)) ? Number(bubble.orbit_radius) : undefined,
+      orbitOrderKey: Number.isFinite(Number(bubble.orbit_order_key)) ? Number(bubble.orbit_order_key) : undefined,
+      orbitSlotIndex: Number.isFinite(Number(bubble.orbit_slot_index)) ? Number(bubble.orbit_slot_index) : undefined,
+      motionReason: bubble.motion_reason || "",
+      motionDirection: bubble.motion_direction || "",
+      motionPlanId: bubble.motion_plan_id || "",
+      fromSlotIndex: Number.isFinite(Number(bubble.from_slot_index)) ? Number(bubble.from_slot_index) : undefined,
+      toSlotIndex: Number.isFinite(Number(bubble.to_slot_index)) ? Number(bubble.to_slot_index) : undefined,
+      moveCost: Number.isFinite(Number(bubble.move_cost)) ? Number(bubble.move_cost) : undefined,
+      moveAngleDelta: Number.isFinite(Number(bubble.move_angle_delta)) ? Number(bubble.move_angle_delta) : undefined,
+      arcCost: Number.isFinite(Number(bubble.arc_cost)) ? Number(bubble.arc_cost) : undefined,
+      radiusCost: Number.isFinite(Number(bubble.radius_cost)) ? Number(bubble.radius_cost) : undefined,
+      gateBlocked: Boolean(bubble.gate_blocked),
+      enterSequence: Number.isFinite(Number(bubble.enter_sequence)) ? Number(bubble.enter_sequence) : undefined,
+      enterDelayMs: Number.isFinite(Number(bubble.enter_delay_ms)) ? Number(bubble.enter_delay_ms) : undefined,
+      gateAngle: Number.isFinite(Number(bubble.gate_angle)) ? Number(bubble.gate_angle) : undefined,
       activity,
       opacity: Number.isFinite(opacity) ? clampNumber(opacity, 0, 1) : undefined,
+      displayState: bubble.display_state || "active",
+      lifecycleState: bubble.lifecycle_state || "active",
       layoutZone,
-      durable: emphasis === "primary",
+      durable: Boolean(bubble.durable) || emphasis === "primary",
       emphasis,
     };
   });
 }
 
-export function useIdeationKeywordBubbles({
-  transcripts,
-  meetingId,
-  meetingTopic,
-  meetingGoal,
-  meetingGoalContext,
-  bubbleGraph,
-  onBubbleGraphChange,
-  stage,
-  updatesEnabled = true,
-}: {
+export function useIdeationKeywordBubbles(options: {
   transcripts: IdeationTranscript[];
   meetingId: string;
   meetingTopic: string;
   meetingGoal?: string;
   meetingGoalContext?: string;
+  demoConfig?: CanvasDemoConfig;
   bubbleGraph?: CanvasIdeationBubbleGraph;
   onBubbleGraphChange?: (graph: CanvasIdeationBubbleGraph) => void;
   stage: CanvasStage;
   updatesEnabled?: boolean;
 }) {
+  const {
+    transcripts,
+    meetingId,
+    demoConfig,
+    bubbleGraph,
+    stage,
+    updatesEnabled = true,
+  } = options;
   const [statusMessage, setStatusMessage] = useState("");
-  const processedIdsRef = useRef<Set<string>>(new Set());
-  const graphProcessedIdsRef = useRef<string[]>([]);
-  const requestSeqRef = useRef(0);
-  const requestInFlightRef = useRef(false);
-  const pendingWindowStartedAtRef = useRef(0);
+  const normalizedDemoConfig = useMemo(() => normalizeCanvasDemoConfig(demoConfig), [demoConfig]);
+  const demoBalanceMode = isDemoBalanceConfig(normalizedDemoConfig);
 
   const normalizedBubbleGraph = useMemo(
     () => normalizeIdeationBubbleGraphForWorkspace(bubbleGraph || createEmptyIdeationBubbleGraph()),
     [bubbleGraph],
-  );
-  const graphProcessedSignature = useMemo(
-    () => normalizedBubbleGraph.processed_utterance_ids.join("|"),
-    [normalizedBubbleGraph.processed_utterance_ids],
   );
   const ideationKeywordUtterances = useMemo(() => buildIdeationKeywordUtterances(transcripts), [transcripts]);
   const localBubbles = useMemo(
@@ -198,171 +192,33 @@ export function useIdeationKeywordBubbles({
     [transcripts],
   );
   const graphBubbles = useMemo(
-    () => graphToIdeationKeywordBubbles(normalizedBubbleGraph),
-    [normalizedBubbleGraph],
+    () => graphToIdeationKeywordBubbles(normalizedBubbleGraph, demoBalanceMode),
+    [normalizedBubbleGraph, demoBalanceMode],
   );
 
   useEffect(() => {
-    graphProcessedIdsRef.current = normalizedBubbleGraph.processed_utterance_ids;
-    processedIdsRef.current = new Set(graphProcessedIdsRef.current);
-  }, [graphProcessedSignature, normalizedBubbleGraph.processed_utterance_ids]);
-
-  useEffect(() => {
-    processedIdsRef.current = new Set(graphProcessedIdsRef.current);
-    requestInFlightRef.current = false;
-    pendingWindowStartedAtRef.current = 0;
-    deferStateUpdate(() => setStatusMessage(""));
-  }, [meetingId]);
-
-  useEffect(() => {
-    if (stage !== "ideation" || !updatesEnabled) {
-      processedIdsRef.current = new Set(normalizedBubbleGraph.processed_utterance_ids);
-      pendingWindowStartedAtRef.current = 0;
+    if (!meetingId || stage !== "ideation" || !updatesEnabled) {
       deferStateUpdate(() => setStatusMessage(""));
-      return undefined;
+      return;
     }
-    if (!meetingId || ideationKeywordUtterances.length === 0) {
-      processedIdsRef.current = new Set(normalizedBubbleGraph.processed_utterance_ids);
-      pendingWindowStartedAtRef.current = 0;
+
+    const processedIds = new Set(normalizedBubbleGraph.processed_utterance_ids || []);
+    const pendingUtteranceCount = ideationKeywordUtterances.filter((row) => !processedIds.has(row.id)).length;
+    if (pendingUtteranceCount <= 0) {
       deferStateUpdate(() => setStatusMessage(""));
-      return undefined;
+      return;
     }
 
-    const knownIds = new Set(ideationKeywordUtterances.map((row) => row.id));
-    processedIdsRef.current.forEach((id) => {
-      if (!knownIds.has(id)) {
-        processedIdsRef.current.delete(id);
-      }
-    });
-
-    const pendingUtterances = ideationKeywordUtterances.filter((row) => !processedIdsRef.current.has(row.id));
-    if (pendingUtterances.length === 0) {
-      pendingWindowStartedAtRef.current = 0;
-      deferStateUpdate(() => setStatusMessage(""));
-      return undefined;
-    }
-    if (!pendingWindowStartedAtRef.current) {
-      pendingWindowStartedAtRef.current = Date.now();
-    }
-
-    if (requestInFlightRef.current) {
-      deferStateUpdate(() => setStatusMessage("현재 STT 전사 기반 키워드 버블을 정리 중입니다."));
-      return undefined;
-    }
-
-    const runKeywordRequest = (reason: "batch" | "idle" | "window") => {
-      const requestUtterances =
-        reason === "batch"
-          ? pendingUtterances.slice(0, IDEATION_KEYWORD_BATCH_SIZE)
-          : pendingUtterances;
-      if (requestUtterances.length === 0) return;
-
-      const requestSeq = requestSeqRef.current + 1;
-      requestSeqRef.current = requestSeq;
-      requestInFlightRef.current = true;
-      setStatusMessage("현재 STT 전사 기반 키워드 추출 중입니다.");
-
-      const bubbleGraphRequest: Parameters<typeof updateCanvasIdeationBubbleGraph>[0] = {
-        meeting_id: meetingId,
-        meeting_topic: meetingTopic,
-        utterances: requestUtterances,
-        context_cache: buildIdeationKeywordContextCache(ideationKeywordUtterances, requestUtterances),
-        max_keywords: IDEATION_KEYWORD_MAX_KEYWORDS,
-      };
-      const cleanMeetingGoal = meetingGoal?.trim() || "";
-      const cleanMeetingGoalContext = meetingGoalContext?.trim() || "";
-      if (cleanMeetingGoal) {
-        bubbleGraphRequest.meeting_goal = cleanMeetingGoal;
-      }
-      if (cleanMeetingGoalContext) {
-        bubbleGraphRequest.meeting_goal_context = cleanMeetingGoalContext;
-      }
-
-      logIdeationKeywordDebugGroup("server graph request", {
-        reason,
-        requestSeq,
-        meetingId,
-        meetingTopic,
-        requestUtterances,
-        requestPayload: bubbleGraphRequest,
-        currentBubbleGraph: normalizedBubbleGraph,
-        processedIds: [...processedIdsRef.current],
-        pendingUtteranceCount: pendingUtterances.length,
-      });
-
-      void updateCanvasIdeationBubbleGraph(bubbleGraphRequest)
-        .then((result) => {
-          if (requestSeqRef.current !== requestSeq) return;
-          logIdeationKeywordDebugGroup("server graph response", {
-            requestSeq,
-            usedLlm: result.used_llm,
-            ok: result.ok,
-            warning: result.warning,
-            sourceSignature: result.source_signature,
-            bubbleGraph: result.bubble_graph,
-          });
-          if (!result.used_llm) {
-            setStatusMessage(result.warning || "LLM 응답이 없어 서버 버블 그래프를 유지했습니다.");
-            return;
-          }
-
-          const nextGraph = normalizeIdeationBubbleGraphForWorkspace(result.bubble_graph);
-          processedIdsRef.current = new Set(nextGraph.processed_utterance_ids);
-          pendingWindowStartedAtRef.current = 0;
-          onBubbleGraphChange?.(nextGraph);
-
-          const visibleCount = nextGraph.bubbles.filter((bubble) => bubble.display_state !== "archived").length;
-          const archivedCount = nextGraph.bubbles.length - visibleCount;
-          setStatusMessage(`키워드 버블을 갱신했습니다. 표시 ${visibleCount}개, 보관 ${archivedCount}개`);
-        })
-        .catch((error) => {
-          if (requestSeqRef.current !== requestSeq) return;
-          console.error("Failed to update ideation bubble graph:", error);
-          logIdeationKeywordDebugGroup("server graph error", {
-            requestSeq,
-            error,
-            requestPayload: bubbleGraphRequest,
-            preservedBubbleGraph: normalizedBubbleGraph,
-          });
-          setStatusMessage("서버 버블 그래프 갱신에 실패했습니다. 다음 발화에서 다시 시도합니다.");
-        })
-        .finally(() => {
-          if (requestSeqRef.current !== requestSeq) return;
-          requestInFlightRef.current = false;
-        });
-    };
-
-    const elapsedMs = Date.now() - pendingWindowStartedAtRef.current;
-    if (pendingUtterances.length >= IDEATION_KEYWORD_BATCH_SIZE) {
-      runKeywordRequest("batch");
-      return undefined;
-    }
-    if (elapsedMs >= IDEATION_KEYWORD_MAX_WINDOW_MS) {
-      runKeywordRequest("window");
-      return undefined;
-    }
-
-    deferStateUpdate(() => setStatusMessage(`STT 전사를 모아 키워드 추출을 준비 중입니다. ${pendingUtterances.length}/${IDEATION_KEYWORD_BATCH_SIZE}`));
-    const timeoutMs = Math.max(
-      250,
-      Math.min(
-        IDEATION_KEYWORD_IDLE_FLUSH_MS,
-        IDEATION_KEYWORD_MAX_WINDOW_MS - elapsedMs,
-      ),
-    );
-    const timer = window.setTimeout(() => {
-      runKeywordRequest(timeoutMs >= IDEATION_KEYWORD_IDLE_FLUSH_MS ? "idle" : "window");
-    }, timeoutMs);
-
-    return () => window.clearTimeout(timer);
+    deferStateUpdate(() => setStatusMessage(
+      demoBalanceMode
+        ? "현재 STT 전사 및 A/B 키워드 추출 중입니다."
+        : "현재 STT 전사 및 키워드 추출 중입니다.",
+    ));
   }, [
     ideationKeywordUtterances,
     meetingId,
-    meetingGoal,
-    meetingGoalContext,
-    meetingTopic,
+    demoBalanceMode,
     normalizedBubbleGraph,
-    onBubbleGraphChange,
     stage,
     updatesEnabled,
   ]);

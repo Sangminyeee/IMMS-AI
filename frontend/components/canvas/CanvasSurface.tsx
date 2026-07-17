@@ -54,6 +54,14 @@ type ProblemDefinitionPhase = "explore" | "structure";
 type ProblemStructureMethod = "affinity" | "card-sorting";
 type SummaryDocumentSection = NonNullable<CanvasFinalSolutionSummary["sections"]>[number];
 
+export type CanvasSttFeedItem = {
+  id: string;
+  text: string;
+  speaker: string;
+  timestamp: string;
+  canvasStage?: CanvasStage | string;
+};
+
 type ProblemGroupingRationale = {
   groupId: string;
   rationale: string;
@@ -87,16 +95,23 @@ export type CanvasSurfaceSolutionState = {
   summaryDocumentPending: boolean;
   summaryDocumentGenerationStatus: CanvasArtifactGenerationStatus;
   summaryDocumentGenerationError: string;
+  summaryDocumentGenerationDetail?: string;
+  summaryDocumentGenerationPhase?: string;
+  summaryDocumentGenerationRetryable?: boolean;
   summaryDocumentSaving: boolean;
   solutionRightPaneRef: RefObject<HTMLElement | null>;
 };
 
 export type CanvasSurfaceProblemState = {
+  demoBalanceMode?: boolean;
   problemGroupsCount: number;
   problemStructureNodesCount: number;
   problemDefinitionStagePending: boolean;
   problemDefinitionGenerationStatus: CanvasArtifactGenerationStatus;
   problemDefinitionGenerationError: string;
+  problemDefinitionGenerationDetail?: string;
+  problemDefinitionGenerationPhase?: string;
+  problemDefinitionGenerationRetryable?: boolean;
   problemStructureSetupOpen: boolean;
   problemStructureDraftMethod: ProblemStructureMethod;
   problemStructureDraftMode: ProblemDefinitionMode;
@@ -159,6 +174,7 @@ export type CanvasSurfaceProps = {
   solutionHandlers: CanvasSurfaceSolutionHandlers;
   problemHandlers: CanvasSurfaceProblemHandlers;
   renderSummaryMarkdownPreview: (markdown: string, onEdit: () => void) => ReactNode;
+  sttFeedItems?: CanvasSttFeedItem[];
 };
 
 const EMPTY_EDGES: Edge[] = [];
@@ -232,6 +248,72 @@ function ProblemGroupingRationaleOverlay({
   );
 }
 
+function formatSttFeedSpeaker(speaker: string) {
+  const trimmed = speaker.trim();
+  if (!trimmed || trimmed === "알 수 없음") return "";
+  return trimmed.includes("@") ? trimmed.split("@")[0] || trimmed : trimmed;
+}
+
+function CanvasSttFeedOverlay({
+  items,
+  demoBalanceMode = false,
+}: {
+  items: CanvasSttFeedItem[];
+  demoBalanceMode?: boolean;
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="pointer-events-none absolute right-[24px] top-[26px] z-[7] w-[min(352px,calc(100%-48px))]">
+      <style>
+        {`
+          @keyframes moa-canvas-stt-feed-in {
+            from { opacity: 0; transform: translate3d(8px, -4px, 0); }
+            to { opacity: 1; transform: translate3d(0, 0, 0); }
+          }
+        `}
+      </style>
+      <div className="rounded-[18px] border border-[#d8efff]/85 bg-white/82 px-[12px] py-[10px] shadow-[0_14px_38px_rgba(15,23,42,0.11)] backdrop-blur-xl">
+        <div className="mb-[7px] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-[6px]">
+            <span className="h-[7px] w-[7px] rounded-full bg-[#01a3ff] shadow-[0_0_0_4px_rgba(1,163,255,0.09)]" />
+            <span className="moa-font-pretendard text-[11px] font-bold leading-none tracking-[-0.026px] text-[#236cf3]">
+              {demoBalanceMode ? "실시간 전사 · 데모" : "실시간 전사"}
+            </span>
+          </div>
+          <span className="moa-font-pretendard text-[10px] font-semibold leading-none tracking-[-0.025px] text-[#91a3b8]">
+            최신 {items.length}
+          </span>
+        </div>
+        <div className="space-y-[5px]">
+          {items.map((item, index) => {
+            const speaker = formatSttFeedSpeaker(item.speaker);
+            return (
+              <div
+                key={item.id}
+                className={classNames(
+                  "flex min-w-0 items-center gap-[7px] rounded-[11px] border border-white/70 bg-white/72 px-[9px] py-[6px] shadow-[0_3px_12px_rgba(35,108,243,0.045)] transition-[opacity,transform] duration-500",
+                  index >= 3 && "opacity-70",
+                )}
+                style={{ animation: "moa-canvas-stt-feed-in 420ms cubic-bezier(0.22, 1, 0.36, 1)" }}
+              >
+                {speaker ? (
+                  <span className="max-w-[74px] shrink-0 truncate text-[10px] font-semibold leading-[1.35] tracking-[-0.025px] text-[#7b8fa7]">
+                    {speaker}
+                  </span>
+                ) : null}
+                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold leading-[1.35] tracking-[-0.03px] text-[#24364f]">
+                  {item.text}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const CanvasSurface = memo(function CanvasSurface({
   canvasSurfaceRef,
   view,
@@ -241,6 +323,7 @@ export const CanvasSurface = memo(function CanvasSurface({
   solutionHandlers,
   problemHandlers,
   renderSummaryMarkdownPreview,
+  sttFeedItems = [],
 }: CanvasSurfaceProps) {
   const {
     stage,
@@ -266,15 +349,20 @@ export const CanvasSurface = memo(function CanvasSurface({
     summaryDocumentPending,
     summaryDocumentGenerationStatus,
     summaryDocumentGenerationError,
+    summaryDocumentGenerationDetail,
+    summaryDocumentGenerationPhase,
+    summaryDocumentGenerationRetryable,
     summaryDocumentSaving,
     solutionRightPaneRef,
   } = solution;
   const {
+    demoBalanceMode,
     problemGroupsCount,
     problemStructureNodesCount,
     problemDefinitionStagePending,
     problemDefinitionGenerationStatus,
     problemDefinitionGenerationError,
+    problemDefinitionGenerationDetail,
     problemStructureSetupOpen,
     problemStructureDraftMethod,
     problemStructureDraftMode,
@@ -444,9 +532,9 @@ export const CanvasSurface = memo(function CanvasSurface({
           {snapshot.stage === "ideation" ? (
             <Background
               id="ideation-grid"
-              bgColor="#fbfbfb"
-              color="#e9eef5"
-              gap={18}
+              bgColor="#fdfdfd"
+              color="#edf5fb"
+              gap={16}
               size={1}
               variant={BackgroundVariant.Lines}
             />
@@ -485,6 +573,9 @@ export const CanvasSurface = memo(function CanvasSurface({
           pending={snapshotSolution.summaryDocumentPending}
           generationStatus={snapshotSolution.summaryDocumentGenerationStatus}
           generationError={snapshotSolution.summaryDocumentGenerationError}
+          generationDetail={snapshotSolution.summaryDocumentGenerationDetail}
+          generationPhase={snapshotSolution.summaryDocumentGenerationPhase}
+          generationRetryable={snapshotSolution.summaryDocumentGenerationRetryable}
           saving={snapshotSolution.summaryDocumentSaving}
           onToggleEvidence={onToggleSummaryEvidence}
           onSetEditMode={onSetSummaryDocumentEditMode}
@@ -524,13 +615,17 @@ export const CanvasSurface = memo(function CanvasSurface({
         {renderStageSurfaceContent(renderedStageSurfaceSnapshot)}
       </div>
 
+      {stage !== "solution" ? (
+        <CanvasSttFeedOverlay items={sttFeedItems} demoBalanceMode={demoBalanceMode} />
+      ) : null}
+
       {problemEmptyPresence.shouldRender ? (
         <CanvasStageEmptyOverlay
           eyebrow="Problem Definition"
           exiting={problemEmptyPresence.isExiting}
           message={
             problemDefinitionFailed
-              ? `문제정의 1단계 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
+              ? `${demoBalanceMode ? "문제정의" : "문제정의 1단계"} 생성에 실패했습니다.${problemDefinitionGenerationError ? ` ${problemDefinitionGenerationError}` : ""}`
               : busy
                 ? "문제 정의 그룹을 생성하는 중입니다."
                 : "문제 정의 그룹이 아직 없습니다."
@@ -548,7 +643,9 @@ export const CanvasSurface = memo(function CanvasSurface({
               ? `요약 문서 생성에 실패했습니다.${summaryDocumentGenerationError ? ` ${summaryDocumentGenerationError}` : ""}`
               : !showMissingFinalProblemStructureOverlay
               ? "요약 문서를 준비하는 중입니다."
-              : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
+              : demoBalanceMode
+                ? "문제정의에서 A/B 의견 정리가 있어야 요약 및 정리 문서를 만들 수 있습니다."
+                : "문제정의 2단계에서 확정된 분류가 있어야 요약 및 정리 문서를 만들 수 있습니다."
           }
           tone="summary"
         />
@@ -566,7 +663,10 @@ export const CanvasSurface = memo(function CanvasSurface({
       ) : null}
 
       {problemGenerationPresence.shouldRender ? (
-        <ProblemDefinitionPreparingOverlay exiting={problemGenerationPresence.isExiting} />
+        <ProblemDefinitionPreparingOverlay
+          exiting={problemGenerationPresence.isExiting}
+          detail={problemDefinitionGenerationDetail}
+        />
       ) : null}
 
       {problemStructureSetupPresence.shouldRender ? (
@@ -593,7 +693,10 @@ export const CanvasSurface = memo(function CanvasSurface({
       ) : null}
 
       {summaryGenerationPresence.shouldRender ? (
-        <SummaryDocumentPendingOverlay exiting={summaryGenerationPresence.isExiting} />
+        <SummaryDocumentPendingOverlay
+          exiting={summaryGenerationPresence.isExiting}
+          detail={summaryDocumentGenerationDetail}
+        />
       ) : null}
 
       {canvasStatusMessage ? <CanvasStatusToast key={canvasStatusMessage} message={canvasStatusMessage} /> : null}

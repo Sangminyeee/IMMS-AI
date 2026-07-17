@@ -40,6 +40,7 @@ export function useCanvasWorkspacePanelModels({
   surfaceSolutionHandlers: incomingSurfaceSolutionHandlers,
   surfaceProblemHandlers: incomingSurfaceProblemHandlers,
   renderSummaryMarkdownPreview,
+  sttFeedItems: incomingSttFeedItems,
   rightDrawerLayout: incomingRightDrawerLayout,
   rightDrawerComposer: incomingRightDrawerComposer,
   rightDrawerNotesState: incomingRightDrawerNotesState,
@@ -83,6 +84,9 @@ export function useCanvasWorkspacePanelModels({
     summaryDocumentPending: incomingSurfaceSolution.summaryDocumentPending,
     summaryDocumentGenerationStatus: incomingSurfaceSolution.summaryDocumentGenerationStatus,
     summaryDocumentGenerationError: incomingSurfaceSolution.summaryDocumentGenerationError,
+    summaryDocumentGenerationDetail: incomingSurfaceSolution.summaryDocumentGenerationDetail,
+    summaryDocumentGenerationPhase: incomingSurfaceSolution.summaryDocumentGenerationPhase,
+    summaryDocumentGenerationRetryable: incomingSurfaceSolution.summaryDocumentGenerationRetryable,
     summaryDocumentSaving: incomingSurfaceSolution.summaryDocumentSaving,
     solutionRightPaneRef: incomingSurfaceSolution.solutionRightPaneRef,
   }), [
@@ -98,6 +102,9 @@ export function useCanvasWorkspacePanelModels({
     incomingSurfaceSolution.summaryDocumentDraftMarkdown,
     incomingSurfaceSolution.summaryDocumentEditMode,
     incomingSurfaceSolution.summaryDocumentGenerationError,
+    incomingSurfaceSolution.summaryDocumentGenerationDetail,
+    incomingSurfaceSolution.summaryDocumentGenerationPhase,
+    incomingSurfaceSolution.summaryDocumentGenerationRetryable,
     incomingSurfaceSolution.summaryDocumentGenerationStatus,
     incomingSurfaceSolution.summaryDocumentPending,
     incomingSurfaceSolution.summaryDocumentSaving,
@@ -107,11 +114,15 @@ export function useCanvasWorkspacePanelModels({
   ]);
 
   const surfaceProblem = useMemo<CanvasSurfaceProblemState>(() => ({
+    demoBalanceMode: incomingSurfaceProblem.demoBalanceMode,
     problemGroupsCount: incomingSurfaceProblem.problemGroupsCount,
     problemStructureNodesCount: incomingSurfaceProblem.problemStructureNodesCount,
     problemDefinitionStagePending: incomingSurfaceProblem.problemDefinitionStagePending,
     problemDefinitionGenerationStatus: incomingSurfaceProblem.problemDefinitionGenerationStatus,
     problemDefinitionGenerationError: incomingSurfaceProblem.problemDefinitionGenerationError,
+    problemDefinitionGenerationDetail: incomingSurfaceProblem.problemDefinitionGenerationDetail,
+    problemDefinitionGenerationPhase: incomingSurfaceProblem.problemDefinitionGenerationPhase,
+    problemDefinitionGenerationRetryable: incomingSurfaceProblem.problemDefinitionGenerationRetryable,
     problemStructureSetupOpen: incomingSurfaceProblem.problemStructureSetupOpen,
     problemStructureDraftMethod: incomingSurfaceProblem.problemStructureDraftMethod,
     problemStructureDraftMode: incomingSurfaceProblem.problemStructureDraftMode,
@@ -128,10 +139,14 @@ export function useCanvasWorkspacePanelModels({
   }), [
     incomingSurfaceProblem.activeProblemGroupingRationale,
     incomingSurfaceProblem.activeProblemGroupingRationaleTitle,
+    incomingSurfaceProblem.demoBalanceMode,
     incomingSurfaceProblem.problemCanvasToolbarActions,
     incomingSurfaceProblem.problemDefinitionMode,
     incomingSurfaceProblem.problemDefinitionPhase,
     incomingSurfaceProblem.problemDefinitionGenerationError,
+    incomingSurfaceProblem.problemDefinitionGenerationDetail,
+    incomingSurfaceProblem.problemDefinitionGenerationPhase,
+    incomingSurfaceProblem.problemDefinitionGenerationRetryable,
     incomingSurfaceProblem.problemDefinitionGenerationStatus,
     incomingSurfaceProblem.problemDefinitionStagePending,
     incomingSurfaceProblem.problemGroupsCount,
@@ -333,6 +348,11 @@ export function useCanvasWorkspacePanelModels({
     [incomingParticipants],
   );
 
+  const sttFeedItems = useMemo(
+    () => (incomingSttFeedItems || []).map((item) => ({ ...item })),
+    [incomingSttFeedItems],
+  );
+
   return useMemo<CanvasWorkspacePanelsProps>(() => ({
     header,
     keywordSummary,
@@ -347,6 +367,7 @@ export function useCanvasWorkspacePanelModels({
     surfaceSolutionHandlers,
     surfaceProblemHandlers,
     renderSummaryMarkdownPreview,
+    sttFeedItems,
     rightDrawerLayout,
     rightDrawerComposer,
     rightDrawerNotesState,
@@ -382,6 +403,7 @@ export function useCanvasWorkspacePanelModels({
     surfaceSolution,
     surfaceSolutionHandlers,
     surfaceView,
+    sttFeedItems,
     workspaceGridColumns,
   ]);
 }

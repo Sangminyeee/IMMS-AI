@@ -184,9 +184,21 @@ export interface CanvasProblemDiscussionItem {
 export interface CanvasProblemTaxonomyResponse {
   ok: boolean;
   used_llm: boolean;
+  retryable?: boolean;
   warning?: string;
+  llm_error?: {
+    stage?: string;
+    model?: string;
+    thinking_level?: string;
+    http_status?: number;
+    error_type?: string;
+    error_preview?: string;
+    elapsed_ms?: number | null;
+  };
   generated_at: string;
   groups: CanvasProblemDefinitionGroup[];
+  problem_structure?: CanvasProblemStructureState;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
 }
 
 export interface CanvasPersonalNote {
@@ -364,6 +376,9 @@ export interface CanvasArtifactGenerationState {
   updated_at?: string;
   finished_at?: string;
   error?: string;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
   version?: number;
   input_transcript_revision?: number;
 }
@@ -375,6 +390,8 @@ export interface CanvasWorkspaceStateResponse {
   meeting_id: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage: "ideation" | "problem-definition" | "solution";
   agenda_overrides?: Record<
     string,
@@ -404,6 +421,8 @@ export interface CanvasWorkspacePatchRequest {
   meeting_id: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   stage?: "ideation" | "problem-definition" | "solution";
   agenda_overrides?: Record<
     string,
@@ -449,6 +468,8 @@ export interface CanvasLocalState {
   shared_sync_enabled?: boolean;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   agenda_overrides?: Record<
     string,
     {
@@ -490,9 +511,12 @@ export interface CanvasRealtimeSyncPayload {
     | "ideation_bubble_graph"
     | "problem_groups"
     | "problem_structure"
-    | "summary_document";
+    | "summary_document"
+    | "meeting_room_reset";
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasDemoConfig;
+  demo_balance_classification?: CanvasDemoBalanceClassification;
   updated_by: string;
   updated_at: string;
   stage: "ideation" | "problem-definition" | "solution";
@@ -514,6 +538,57 @@ export interface CanvasRealtimeSyncPayload {
   artifact_generation?: CanvasArtifactGenerationMap;
   ideation_bubble_graph?: CanvasIdeationBubbleGraph;
   imported_state?: MeetingState | null;
+}
+
+export interface CanvasDemoConfig {
+  enabled?: boolean;
+  mode?: "normal" | "demo_balance" | string;
+  option_a?: string;
+  option_b?: string;
+  option_a_keyword?: string;
+  option_b_keyword?: string;
+  instruction?: string;
+}
+
+export interface CanvasDemoBalanceOpinion {
+  id?: string;
+  utterance_id?: string;
+  choice?: "a" | "b" | "unclassified" | string;
+  valid?: boolean;
+  confidence?: number;
+  reason_summary?: string;
+  keywords?: string[];
+  text?: string;
+}
+
+export interface CanvasDemoBalanceMainOpinion {
+  id?: string;
+  title?: string;
+  text?: string;
+  keywords?: string[];
+  evidence_utterance_ids?: string[];
+}
+
+export interface CanvasDemoBalanceClassification {
+  version?: number;
+  mode?: "demo_balance" | string;
+  option_a?: string;
+  option_b?: string;
+  classified_at?: string;
+  source_signature?: string;
+  valid_a_count?: number;
+  valid_b_count?: number;
+  unclassified_count?: number;
+  opinions?: CanvasDemoBalanceOpinion[];
+  summary?: {
+    option_a_summary?: string;
+    option_b_summary?: string;
+    unclassified_summary?: string;
+  };
+  main_opinions?: {
+    a?: CanvasDemoBalanceMainOpinion[];
+    b?: CanvasDemoBalanceMainOpinion[];
+  };
 }
 
 export interface CanvasEditPresencePayload {
@@ -700,7 +775,17 @@ export interface CanvasSummaryStructuredDocument {
 export interface CanvasSummaryDocumentResponse {
   ok: boolean;
   used_llm: boolean;
+  retryable?: boolean;
   warning?: string;
+  llm_error?: {
+    stage?: string;
+    model?: string;
+    thinking_level?: string;
+    http_status?: number;
+    error_type?: string;
+    error_preview?: string;
+    elapsed_ms?: number | null;
+  };
   generated_at: string;
   source_signature: string;
   markdown: string;
@@ -742,12 +827,27 @@ export interface CanvasIdeationKeywordResponse {
   }>;
 }
 
-export type CanvasIdeationBubbleDisplayState = "active" | "dimmed" | "archived";
+export type CanvasIdeationBubbleDisplayState = "active" | "dimmed" | "exiting" | "archived";
 export type CanvasIdeationBubbleLayoutZone = "core" | "default" | "peripheral" | "archived";
+export type CanvasIdeationBubbleLayoutMode = "orbit" | "organic" | string;
+export type CanvasIdeationBubbleRole = "center" | "satellite" | "dot" | string;
+
+export interface CanvasIdeationBubbleGraphCluster {
+  id: string;
+  center_bubble_id?: string;
+  x?: number;
+  y?: number;
+  radius?: number;
+  rings?: number[];
+  zone?: CanvasIdeationBubbleLayoutZone | string;
+  overlap_resolved_count?: number;
+  bubble_ids?: string[];
+}
 
 export interface CanvasIdeationBubbleGraphBubble {
   id: string;
   label: string;
+  canonical_label?: string;
   aliases?: string[];
   kind?: "entity" | "topic" | "relation" | "action" | "off_topic" | string;
   count: number;
@@ -764,10 +864,33 @@ export interface CanvasIdeationBubbleGraphBubble {
   cluster_y?: number;
   local_x?: number;
   local_y?: number;
+  role?: CanvasIdeationBubbleRole;
+  orbit_center_id?: string;
+  orbit_ring?: number;
+  orbit_angle?: number;
+  orbit_radius?: number;
+  orbit_order_key?: number;
+  orbit_slot_index?: number;
+  motion_reason?: "gate_enter" | "insert_push" | "gap_fill" | "ring_overflow" | "affinity_transfer" | "relayout" | "relayout_transfer" | "content_update" | "exit" | string;
+  motion_direction?: "counterclockwise" | "clockwise" | "nearest" | "direct" | string;
+  motion_plan_id?: string;
+  from_slot_index?: number;
+  to_slot_index?: number;
+  move_cost?: number;
+  move_angle_delta?: number;
+  arc_cost?: number;
+  radius_cost?: number;
+  gate_blocked?: boolean;
+  enter_sequence?: number;
+  enter_delay_ms?: number;
+  gate_angle?: number;
   display_state?: CanvasIdeationBubbleDisplayState | string;
   layout_zone?: CanvasIdeationBubbleLayoutZone | string;
   missing_cycles?: number;
   anchor_id?: string;
+  choice_affinity?: "a" | "b" | "neutral" | string;
+  affinity_score?: number;
+  durable?: boolean;
   related_ids?: string[];
   evidence_utterance_ids?: string[];
   first_seen_at?: string;
@@ -776,12 +899,16 @@ export interface CanvasIdeationBubbleGraphBubble {
   off_topic?: boolean;
   off_topic_reason?: string;
   archive_reason?: string;
+  lifecycle_state?: "provisional" | "active" | string;
 }
 
 export interface CanvasIdeationBubbleGraph {
   version: number;
+  layout_mode?: CanvasIdeationBubbleLayoutMode;
   update_cycle: number;
   layout_revision?: number;
+  layout_overlap_resolved_count?: number;
+  clusters?: CanvasIdeationBubbleGraphCluster[];
   bubbles: CanvasIdeationBubbleGraphBubble[];
   processed_utterance_ids: string[];
   updated_at?: string;
@@ -790,11 +917,41 @@ export interface CanvasIdeationBubbleGraph {
 export interface CanvasIdeationBubbleGraphUpdateResponse {
   ok: boolean;
   used_llm: boolean;
+  used_local?: boolean;
+  extractor_route?: Record<string, unknown>;
   warning?: string;
   generated_at: string;
   source_signature: string;
   bubble_graph: CanvasIdeationBubbleGraph;
+  broadcast_steps?: Array<{
+    delay_ms?: number;
+    reason?: string;
+    keyword?: string;
+    motion_plan_id?: string;
+    bubble_graph?: CanvasIdeationBubbleGraph;
+  }>;
   workspace?: CanvasWorkspaceStateResponse;
+  rename_keywords?: Array<{
+    source: string;
+    target: string;
+    reason?: string;
+  }>;
+  active_count?: number;
+  dimmed_count?: number;
+  exiting_count?: number;
+  archived_count?: number;
+  provisional_count?: number;
+  rename_count?: number;
+  merge_count?: number;
+  remove_count?: number;
+  primary_count?: number;
+  promote_count?: number;
+  demote_count?: number;
+  alias_merge_count?: number;
+  canonicalized_count?: number;
+  local_cleanup_count?: number;
+  slow_backoff_ms?: number;
+  overlap_resolved_count?: number;
 }
 export interface CanvasSolutionTopicResponse {
   group_id: string;

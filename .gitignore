@@ -97,7 +97,6 @@ output/
 .run_dev.lock
 
 /proto
-deploy/.env.production
 .codex-temp
 frontend/app/fonts
 !frontend/app/fonts/

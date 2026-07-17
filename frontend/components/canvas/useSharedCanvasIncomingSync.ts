@@ -35,6 +35,8 @@ import {
 import type {
   CanvasArtifactGenerationMap,
   CanvasCustomGroup,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasFinalSolutionSummary,
   CanvasIdeationBubbleGraph,
   CanvasNodePositionsByStage,
@@ -45,6 +47,7 @@ import type {
   CanvasWorkspaceProblemGroup,
   MeetingState,
 } from "@/lib/types";
+import { logCanvasBubbleDebugEvent } from "@/lib/api";
 
 type CanvasStage = "ideation" | "problem-definition" | "solution";
 
@@ -57,6 +60,8 @@ type ProblemGroupModel = CanvasProblemDefinitionGroup & {
 type SharedWorkspaceSnapshot = {
   meetingGoal: string;
   meetingGoalContext: string;
+  demoConfig: CanvasDemoConfig;
+  demoBalanceClassification: CanvasDemoBalanceClassification;
   stage: CanvasStage;
   agendaOverrides: Record<string, AgendaOverride>;
   canvasItems: CanvasWorkspaceItem[];
@@ -109,12 +114,18 @@ type UseSharedCanvasIncomingSyncOptions = {
   setImportedState: Dispatch<SetStateAction<MeetingState | null>>;
   setImportOverrideActive: Dispatch<SetStateAction<boolean>>;
   setMeetingGoalDrafts: (goal: string, context: string) => void;
+  setDemoConfig: Dispatch<SetStateAction<CanvasDemoConfig>>;
+  setDemoBalanceClassification: Dispatch<SetStateAction<CanvasDemoBalanceClassification>>;
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
+  setProblemDefinitionMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
+  setProblemDefinitionPhase: Dispatch<SetStateAction<ProblemDefinitionPhase>>;
   setProblemGroups: Dispatch<SetStateAction<ProblemGroupModel[]>>;
   setProblemStructureGroups: Dispatch<SetStateAction<ProblemStructureGroupViewModel[]>>;
   setProblemStructureArtifactMeta: Dispatch<SetStateAction<ProblemStructureArtifactMeta>>;
+  setProblemStructureMethod: Dispatch<SetStateAction<ProblemStructureMethod>>;
   setProblemStructureNodes: Dispatch<SetStateAction<ProblemStructureNodeViewModel[]>>;
   setProblemStructurePending: Dispatch<SetStateAction<boolean>>;
+  setStage: Dispatch<SetStateAction<CanvasStage>>;
   setSummaryDocumentDraftDirty: Dispatch<SetStateAction<boolean>>;
   setSummaryDocumentDraftMarkdown: Dispatch<SetStateAction<string>>;
   setSummaryDocumentEditMode: Dispatch<SetStateAction<boolean>>;
@@ -285,12 +296,18 @@ export function useSharedCanvasIncomingSync({
   setImportedState,
   setImportOverrideActive,
   setMeetingGoalDrafts,
+  setDemoConfig,
+  setDemoBalanceClassification,
   setNodePositions,
+  setProblemDefinitionMode,
+  setProblemDefinitionPhase,
   setProblemGroups,
   setProblemStructureGroups,
   setProblemStructureArtifactMeta,
+  setProblemStructureMethod,
   setProblemStructureNodes,
   setProblemStructurePending,
+  setStage,
   setSummaryDocumentDraftDirty,
   setSummaryDocumentDraftMarkdown,
   setSummaryDocumentEditMode,
@@ -317,11 +334,13 @@ export function useSharedCanvasIncomingSync({
       return;
     }
 
+    const syncScope = incomingSharedCanvasSync.sync_scope || "full";
     const hasLocalNodePositions = CANVAS_STAGES.some(
       (stageKey) => Object.keys(nodePositions[stageKey] || {}).length > 0,
     );
     if (
       incomingSharedCanvasSync.updated_by === "__server__" &&
+      syncScope === "full" &&
       workspaceLoadedRef.current &&
       hasLocalNodePositions
     ) {
@@ -419,6 +438,8 @@ export function useSharedCanvasIncomingSync({
       lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
         meeting_goal: nextWorkspace.meetingGoal,
         meeting_goal_context: nextWorkspace.meetingGoalContext,
+        demo_config: nextWorkspace.demoConfig,
+        demo_balance_classification: nextWorkspace.demoBalanceClassification,
         stage: nextWorkspace.stage,
         agenda_overrides: nextWorkspace.agendaOverrides,
         canvas_items: nextWorkspace.canvasItems,
@@ -435,6 +456,8 @@ export function useSharedCanvasIncomingSync({
       lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
         meetingGoal: nextWorkspace.meetingGoal,
         meetingGoalContext: nextWorkspace.meetingGoalContext,
+        demoConfig: nextWorkspace.demoConfig,
+        demoBalanceClassification: nextWorkspace.demoBalanceClassification,
         stage: nextWorkspace.stage,
         agendaOverrides: nextWorkspace.agendaOverrides,
         canvasItems: nextWorkspace.canvasItems,
@@ -454,7 +477,6 @@ export function useSharedCanvasIncomingSync({
     };
 
     const currentWorkspace = latestSharedWorkspaceRef.current;
-    const syncScope = incomingSharedCanvasSync.sync_scope || "full";
     if (syncScope === "artifact_generation") {
       const nextArtifactGeneration = mergeIncomingArtifactGeneration(
         currentWorkspace.artifactGeneration,
@@ -480,10 +502,56 @@ export function useSharedCanvasIncomingSync({
       const currentIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
         currentWorkspace.ideationBubbleGraph,
       );
-      const nextIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
+      const shouldApplyIdeationBubbleGraph = shouldApplyIncomingIdeationBubbleGraph(
         incomingIdeationBubbleGraph,
         currentIdeationBubbleGraph,
-      )
+      );
+      if (!shouldApplyIdeationBubbleGraph) {
+        console.info("[Bubble][Sync] ignored lower ideation graph version", {
+          incomingCycle: incomingIdeationBubbleGraph.update_cycle,
+          incomingUpdatedAt: incomingIdeationBubbleGraph.updated_at,
+          currentCycle: currentIdeationBubbleGraph.update_cycle,
+          currentUpdatedAt: currentIdeationBubbleGraph.updated_at,
+        });
+        logCanvasBubbleDebugEvent({
+          meeting_id: meetingId,
+          user_id: userId,
+          event: "graph_sync_ignored",
+          data: {
+            incoming_cycle: incomingIdeationBubbleGraph.update_cycle,
+            incoming_updated_at: incomingIdeationBubbleGraph.updated_at,
+            incoming_bubbles: incomingIdeationBubbleGraph.bubbles.length,
+            current_cycle: currentIdeationBubbleGraph.update_cycle,
+            current_updated_at: currentIdeationBubbleGraph.updated_at,
+            current_bubbles: currentIdeationBubbleGraph.bubbles.length,
+          },
+        });
+      } else {
+        console.info("[Bubble][Sync] applied ideation graph", {
+          cycle: incomingIdeationBubbleGraph.update_cycle,
+          updatedAt: incomingIdeationBubbleGraph.updated_at,
+          bubbles: incomingIdeationBubbleGraph.bubbles.length,
+        });
+        logCanvasBubbleDebugEvent({
+          meeting_id: meetingId,
+          user_id: userId,
+          event: "graph_sync_applied",
+          data: {
+            cycle: incomingIdeationBubbleGraph.update_cycle,
+            updated_at: incomingIdeationBubbleGraph.updated_at,
+            bubbles: incomingIdeationBubbleGraph.bubbles.length,
+            labels: incomingIdeationBubbleGraph.bubbles.slice(0, 24).map((bubble) => ({
+              id: bubble.id,
+              label: bubble.label,
+              state: bubble.display_state,
+              lifecycle: bubble.lifecycle_state,
+              choice: bubble.choice_affinity,
+              count: bubble.count,
+            })),
+          },
+        });
+      }
+      const nextIdeationBubbleGraph = shouldApplyIdeationBubbleGraph
         ? incomingIdeationBubbleGraph
         : currentIdeationBubbleGraph;
       applyRemoteWorkspace(
@@ -636,10 +704,98 @@ export function useSharedCanvasIncomingSync({
       return;
     }
 
+    if (syncScope === "meeting_room_reset") {
+      const incomingCanvasItems = hydrateCanvasItems(incomingSharedCanvasSync.canvas_items || []);
+      const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
+      const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
+      const incomingMeetingGoalContext = incomingSharedCanvasSync.meeting_goal_context || "";
+      const incomingDemoConfig = incomingSharedCanvasSync.demo_config || currentWorkspace.demoConfig;
+      const incomingDemoBalanceClassification =
+        incomingSharedCanvasSync.demo_balance_classification || {};
+      const nextProblemGroups = hydrateProblemGroups(incomingSharedCanvasSync.problem_groups || [], []);
+      const incomingProblemStructure = hydrateProblemStructureState(
+        incomingSharedCanvasSync.problem_structure || createDefaultProblemStructureState(),
+        nextProblemGroups,
+      );
+      const nextProblemStructurePayload = buildProblemStructureStatePayload({
+        ...incomingProblemStructure,
+        phase: "explore",
+        method: "affinity",
+        mode: "",
+      });
+      const nextFinalSummary = normalizeFinalSolutionSummaryPayload(incomingSharedCanvasSync.final_solution_summary || null);
+      const nextArtifactGeneration = normalizeCanvasArtifactGeneration(incomingSharedCanvasSync.artifact_generation || {});
+      const nextIdeationBubbleGraph = normalizeIdeationBubbleGraphForWorkspace(
+        incomingSharedCanvasSync.ideation_bubble_graph,
+      );
+      const nextNodePositions = normalizeCanvasNodePositionsForComputedIdeation(
+        incomingSharedCanvasSync.node_positions || {},
+      );
+
+      applyRemoteWorkspace(
+        {
+          meetingGoal: incomingMeetingGoal,
+          meetingGoalContext: incomingMeetingGoalContext,
+          demoConfig: incomingDemoConfig,
+          demoBalanceClassification: incomingDemoBalanceClassification,
+          stage: "ideation",
+          agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
+          canvasItems: incomingCanvasItems,
+          customGroups: incomingCustomGroups,
+          problemGroups: nextProblemGroups,
+          problemStructure: nextProblemStructurePayload,
+          finalSolutionSummary: nextFinalSummary,
+          artifactGeneration: nextArtifactGeneration,
+          ideationBubbleGraph: nextIdeationBubbleGraph,
+          nodePositions: nextNodePositions,
+          importedState: null,
+        },
+        () => {
+          liveNodePositionsRef.current = nextNodePositions;
+          setStage("ideation");
+          setProblemDefinitionMode("");
+          setProblemDefinitionPhase("explore");
+          setProblemStructureMethod("affinity");
+          setProblemGroups(nextProblemGroups);
+          setProblemStructureNodes(incomingProblemStructure.nodes);
+          setProblemStructureGroups(incomingProblemStructure.groups);
+          setProblemStructureArtifactMeta({
+            revision: incomingProblemStructure.revision,
+            sourceGenerationId: incomingProblemStructure.sourceGenerationId,
+            basedOnTranscriptRevision: incomingProblemStructure.basedOnTranscriptRevision,
+            updatedAt: incomingProblemStructure.updatedAt,
+          });
+          setProblemStructurePending(false);
+          setFinalSummaryDocument(nextFinalSummary);
+          setArtifactGeneration(nextArtifactGeneration);
+          setIdeationBubbleGraph(nextIdeationBubbleGraph);
+          setNodePositions(nextNodePositions);
+          setSummaryDocumentDraftMarkdown(nextFinalSummary.markdown);
+          setSummaryDocumentDraftDirty(false);
+          setSummaryDocumentEditMode(false);
+          setMeetingGoalDrafts(incomingMeetingGoal, incomingMeetingGoalContext);
+          setDemoConfig(incomingDemoConfig);
+          setDemoBalanceClassification(incomingDemoBalanceClassification);
+          onMeetingGoalChange(incomingMeetingGoal);
+          onMeetingGoalContextChange(incomingMeetingGoalContext);
+          setAgendaOverrides(incomingSharedCanvasSync.agenda_overrides || {});
+          setCanvasItems(incomingCanvasItems);
+          setCustomGroups(incomingCustomGroups);
+          setImportedState(null);
+          setImportOverrideActive(false);
+          analysisSignatureAtImportRef.current = "";
+        },
+      );
+      return;
+    }
+
     const incomingCanvasItems = hydrateCanvasItems(incomingSharedCanvasSync.canvas_items || []);
     const incomingCustomGroups = hydrateCustomGroups(incomingSharedCanvasSync.custom_groups || []);
     const incomingMeetingGoal = incomingSharedCanvasSync.meeting_goal || "";
     const incomingMeetingGoalContext = incomingSharedCanvasSync.meeting_goal_context || "";
+    const incomingDemoConfig = incomingSharedCanvasSync.demo_config || currentWorkspace.demoConfig;
+    const incomingDemoBalanceClassification =
+      incomingSharedCanvasSync.demo_balance_classification || currentWorkspace.demoBalanceClassification || {};
     const nextIncomingCanvasItems = incomingCanvasItems;
     const currentNodePositionsSnapshot = liveNodePositionsRef.current;
 
@@ -680,6 +836,8 @@ export function useSharedCanvasIncomingSync({
     lastSharedSyncSignatureRef.current = buildSharedCanvasSignature({
       meeting_goal: incomingMeetingGoal,
       meeting_goal_context: incomingMeetingGoalContext,
+      demo_config: incomingDemoConfig,
+      demo_balance_classification: incomingDemoBalanceClassification,
       stage,
       agenda_overrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvas_items: nextIncomingCanvasItems,
@@ -697,6 +855,8 @@ export function useSharedCanvasIncomingSync({
     latestSharedWorkspaceRef.current = {
       meetingGoal: incomingMeetingGoal,
       meetingGoalContext: incomingMeetingGoalContext,
+      demoConfig: incomingDemoConfig,
+      demoBalanceClassification: incomingDemoBalanceClassification,
       stage,
       agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvasItems: nextIncomingCanvasItems,
@@ -729,6 +889,8 @@ export function useSharedCanvasIncomingSync({
     setSummaryDocumentDraftDirty(false);
     setSummaryDocumentEditMode(false);
     setMeetingGoalDrafts(incomingMeetingGoal, incomingMeetingGoalContext);
+    setDemoConfig(incomingDemoConfig);
+    setDemoBalanceClassification(incomingDemoBalanceClassification);
     onMeetingGoalChange(incomingMeetingGoal);
     onMeetingGoalContextChange(incomingMeetingGoalContext);
     setAgendaOverrides(incomingSharedCanvasSync.agenda_overrides || {});
@@ -745,6 +907,8 @@ export function useSharedCanvasIncomingSync({
     lastWorkspaceFieldSignaturesRef.current = buildWorkspaceFieldSignatures({
       meetingGoal: incomingMeetingGoal,
       meetingGoalContext: incomingMeetingGoalContext,
+      demoConfig: incomingDemoConfig,
+      demoBalanceClassification: incomingDemoBalanceClassification,
       stage,
       agendaOverrides: incomingSharedCanvasSync.agenda_overrides || {},
       canvasItems: nextIncomingCanvasItems,
@@ -794,12 +958,18 @@ export function useSharedCanvasIncomingSync({
     setImportedState,
     setImportOverrideActive,
     setMeetingGoalDrafts,
+    setDemoBalanceClassification,
+    setDemoConfig,
     setNodePositions,
+    setProblemDefinitionMode,
+    setProblemDefinitionPhase,
     setProblemGroups,
     setProblemStructureArtifactMeta,
     setProblemStructureGroups,
+    setProblemStructureMethod,
     setProblemStructureNodes,
     setProblemStructurePending,
+    setStage,
     setSummaryDocumentDraftDirty,
     setSummaryDocumentDraftMarkdown,
     setSummaryDocumentEditMode,

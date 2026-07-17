@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS meetings (
   title TEXT NOT NULL,
   goal TEXT,
   host_id UUID NOT NULL REFERENCES auth.users(id),
+  meeting_mode TEXT NOT NULL DEFAULT 'normal' CHECK (meeting_mode IN ('normal', 'demo_balance')),
   status TEXT DEFAULT 'waiting', -- waiting, in_progress, completed
   scheduled_at TIMESTAMPTZ,
   started_at TIMESTAMPTZ,
@@ -114,6 +115,27 @@ CREATE TABLE IF NOT EXISTS meeting_runtime_states (
   llm_cache JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Existing projects created before demo mode metadata need this column.
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS meeting_mode TEXT NOT NULL DEFAULT 'normal';
+UPDATE meetings SET meeting_mode = 'normal' WHERE meeting_mode IS NULL OR meeting_mode NOT IN ('normal', 'demo_balance');
+ALTER TABLE meetings ALTER COLUMN meeting_mode SET DEFAULT 'normal';
+ALTER TABLE meetings ALTER COLUMN meeting_mode SET NOT NULL;
+DO $$
+BEGIN
+  ALTER TABLE meetings
+    ADD CONSTRAINT meetings_meeting_mode_check CHECK (meeting_mode IN ('normal', 'demo_balance'));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+UPDATE meetings
+SET meeting_mode = 'demo_balance'
+FROM meeting_runtime_states
+WHERE meeting_runtime_states.meeting_id = meetings.id
+  AND COALESCE(meeting_runtime_states.shared_state->'demo_config'->>'mode', '') = 'demo_balance'
+  AND COALESCE(meeting_runtime_states.shared_state->'demo_config'->>'option_a', '') <> ''
+  AND COALESCE(meeting_runtime_states.shared_state->'demo_config'->>'option_b', '') <> '';
 
 -- Personal runtime state for each user inside a meeting
 CREATE TABLE IF NOT EXISTS meeting_user_states (

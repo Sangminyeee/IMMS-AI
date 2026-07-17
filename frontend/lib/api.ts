@@ -20,6 +20,8 @@
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+const BUBBLE_DEBUG_FRONTEND_LOG_INTERVAL_MS = 1000;
+const bubbleDebugFrontendLogSentAt = new Map<string, number>();
 
 function apiPath(path: string): string {
   return `${API_BASE_URL}${path}`;
@@ -46,6 +48,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export async function generateCanvasProblemTaxonomy(payload: {
   meeting_id: string;
   meeting_topic: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   debug_nonce?: string;
   refresh_chunk_summaries?: boolean;
   parent_group_id?: string;
@@ -144,6 +147,8 @@ export async function generateCanvasSummaryDocument(payload: {
   meeting_id: string;
   meeting_topic: string;
   refresh_chunk_summaries?: boolean;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
+  demo_balance_classification?: CanvasWorkspacePatchRequest["demo_balance_classification"];
   groups: Array<{
     id: string;
     title: string;
@@ -174,6 +179,8 @@ export async function generateCanvasSummaryConclusion(payload: {
   refresh_chunk_summaries?: boolean;
   regenerate_nonce?: string;
   current_summary?: CanvasFinalSolutionSummary;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
+  demo_balance_classification?: CanvasWorkspacePatchRequest["demo_balance_classification"];
   groups: Array<{
     id: string;
     title: string;
@@ -237,6 +244,7 @@ export async function extractCanvasIdeationKeywords(payload: {
   meeting_topic: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   utterances: Array<{
     id: string;
     speaker: string;
@@ -274,6 +282,7 @@ export async function updateCanvasIdeationBubbleGraph(payload: {
   meeting_topic: string;
   meeting_goal?: string;
   meeting_goal_context?: string;
+  demo_config?: CanvasWorkspacePatchRequest["demo_config"];
   utterances: Array<{
     id: string;
     speaker: string;
@@ -282,6 +291,7 @@ export async function updateCanvasIdeationBubbleGraph(payload: {
   }>;
   context_cache?: string;
   max_keywords?: number;
+  update_mode?: "local_fast_keywords" | "realtime_text_batch" | "consolidate" | "";
 }): Promise<CanvasIdeationBubbleGraphUpdateResponse> {
   return requestJson<CanvasIdeationBubbleGraphUpdateResponse>("/api/canvas/ideation-bubble-graph/update", {
     method: "POST",
@@ -350,6 +360,9 @@ export async function startCanvasArtifactGeneration(payload: {
   artifact_key: CanvasArtifactGenerationKey;
   user_id?: string;
   force?: boolean;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
 }): Promise<{
   ok: boolean;
   acquired: boolean;
@@ -370,6 +383,9 @@ export async function finishCanvasArtifactGeneration(payload: {
   generation_id?: string;
   status: "ready" | "failed";
   error?: string;
+  phase?: string;
+  detail?: string;
+  retryable?: boolean;
   problem_structure?: CanvasWorkspacePatchRequest["problem_structure"];
 }): Promise<{
   ok: boolean;
@@ -392,6 +408,51 @@ export async function saveCanvasWorkspacePatch(
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
   });
+}
+
+export async function resetMeetingRoomRuntimeState(payload: {
+  meeting_id: string;
+  user_id?: string;
+}): Promise<{
+  ok: boolean;
+  meeting_id: string;
+  deleted_transcript_count: number;
+  reset_at: string;
+}> {
+  return requestJson("/api/canvas/meeting-room-reset", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+}
+
+export function logCanvasBubbleDebugEvent(payload: {
+  meeting_id: string;
+  user_id?: string;
+  event: string;
+  data?: Record<string, unknown>;
+}): void {
+  if (!payload.meeting_id || typeof window === "undefined") return;
+  const throttleKey = `${payload.meeting_id}:${payload.event}`;
+  const now = Date.now();
+  const lastSentAt = bubbleDebugFrontendLogSentAt.get(throttleKey) || 0;
+  if (now - lastSentAt < BUBBLE_DEBUG_FRONTEND_LOG_INTERVAL_MS) return;
+  bubbleDebugFrontendLogSentAt.set(throttleKey, now);
+
+  const body = JSON.stringify(payload);
+  const url = apiPath("/api/canvas/bubble-debug-log");
+
+  try {
+    void fetch(url, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+      keepalive: true,
+      credentials: "omit",
+    }).catch(() => {});
+  } catch {
+    // ignored
+  }
 }
 
 export function flushCanvasWorkspacePatch(payload: CanvasWorkspacePatchRequest): void {

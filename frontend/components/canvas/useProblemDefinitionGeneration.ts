@@ -2,14 +2,23 @@
 
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { PROBLEM_DEFINITION_STEP1_ARTIFACT } from "@/components/canvas/canvasArtifactGeneration";
-import type { ProblemDefinitionMode, ProblemDefinitionPhase } from "@/components/canvas/problemStructureModel";
+import {
+  buildProblemStructureStatePayload,
+  hydrateProblemStructureState,
+  type ProblemDefinitionMode,
+  type ProblemDefinitionPhase,
+} from "@/components/canvas/problemStructureModel";
+import { isDemoBalanceConfig, normalizeCanvasDemoConfig } from "@/lib/demoMode";
 import { generateCanvasProblemTaxonomy, saveCanvasWorkspacePatch } from "@/lib/api";
 import type {
   CanvasArtifactGenerationKey,
   CanvasArtifactGenerationMap,
   CanvasArtifactGenerationState,
+  CanvasDemoBalanceClassification,
+  CanvasDemoConfig,
   CanvasNodePositionsByStage,
   CanvasProblemDefinitionGroup,
+  CanvasProblemStructureState,
   CanvasWorkspaceProblemGroup,
   MeetingState,
 } from "@/lib/types";
@@ -37,9 +46,19 @@ type ExistingProblemTaxonomyGroupPayload = {
   source_summary_items?: string[];
 };
 
+const EMPTY_DEMO_CONFIG: CanvasDemoConfig = {
+  enabled: false,
+  mode: "normal",
+  option_a: "",
+  option_b: "",
+  instruction: "",
+};
+
 type SharedWorkspaceSnapshot<TGroup extends ProblemDefinitionGenerationGroup> = {
   stage: CanvasStage;
+  demoBalanceClassification: CanvasDemoBalanceClassification;
   problemGroups: TGroup[];
+  problemStructure: CanvasProblemStructureState;
   nodePositions: CanvasNodePositionsByStage;
   artifactGeneration: CanvasArtifactGenerationMap;
   importedState: MeetingState | null;
@@ -57,7 +76,9 @@ type UseProblemDefinitionGenerationOptions<
   busy: boolean;
   forceBroadcastSharedCanvas: (overrides?: {
     stage?: CanvasStage;
+    demoBalanceClassification?: CanvasDemoBalanceClassification;
     problemGroups?: TGroup[];
+    problemStructure?: CanvasProblemStructureState;
     nodePositions?: CanvasNodePositionsByStage;
     artifactGeneration?: CanvasArtifactGenerationMap;
   }) => void;
@@ -68,6 +89,7 @@ type UseProblemDefinitionGenerationOptions<
   latestSharedWorkspaceRef: MutableRefObject<SharedWorkspaceSnapshot<TGroup>>;
   meetingId: string;
   meetingTopicForAi: string;
+  demoConfig?: CanvasDemoConfig;
   nodePositions: CanvasNodePositionsByStage;
   persistedSharedImportedState: MeetingState | null;
   problemDefinitionStagePending: boolean;
@@ -77,6 +99,7 @@ type UseProblemDefinitionGenerationOptions<
   setActivityMessage: (message: string) => void;
   setBusy: Dispatch<SetStateAction<boolean>>;
   setCollapsedProblemGroupIds: Dispatch<SetStateAction<Set<string>>>;
+  setDemoBalanceClassification: Dispatch<SetStateAction<CanvasDemoBalanceClassification>>;
   setEditingProblemGroupId: Dispatch<SetStateAction<string>>;
   setNodePositions: Dispatch<SetStateAction<CanvasNodePositionsByStage>>;
   setProblemDefinitionMode: Dispatch<SetStateAction<ProblemDefinitionMode>>;
@@ -98,16 +121,27 @@ type UseProblemDefinitionGenerationOptions<
   startSharedArtifactGeneration: (
     artifactKey: CanvasArtifactGenerationKey,
     force?: boolean,
+    meta?: { phase?: string; detail?: string; retryable?: boolean },
   ) => Promise<{
     acquired: boolean;
     generation: CanvasArtifactGenerationState;
     artifactGeneration: CanvasArtifactGenerationMap;
   }>;
+  updateSharedArtifactGenerationPhase: (
+    artifactKey: CanvasArtifactGenerationKey,
+    generationId: string,
+    phase: string,
+    detail: string,
+    options?: { notify?: boolean; retryable?: boolean },
+  ) => CanvasArtifactGenerationMap | null;
   commitSharedProblemDefinitionGeneration: (
     payload: {
       generationId: string;
       status: "ready" | "failed";
       error?: string;
+      phase?: string;
+      detail?: string;
+      retryable?: boolean;
     },
   ) => Promise<{
     applied: boolean;
@@ -118,6 +152,7 @@ type UseProblemDefinitionGenerationOptions<
     status: "ready" | "failed",
     generationId?: string,
     error?: string,
+    meta?: { phase?: string; detail?: string; retryable?: boolean },
   ) => CanvasArtifactGenerationMap;
   transcripts: TTranscript[];
 };
@@ -137,6 +172,7 @@ export function useProblemDefinitionGeneration<
   latestSharedWorkspaceRef,
   meetingId,
   meetingTopicForAi,
+  demoConfig = EMPTY_DEMO_CONFIG,
   nodePositions,
   persistedSharedImportedState,
   problemDefinitionStagePending,
@@ -146,6 +182,7 @@ export function useProblemDefinitionGeneration<
   setActivityMessage,
   setBusy,
   setCollapsedProblemGroupIds,
+  setDemoBalanceClassification,
   setEditingProblemGroupId,
   setNodePositions,
   setProblemDefinitionMode,
@@ -165,6 +202,7 @@ export function useProblemDefinitionGeneration<
   setStage,
   sharedSyncEnabled,
   startSharedArtifactGeneration,
+  updateSharedArtifactGenerationPhase,
   commitSharedProblemDefinitionGeneration,
   finishSharedArtifactGeneration,
   transcripts,
@@ -186,7 +224,10 @@ export function useProblemDefinitionGeneration<
           return;
         }
 
-        const generationStart = await startSharedArtifactGeneration(PROBLEM_DEFINITION_STEP1_ARTIFACT, forceRegenerate);
+        const generationStart = await startSharedArtifactGeneration(PROBLEM_DEFINITION_STEP1_ARTIFACT, forceRegenerate, {
+          phase: "collecting-transcripts",
+          detail: "전사 내용 수집 중",
+        });
         generationId = generationStart.generation.generation_id || "";
         if (!generationStart.acquired) {
           setActivityMessage("다른 참가자가 문제정의를 생성 중입니다. 완료되면 자동으로 반영됩니다.");
@@ -197,7 +238,20 @@ export function useProblemDefinitionGeneration<
         setBusy(true);
 
         const utterances = buildUtterances(transcripts);
+        updateSharedArtifactGenerationPhase(
+          PROBLEM_DEFINITION_STEP1_ARTIFACT,
+          generationId,
+          "collecting-transcripts",
+          "전사 내용 수집 중",
+        );
         if (utterances.length === 0) {
+          console.warn("[ProblemDefinition] generation skipped", {
+            reason: "no_transcripts",
+            meetingId,
+            demoBalanceMode: isDemoBalanceConfig(normalizeCanvasDemoConfig(demoConfig)),
+            generationId,
+            transcriptCount: transcripts.length,
+          });
           if (problemGroups.length === 0) {
             setProblemDefinitionMode("");
             setSelectedProblemGroupId("");
@@ -209,6 +263,9 @@ export function useProblemDefinitionGeneration<
               generationId,
               status: "failed",
               error: "STT 발화 없음",
+              phase: "collecting-transcripts",
+              detail: "전사 내용이 없어 문제정의를 만들 수 없습니다.",
+              retryable: false,
             });
           } catch (error) {
             const failedArtifactGeneration = finishSharedArtifactGeneration(
@@ -216,6 +273,11 @@ export function useProblemDefinitionGeneration<
               "failed",
               generationId,
               "STT 발화 없음",
+              {
+                phase: "collecting-transcripts",
+                detail: "전사 내용이 없어 문제정의를 만들 수 없습니다.",
+                retryable: false,
+              },
             );
             if (meetingId) {
               void saveCanvasWorkspacePatch({
@@ -245,6 +307,155 @@ export function useProblemDefinitionGeneration<
           setProblemGroupingRationalePendingId("");
         }
 
+        const normalizedDemoConfig = normalizeCanvasDemoConfig(demoConfig);
+        if (isDemoBalanceConfig(normalizedDemoConfig)) {
+          updateSharedArtifactGenerationPhase(
+            PROBLEM_DEFINITION_STEP1_ARTIFACT,
+            generationId,
+            "classifying-ab-opinions",
+            "A/B 의견 분류 중",
+            { notify: true },
+          );
+          const result = await generateCanvasProblemTaxonomy({
+            meeting_id: meetingId,
+            meeting_topic: meetingTopicForAi,
+            demo_config: normalizedDemoConfig,
+            debug_nonce: forceRegenerate ? `demo-${refreshChunkSummaries ? "chunks-" : ""}${Date.now()}` : undefined,
+            refresh_chunk_summaries: refreshChunkSummaries || undefined,
+            utterances,
+            existing_group_ids: [],
+            existing_groups: [],
+            max_groups: 2,
+          });
+          if (result.ok === false) {
+            console.error("[ProblemDefinition] demo generation failed", {
+              reason: result.warning || "server_returned_not_ok",
+              meetingId,
+              generationId,
+              retryable: result.retryable,
+              usedLlm: result.used_llm,
+              llmError: result.llm_error,
+              groupCount: result.groups?.length || 0,
+              demoBalanceMode: true,
+            });
+            throw new Error(result.warning || "문제정의 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요.");
+          }
+          updateSharedArtifactGenerationPhase(
+            PROBLEM_DEFINITION_STEP1_ARTIFACT,
+            generationId,
+            "building-problem-cards",
+            "문제정의 카드 구성 중",
+          );
+          const currentGenerationId =
+            latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
+          if (generationId && currentGenerationId && currentGenerationId !== generationId) {
+            setActivityMessage("초기화 이후 도착한 이전 문제정의 생성 결과를 무시했습니다.");
+            return;
+          }
+          const nextGroups = hydrateProblemGroups(result.groups || [], []).map(
+            (group) =>
+              ({
+                ...group,
+                parent_group_id: group.parent_group_id || "",
+                depth: group.depth || 0,
+                status:
+                  group.status === "review" || group.status === "final" || group.status === "draft"
+                    ? group.status
+                    : "draft",
+              }) as TGroup,
+          );
+          const hydratedStructure = hydrateProblemStructureState(result.problem_structure, nextGroups);
+          const nextStructureNodes = hydratedStructure.nodes as unknown as TStructureNode[];
+          const nextStructureGroups = hydratedStructure.groups as unknown as TStructureGroup[];
+          const nextProblemStructure = buildProblemStructureStatePayload({
+            phase: "explore",
+            method: hydratedStructure.method,
+            mode: "ai",
+            nodes: hydratedStructure.nodes,
+            groups: hydratedStructure.groups,
+            revision: hydratedStructure.revision || Date.now(),
+            sourceGenerationId: hydratedStructure.sourceGenerationId || generationId,
+            basedOnTranscriptRevision: hydratedStructure.basedOnTranscriptRevision || utterances.length,
+            updatedAt: hydratedStructure.updatedAt || new Date().toISOString(),
+          });
+          const nextDemoBalanceClassification = result.demo_balance_classification || {};
+          updateSharedArtifactGenerationPhase(
+            PROBLEM_DEFINITION_STEP1_ARTIFACT,
+            generationId,
+            "syncing-result",
+            "문제정의 결과 동기화 중",
+          );
+          const readyCommit = await commitSharedProblemDefinitionGeneration({
+            generationId,
+            status: "ready",
+          });
+          if (!readyCommit.applied) {
+            setActivityMessage("초기화 이후 도착한 이전 문제정의 생성 결과를 무시했습니다.");
+            return;
+          }
+          const readyArtifactGeneration = readyCommit.artifactGeneration;
+
+          if (forceRegenerate) {
+            setNodePositions(nextNodePositionsSnapshot);
+            setCollapsedProblemGroupIds(new Set());
+            setProblemGroupingRationaleById({});
+          }
+          setProblemGroups(nextGroups);
+          setProblemDefinitionMode("ai");
+          setProblemDefinitionPhase("structure");
+          setProblemStructureSetupOpen(false);
+          setProblemStructureNodes(nextStructureNodes);
+          setProblemStructureGroups(nextStructureGroups);
+          setProblemStructurePending(false);
+          setSelectedProblemGroupId("");
+          setSelectedNodeId("");
+          latestSharedWorkspaceRef.current = {
+            ...latestSharedWorkspaceRef.current,
+            problemGroups: nextGroups,
+            problemStructure: nextProblemStructure,
+            demoBalanceClassification: nextDemoBalanceClassification,
+            nodePositions: nextNodePositionsSnapshot,
+            importedState: persistedSharedImportedState,
+            artifactGeneration: readyArtifactGeneration,
+          };
+          setDemoBalanceClassification(nextDemoBalanceClassification);
+
+          if (sharedSyncEnabled) {
+            forceBroadcastSharedCanvas({
+              problemGroups: nextGroups,
+              problemStructure: nextProblemStructure,
+              demoBalanceClassification: nextDemoBalanceClassification,
+              nodePositions: nextNodePositionsSnapshot,
+              artifactGeneration: readyArtifactGeneration,
+            });
+            if (meetingId) {
+              void saveCanvasWorkspacePatch({
+                meeting_id: meetingId,
+                demo_balance_classification: nextDemoBalanceClassification,
+                problem_groups: serializeSharedProblemGroups(nextGroups),
+                problem_structure: nextProblemStructure,
+                solution_topics: [],
+                node_positions: nextNodePositionsSnapshot,
+                artifact_generation: readyArtifactGeneration,
+                imported_state: persistedSharedImportedState,
+              }).catch((error) => {
+                console.error("Failed to save demo balance problem definition:", error);
+              });
+            }
+          }
+
+          const validOpinionCount =
+            Number(nextDemoBalanceClassification.valid_a_count || 0) +
+            Number(nextDemoBalanceClassification.valid_b_count || 0);
+          setActivityMessage(
+            result.warning ||
+              (validOpinionCount > 0
+                ? `시연용 A/B 의견 ${validOpinionCount}개를 문제정의로 정리했습니다.`
+                : "A/B를 명확히 선택한 발화가 없어 유효 의견을 만들지 못했습니다.")
+          );
+          return;
+        }
+
         const result = await generateCanvasProblemTaxonomy({
           meeting_id: meetingId,
           meeting_topic: meetingTopicForAi,
@@ -255,6 +466,19 @@ export function useProblemDefinitionGeneration<
           existing_groups: forceRegenerate ? [] : buildExistingGroupsPayload(problemGroups),
           max_groups: 6,
         });
+        if (result.ok === false) {
+          console.error("[ProblemDefinition] generation failed", {
+            reason: result.warning || "server_returned_not_ok",
+            meetingId,
+            generationId,
+            retryable: result.retryable,
+            usedLlm: result.used_llm,
+            llmError: result.llm_error,
+            groupCount: result.groups?.length || 0,
+            demoBalanceMode: false,
+          });
+          throw new Error(result.warning || "문제 정의 생성에 실패했습니다. 다시 생성 버튼으로 재시도해 주세요.");
+        }
         const currentGenerationId =
           latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
         if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -334,6 +558,15 @@ export function useProblemDefinitionGeneration<
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        console.error("[ProblemDefinition] generation exception", {
+          reason: message,
+          meetingId,
+          generationId,
+          demoBalanceMode: isDemoBalanceConfig(normalizeCanvasDemoConfig(demoConfig)),
+          phase: latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.phase || "",
+          detail: latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.detail || "",
+          error,
+        });
         const currentGenerationId =
           latestSharedWorkspaceRef.current.artifactGeneration?.[PROBLEM_DEFINITION_STEP1_ARTIFACT]?.generation_id || "";
         if (generationId && currentGenerationId && currentGenerationId !== generationId) {
@@ -345,6 +578,9 @@ export function useProblemDefinitionGeneration<
             generationId,
             status: "failed",
             error: message,
+            phase: "failed",
+            detail: "문제정의 생성에 실패했습니다.",
+            retryable: true,
           });
         } catch (commitError) {
           const failedArtifactGeneration = finishSharedArtifactGeneration(
@@ -352,6 +588,11 @@ export function useProblemDefinitionGeneration<
             "failed",
             generationId,
             message,
+            {
+              phase: "failed",
+              detail: "문제정의 생성에 실패했습니다.",
+              retryable: true,
+            },
           );
           if (meetingId) {
             void saveCanvasWorkspacePatch({
@@ -378,6 +619,7 @@ export function useProblemDefinitionGeneration<
       latestSharedWorkspaceRef,
       meetingId,
       meetingTopicForAi,
+      demoConfig,
       nodePositions,
       persistedSharedImportedState,
       problemGroups,
@@ -386,6 +628,7 @@ export function useProblemDefinitionGeneration<
       setActivityMessage,
       setBusy,
       setCollapsedProblemGroupIds,
+      setDemoBalanceClassification,
       setEditingProblemGroupId,
       setNodePositions,
       setProblemDefinitionMode,
@@ -405,19 +648,21 @@ export function useProblemDefinitionGeneration<
       setStage,
       sharedSyncEnabled,
       startSharedArtifactGeneration,
+      updateSharedArtifactGenerationPhase,
       finishSharedArtifactGeneration,
       transcripts,
     ],
   );
 
   const handleRegenerateProblemDefinition = useCallback(async () => {
+    const demoProblemLabel = isDemoBalanceConfig(demoConfig) ? "문제정의" : "문제정의 1단계";
     if (busy || problemDefinitionStagePending) {
-      setActivityMessage("현재 문제정의 1단계를 재생성 중입니다. 완료되면 자동으로 반영됩니다.");
+      setActivityMessage(`현재 ${demoProblemLabel} 재생성 중입니다. 완료되면 자동으로 반영됩니다.`);
       return;
     }
-    setActivityMessage("문제정의 1단계를 재생성 중입니다. 기존 결과는 유지되고 완료되면 자동으로 반영됩니다.");
+    setActivityMessage(`${demoProblemLabel} 재생성 중입니다. 기존 결과는 유지되고 완료되면 자동으로 반영됩니다.`);
     await handleGenerateProblemDefinition({ force: true });
-  }, [busy, handleGenerateProblemDefinition, problemDefinitionStagePending, setActivityMessage]);
+  }, [busy, demoConfig, handleGenerateProblemDefinition, problemDefinitionStagePending, setActivityMessage]);
 
   const handleDebugRegenerateProblemDefinition = useCallback(async () => {
     if (busy || problemDefinitionStagePending) {

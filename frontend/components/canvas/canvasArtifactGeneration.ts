@@ -38,6 +38,9 @@ export function normalizeCanvasArtifactGeneration(
           updated_at: (value.updated_at || "").trim(),
           finished_at: (value.finished_at || "").trim(),
           error: (value.error || "").trim(),
+          phase: (value.phase || "").trim(),
+          detail: (value.detail || "").trim(),
+          retryable: Boolean(value.retryable),
           version: Number.isFinite(Number(value.version)) ? Number(value.version) : 0,
           input_transcript_revision: Number.isFinite(Number(value.input_transcript_revision))
             ? Number(value.input_transcript_revision)

@@ -17,6 +17,8 @@ type ProblemGroupViewModel = {
 export type IdeationKeywordBubble = {
   id: string;
   text: string;
+  canonicalLabel?: string;
+  aliases?: string[];
   count: number;
   weight: number;
   related: string[];
@@ -26,12 +28,35 @@ export type IdeationKeywordBubble = {
   offTopic?: boolean;
   offTopicReason?: string;
   anchorText?: string;
+  choiceAffinity?: "a" | "b" | string;
   layoutX?: number;
   layoutY?: number;
   layoutSize?: number;
   clusterId?: string;
+  role?: "center" | "satellite" | "dot" | string;
+  orbitCenterId?: string;
+  orbitRing?: number;
+  orbitAngle?: number;
+  orbitRadius?: number;
+  orbitOrderKey?: number;
+  orbitSlotIndex?: number;
+  motionReason?: "gate_enter" | "insert_push" | "gap_fill" | "ring_overflow" | "affinity_transfer" | "relayout" | "relayout_transfer" | "content_update" | "exit" | string;
+  motionDirection?: "counterclockwise" | "clockwise" | "nearest" | "direct" | string;
+  motionPlanId?: string;
+  fromSlotIndex?: number;
+  toSlotIndex?: number;
+  moveCost?: number;
+  moveAngleDelta?: number;
+  arcCost?: number;
+  radiusCost?: number;
+  gateBlocked?: boolean;
+  enterSequence?: number;
+  enterDelayMs?: number;
+  gateAngle?: number;
   activity?: number;
   opacity?: number;
+  displayState?: "active" | "dimmed" | "exiting" | "archived" | string;
+  lifecycleState?: "provisional" | "active" | string;
   layoutZone?: "core" | "default" | "peripheral" | "archived" | string;
   durable?: boolean;
   emphasis?: "primary" | "default";
@@ -46,6 +71,22 @@ export type IdeationKeywordBubbleVisual = IdeationKeywordBubble & {
   settledTargetX?: number;
   settledTargetY?: number;
   visualScale?: number;
+  arcOffsetX?: number;
+  arcOffsetY?: number;
+  arcMotion?: boolean;
+  arcMotionPath?: {
+    key: string;
+    fromX: number;
+    fromY: number;
+    midX: number;
+    midY: number;
+    previousAngle: number;
+    nextAngle: number;
+    durationMs: number;
+  };
+  demoMotionType?: "enter" | "arc" | "radial" | "orbit-transfer" | "exit" | "static";
+  demoPreviousAngle?: number;
+  demoNextAngle?: number;
   entering?: boolean;
   firstSeenTick: number;
   lastSeenTick: number;
@@ -283,7 +324,6 @@ const CANVAS_IDEATION_BUBBLE_CLUSTER_MAX_ITEMS = 6;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_GROWTH_STEP = 0.06;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_INTERVAL_MS = 600;
 export const CANVAS_IDEATION_BUBBLE_DEBUG_MAX_GROWTH = 1.42;
-const CANVAS_IDEATION_BUBBLE_MIN_OPACITY = 0.22;
 const CANVAS_IDEATION_BUBBLE_DECAY_RATE = 0.72;
 const CANVAS_IDEATION_BUBBLE_RELATION_TARGET_DISTANCE = 260;
 const CANVAS_IDEATION_BUBBLE_MAX_RETARGET_DISTANCE = 180;
@@ -296,9 +336,9 @@ const CANVAS_IDEATION_BUBBLE_RELAXATION_ITERATIONS = 8;
 const CANVAS_IDEATION_BUBBLE_RELAXATION_GAP = 10;
 const CANVAS_IDEATION_BUBBLE_RELAXATION_STEP = 0.42;
 const CANVAS_IDEATION_BUBBLE_MAX_PRIMARY_COUNT = 2;
-const CANVAS_IDEATION_BUBBLE_ENTER_SCALE = 0.58;
-const CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX = 0.34;
-const CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS = 70;
+const CANVAS_IDEATION_BUBBLE_ENTER_SCALE = 0.65;
+const CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS = 120;
+const CANVAS_IDEATION_BUBBLE_ARC_MOTION_DURATION_MS = 2800;
 const CANVAS_IDEATION_BUBBLE_SPAWN_GAP = 8;
 export const CANVAS_IDEATION_BUBBLE_TRANSITION =
   "transform 2800ms cubic-bezier(0.22, 1, 0.36, 1), opacity 720ms ease";
@@ -876,26 +916,12 @@ function getIdeationBubbleVisualSize(
   return Math.round(baseSize * (0.82 + clampNumber(activity, 0, 1) * 0.18));
 }
 
-function isIdeationBubbleOpacityLocked(bubble: IdeationKeywordBubble) {
-  return !bubble.offTopic && bubble.kind !== "off_topic" && (bubble.emphasis === "primary" || bubble.durable);
-}
-
-function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, activity: number) {
-  const serverOpacity = Number(bubble.opacity);
-  if (Number.isFinite(serverOpacity)) {
-    return isIdeationBubbleOpacityLocked(bubble) ? 1 : Number(clampNumber(serverOpacity, 0, 1).toFixed(3));
+function getIdeationBubbleVisualOpacity(bubble: IdeationKeywordBubble, _activity: number) {
+  if (bubble.displayState === "exiting") {
+    return 0;
   }
 
-  if (isIdeationBubbleOpacityLocked(bubble)) {
-    return 1;
-  }
-
-  const relevance = clampNumber(Number(bubble.relevance ?? 1), 0, 1);
-  const importance = clampNumber(Number(bubble.importance ?? bubble.weight ?? 0.5), 0, 1);
-  const emphasis = clampNumber(activity * relevance, 0, 1);
-  const durableMinimum = bubble.count >= 5 || importance >= 0.68 ? 0.42 : CANVAS_IDEATION_BUBBLE_MIN_OPACITY;
-  const minimum = bubble.offTopic || bubble.kind === "off_topic" ? 0.32 : durableMinimum;
-  return Number(clampNumber(minimum + emphasis * (1 - minimum), minimum, 1).toFixed(3));
+  return 1;
 }
 
 function getIdeationBubbleIncomingActivity(bubble: IdeationKeywordBubble) {
@@ -1087,6 +1113,19 @@ function findIdeationBubbleSpawnTarget(
   return clampIdeationBubblePosition(fallbackCenterX - size / 2, fallbackCenterY - size / 2, size);
 }
 
+function hasIdeationBubbleOrbitSpawnTarget(bubble: IdeationKeywordBubbleVisual) {
+  return (
+    hasServerIdeationBubbleTarget(bubble) &&
+    Number.isFinite(Number(bubble.orbitAngle)) &&
+    Number.isFinite(Number(bubble.orbitRadius))
+  );
+}
+
+function findIdeationBubbleOrbitSpawnTarget(bubble: IdeationKeywordBubbleVisual) {
+  const finalPosition = clampIdeationBubblePosition(bubble.targetX, bubble.targetY, bubble.size);
+  return finalPosition;
+}
+
 function applyIdeationBubbleEnterState(
   visuals: IdeationKeywordBubbleVisual[],
   enteringIds: Set<string>,
@@ -1121,7 +1160,9 @@ function applyIdeationBubbleEnterState(
       };
     }
 
-    const spawn = findIdeationBubbleSpawnTarget(visual, visual.size, spawnOccupied, tick, enteringOrder, layoutAnchor);
+    const spawn = hasIdeationBubbleOrbitSpawnTarget(visual)
+      ? findIdeationBubbleOrbitSpawnTarget(visual)
+      : findIdeationBubbleSpawnTarget(visual, visual.size, spawnOccupied, tick, enteringOrder, layoutAnchor);
     enteringOrder += 1;
     spawnOccupied.push({
       id: visual.id,
@@ -1138,10 +1179,12 @@ function applyIdeationBubbleEnterState(
       settledTargetX: visual.targetX,
       settledTargetY: visual.targetY,
       visualScale: CANVAS_IDEATION_BUBBLE_ENTER_SCALE,
+      arcOffsetX: 0,
+      arcOffsetY: 0,
+      arcMotion: false,
+      arcMotionPath: undefined,
       entering: true,
-      opacity: isIdeationBubbleOpacityLocked(visual)
-        ? 1
-        : Math.min(visual.opacity, CANVAS_IDEATION_BUBBLE_ENTER_OPACITY_MAX),
+      opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
     };
   });
 }
@@ -1203,6 +1246,107 @@ function getIdeationBubbleCenter(bubble: Pick<IdeationKeywordBubbleVisual, "targ
     x: bubble.targetX + bubble.size / 2,
     y: bubble.targetY + bubble.size / 2,
   };
+}
+
+function prefersReducedIdeationBubbleMotion() {
+  return (
+    typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function shortestIdeationBubbleAngleDelta(from: number, to: number) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+function getIdeationBubbleArcMotionPath(
+  previous: IdeationKeywordBubbleVisual | undefined,
+  next: Pick<
+    IdeationKeywordBubbleVisual,
+    "id" | "size" | "targetX" | "targetY" | "orbitCenterId" | "orbitRing" | "orbitAngle" | "orbitRadius"
+  >,
+) {
+  if (!previous || prefersReducedIdeationBubbleMotion()) return null;
+  if (!next.orbitCenterId || previous.orbitCenterId !== next.orbitCenterId) return null;
+  if (Number(previous.orbitRing ?? -1) !== Number(next.orbitRing ?? -2)) return null;
+  if (Number(next.orbitRing ?? 0) <= 0) return null;
+
+  const previousAngle = Number(previous.orbitAngle);
+  const nextAngle = Number(next.orbitAngle);
+  const previousRadius = Number(previous.orbitRadius);
+  const nextRadius = Number(next.orbitRadius);
+  if (
+    !Number.isFinite(previousAngle)
+    || !Number.isFinite(nextAngle)
+    || !Number.isFinite(previousRadius)
+    || !Number.isFinite(nextRadius)
+    || previousRadius <= 0
+    || nextRadius <= 0
+  ) {
+    return null;
+  }
+
+  const previousCenter = getIdeationBubbleCenter(previous);
+  const nextCenter = getIdeationBubbleCenter(next);
+  const moveDistance = Math.hypot(nextCenter.x - previousCenter.x, nextCenter.y - previousCenter.y);
+  if (moveDistance < 8) return null;
+
+  const delta = shortestIdeationBubbleAngleDelta(previousAngle, nextAngle);
+  if (Math.abs(delta) < 0.02) return null;
+
+  const radius = (previousRadius + nextRadius) / 2;
+  const orbitCenter = {
+    x: nextCenter.x - Math.cos(nextAngle) * nextRadius,
+    y: nextCenter.y - Math.sin(nextAngle) * nextRadius,
+  };
+  const midAngle = previousAngle + delta / 2;
+  const arcMid = {
+    x: orbitCenter.x + Math.cos(midAngle) * radius,
+    y: orbitCenter.y + Math.sin(midAngle) * radius,
+  };
+  const straightMid = {
+    x: (previousCenter.x + nextCenter.x) / 2,
+    y: (previousCenter.y + nextCenter.y) / 2,
+  };
+  const offsetX = clampNumber(arcMid.x - straightMid.x, -72, 72);
+  const offsetY = clampNumber(arcMid.y - straightMid.y, -72, 72);
+  const fromX = previousCenter.x - nextCenter.x;
+  const fromY = previousCenter.y - nextCenter.y;
+  const midX = (previousCenter.x - nextCenter.x) / 2 + offsetX;
+  const midY = (previousCenter.y - nextCenter.y) / 2 + offsetY;
+  if (Math.hypot(fromX, fromY) < 8 && Math.hypot(midX, midY) < 8) return null;
+  return {
+    key: [
+      next.id,
+      previous.orbitCenterId,
+      previous.orbitRing,
+      previous.orbitSlotIndex,
+      nextAngle.toFixed(4),
+      nextRadius.toFixed(1),
+      Math.round(next.targetX),
+      Math.round(next.targetY),
+    ].join(":"),
+    fromX: Math.round(fromX * 100) / 100,
+    fromY: Math.round(fromY * 100) / 100,
+    midX: Math.round(midX * 100) / 100,
+    midY: Math.round(midY * 100) / 100,
+    previousAngle: Math.round(previousAngle * 10000) / 10000,
+    nextAngle: Math.round(nextAngle * 10000) / 10000,
+    durationMs: CANVAS_IDEATION_BUBBLE_ARC_MOTION_DURATION_MS,
+  };
+}
+
+function getDemoIdeationBubbleMotionType(
+  previous: IdeationKeywordBubbleVisual | undefined,
+  next: IdeationKeywordBubbleVisual,
+): IdeationKeywordBubbleVisual["demoMotionType"] {
+  if (!previous) return "enter";
+  if (next.displayState === "exiting") return "exit";
+  const sameOrbit = previous.orbitCenterId && previous.orbitCenterId === next.orbitCenterId;
+  if (sameOrbit && Number(previous.orbitRing ?? -1) === Number(next.orbitRing ?? -2)) return "arc";
+  if (sameOrbit) return "radial";
+  return "orbit-transfer";
 }
 
 function limitIdeationBubbleTargetShift(
@@ -1478,7 +1622,7 @@ function buildServerManagedIdeationBubbleVisuals(
     }
 
     const merged = previous ? { ...previous, ...bubble } : bubble;
-    return {
+    const nextVisual = {
       ...merged,
       activity,
       opacity: getIdeationBubbleVisualOpacity(merged, activity),
@@ -1491,6 +1635,20 @@ function buildServerManagedIdeationBubbleVisuals(
       entering: false,
       firstSeenTick: previous?.firstSeenTick ?? tick,
       lastSeenTick: tick,
+    };
+    const arcMotionPath = previous && !newBubbleIds.has(bubble.id)
+      ? getIdeationBubbleArcMotionPath(previous, nextVisual)
+      : null;
+    const demoMotionType = getDemoIdeationBubbleMotionType(previous, nextVisual);
+    return {
+      ...nextVisual,
+      arcOffsetX: 0,
+      arcOffsetY: 0,
+      arcMotion: Boolean(arcMotionPath),
+      arcMotionPath: arcMotionPath ?? undefined,
+      demoMotionType,
+      demoPreviousAngle: previous?.orbitAngle,
+      demoNextAngle: nextVisual.orbitAngle,
     };
   });
 
@@ -1646,13 +1804,18 @@ export function getIdeationBubbleEnterSettleDelayMs() {
   return CANVAS_IDEATION_BUBBLE_ENTER_SETTLE_DELAY_MS;
 }
 
+export function getIdeationBubbleArcMotionSettleDelayMs() {
+  return CANVAS_IDEATION_BUBBLE_ARC_MOTION_DURATION_MS + 120;
+}
+
 export function settleEnteringIdeationBubbleVisuals(
   visuals: IdeationKeywordBubbleVisual[],
   targetIds?: ReadonlySet<string>,
 ) {
   let changed = false;
   const nextVisuals = visuals.map((visual) => {
-    if (!visual.entering || (targetIds && !targetIds.has(visual.id))) {
+    const shouldSettle = visual.entering || visual.arcMotion;
+    if (!shouldSettle || (targetIds && !targetIds.has(visual.id))) {
       return visual;
     }
 
@@ -1664,6 +1827,10 @@ export function settleEnteringIdeationBubbleVisuals(
       settledTargetX: undefined,
       settledTargetY: undefined,
       visualScale: 1,
+      arcOffsetX: 0,
+      arcOffsetY: 0,
+      arcMotion: false,
+      arcMotionPath: undefined,
       entering: false,
       opacity: getIdeationBubbleVisualOpacity(visual, visual.activity),
     };
